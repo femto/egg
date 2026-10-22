@@ -2,7 +2,8 @@
 
 An AI-native systems language with a core that has no capabilities at all.
 GC, exceptions, IO and allocation are capability modules a program declares
-on demand. See the design doc for the full picture.
+on demand. See the design doc ([English](design.md) · [中文](design.zh.md))
+for the full picture.
 
 This repository holds **eggc v0**: the first compiler, written in the Ruby
 subset that [Spinel](https://github.com/matz/spinel) compiles. It runs on
