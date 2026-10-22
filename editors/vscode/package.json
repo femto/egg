@@ -2,7 +2,7 @@
   "name": "egg-lang",
   "displayName": "Egg",
   "description": "Syntax highlighting, go to definition, hover, outline, diagnostics and breakpoints for the Egg programming language",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "femto",
   "license": "MIT",
   "repository": {
@@ -48,7 +48,7 @@
         "egg.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Path to eggc, which is started as `eggc lsp`. Empty: bin/eggc in the open workspace if it is an egg checkout, else eggc on PATH."
+          "description": "Path to eggc, started as `eggc lsp`: a native (Spinel-built) binary is run directly, the Ruby script with egg.rubyPath. Empty: in an egg checkout, build/bin/eggc if it is newer than the compiler sources, else bin/eggc; otherwise eggc on PATH."
         },
         "egg.rubyPath": {
           "type": "string",
@@ -61,7 +61,7 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onLanguage:egg",
-    "onCommand:egg.rubyPath"
+    "onCommand:egg.eggc"
   ],
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

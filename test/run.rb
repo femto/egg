@@ -10,7 +10,8 @@
 #                      ("// error: CODE" there needs no line), so the spec
 #                      cannot drift from the compiler.
 # eggc lsp          -- the language server answers definition, hover,
-#                      outline and diagnostics requests.
+#                      outline and diagnostics requests. EGGC=path tests
+#                      another eggc, such as a Spinel-built one.
 #
 # Usage: ruby test/run.rb
 
@@ -109,7 +110,7 @@ def lsp_session(messages)
     body = JSON.generate(m.merge("jsonrpc" => "2.0"))
     "Content-Length: #{body.bytesize}\r\n\r\n#{body}"
   end.join
-  out, err, status = Open3.capture3(File.join(ROOT, "bin", "eggc"), "lsp", stdin_data: input)
+  out, err, status = Open3.capture3(ENV["EGGC"] || File.join(ROOT, "bin", "eggc"), "lsp", stdin_data: input)
   replies = {}
   diags = []
   out.split(/Content-Length: \d+\r\n\r\n/).reject(&:empty?).each do |text|

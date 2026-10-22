@@ -4,7 +4,7 @@
     {
       "label": "eggc build -g",
       "type": "shell",
-      "command": "mkdir -p build && '${command:egg.rubyPath}' bin/eggc build -g '${file}' -o 'build/${fileBasenameNoExtension}'",
+      "command": "mkdir -p build && ${command:egg.eggc} build -g '${file}' -o 'build/${fileBasenameNoExtension}'",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     }

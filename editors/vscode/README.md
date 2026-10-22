@@ -17,7 +17,7 @@ Language support for Egg (`.egg` files).
 
 From the packaged file:
 
-    code --install-extension egg-lang-0.0.4.vsix
+    code --install-extension egg-lang-0.0.5.vsix
 
 Build it from source with `npm install && npx @vscode/vsce package
 --no-dependencies` in this folder.
@@ -26,8 +26,10 @@ Build it from source with `npm install && npx @vscode/vsce package
 
 Everything except highlighting and breakpoints comes from `eggc lsp`, which
 uses the real lexer, parser and checker. The extension starts it from, in
-order: the `egg.serverPath` setting, `bin/eggc` in an open egg checkout,
-`eggc` on PATH. eggc needs Ruby 3.0+: the extension uses the
+order: the `egg.serverPath` setting; in an open egg checkout, a native
+`build/bin/eggc` (built with Spinel) if it is newer than the compiler
+sources, else `bin/eggc`; `eggc` on PATH. A native eggc runs directly. The
+Ruby script needs Ruby 3.0+: the extension uses the
 `egg.rubyPath` setting, else the first Ruby 3+ on PATH or in the usual
 rbenv, mise, asdf, rvm and Homebrew locations. (VS Code started from the
 Dock may not see your shell's PATH and would otherwise find macOS's Ruby
