@@ -17,9 +17,10 @@ module Egg
   def self.compile_to_c(src, source_path = nil)
     tokens = Lexer.new(src).tokenize
     program = Parser.new(tokens).parse_program
-    diags = TypeChecker.new(program).check
+    checker = TypeChecker.new(program)
+    diags = checker.check
     return CompileResult.new(nil, diags) unless diags.empty?
-    CompileResult.new(CodegenC.new(program, source_path).generate, [])
+    CompileResult.new(CodegenC.new(program, checker, source_path).generate, [])
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end

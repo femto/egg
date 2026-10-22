@@ -1,7 +1,8 @@
 # Test runner (no gems).
 #
 # examples/*.egg    -- compiled and run; "// expect: X" lines give stdout,
-#                      "// panic: MSG" means the program must abort with MSG.
+#                      "// panic: MSG" means the program must abort with MSG,
+#                      "// fails: Name" means main must return error.Name.
 # test/errors/*.egg -- must fail to compile; "// error: CODE @LINE" lines
 #                      list the diagnostics that must appear.
 #                      Each example is also built in debug mode (-g, with
@@ -60,9 +61,16 @@ def check_program(name, src, dir, source_path = nil)
   return report(false, name, "C compiler failed:\n#{cc_err}") unless cc_status.success?
   out, err, status = Open3.capture3(base)
   panic = comment_values(src, "panic").first
+  fails = comment_values(src, "fails").first
   if panic
     ok = !status.success? && err.include?("egg panic: #{panic}")
     report(ok, name, "expected panic '#{panic}', got status #{status.exitstatus}, stderr: #{err}")
+  elsif fails
+    # main returned an error: exit status 1 and "error: Name" on stderr.
+    want = comment_values(src, "expect")
+    got = out.lines.map(&:chomp)
+    ok = status.exitstatus == 1 && err.include?("error: #{fails}") && got == want
+    report(ok, name, "expected error.#{fails} after #{want.inspect}\ngot status #{status.exitstatus}, #{got.inspect}\n#{err}")
   else
     want = comment_values(src, "expect")
     got = out.lines.map(&:chomp)

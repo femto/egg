@@ -1,15 +1,27 @@
-# C code generator for the v0 core.
+# C code generator.
 #
 # Output is portable C99: no POSIX calls, no compiler extensions.
-# Integer arithmetic is checked (overflow and division by zero panic),
-# because signed overflow in C is undefined behaviour and Egg does not
-# allow undefined behaviour to leak out of the core.
+# Integer arithmetic is checked (overflow and division by zero panic), and
+# so are array, slice and str indexing, because Egg does not allow
+# undefined behaviour to leak out of the core.
+#
+# Evaluation order is left to right: every call is evaluated into a
+# temporary before the expression that uses it, so `f() + g()` runs f
+# first whatever the C compiler does with argument order. Conditions that
+# need such temporaries are lowered (`while` into `while (1) { ...; if
+# (!c) break; }`, `and`/`or` into ifs) so short-circuiting is kept.
 #
 # Name mangling keeps Egg names away from C keywords and libc:
-#   functions -> fn_<name>, locals and parameters -> v_<name>
-#   runtime helpers all start with egg_, so they can never collide
+#   functions -> fn_<name> (methods fn_<Type>__<name>), locals v_<name>,
+#   struct fields f_<name>, types ty_<name>, temporaries _t<N>;
+#   runtime helpers all start with egg_, so they can never collide.
 #
-# Given a source path, each function and statement is preceded by a
+# Value types map to C types passed by value: a struct to a C struct, an
+# array to a struct wrapping a C array (so it copies like a value), an
+# error union !T to { T value; int32_t err; } (err 0 = no error). A slice
+# is { const T *ptr; int64_t len; }; an inout parameter is a pointer.
+#
+# Given a source path, each declaration and statement is preceded by a
 # `#line N "file.egg"` directive, so a debugger built with -g shows and
 # breaks on .egg lines instead of lines of the generated C.
 
@@ -21,13 +33,17 @@ module Egg
       #include <stdbool.h>
       #include <stdio.h>
       #include <stdlib.h>
+      #include <string.h>
       #include <inttypes.h>
     C
+
+    STR_TYPEDEF = "typedef struct { const char *ptr; int64_t len; } egg_str;\n"
 
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_print_i64 egg_print_bool].freeze
+    HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+                      egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -77,88 +93,211 @@ module Egg
             return -a;
         }
       C
+      "egg_index" => <<~C,
+        static int64_t egg_index(int64_t i, int64_t len) {
+            if (i < 0 || i >= len) egg_panic("index out of bounds");
+            return i;
+        }
+      C
+      "egg_slice_check" => <<~C,
+        static void egg_slice_check(int64_t lo, int64_t hi, int64_t len) {
+            if (lo < 0 || hi < lo || hi > len) egg_panic("slice out of bounds");
+        }
+      C
+      "egg_str_eq" => <<~C,
+        static bool egg_str_eq(egg_str a, egg_str b) {
+            return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
+        }
+      C
       "egg_print_i64" => <<~C,
         static void egg_print_i64(int64_t x) { printf("%" PRId64 "\\n", x); }
       C
-      "egg_print_bool" => <<~C
+      "egg_print_bool" => <<~C,
         static void egg_print_bool(bool x) { puts(x ? "true" : "false"); }
+      C
+      "egg_print_str" => <<~C,
+        static void egg_print_str(egg_str s) { fwrite(s.ptr, 1, (size_t)s.len, stdout); putchar('\\n'); }
+      C
+      "egg_print_cstr" => <<~C
+        static void egg_print_cstr(const char *s) { puts(s); }
       C
     }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
 
-    def initialize(program, source_path = nil)
+    def initialize(program, checker, source_path = nil)
       @program = program
+      @checker = checker
+      @types = checker.types
       @line_file = source_path.nil? ? nil : c_string(source_path)
       @out = +""
       @indent = 0
-      @funcs = {}
       @locals = []
       @used = {}
+      @enum_names = {}
+      @need_str = false
+      @tmp = 0
+      @sig = nil
     end
 
     def generate
-      @program.funcs.each { |f| @funcs[f.name] = f }
-      # Generate the body first so we know which helpers it used.
-      @program.funcs.each { |f| gen_func(f) }
+      # Function bodies first, so we know which helpers and tables they use.
+      @checker.concrete.each { |sig| gen_func(sig) }
       gen_entry
       body = @out
 
+      @out = +""
+      emit_types
+      types = @out
+
       out = HEADER.dup
       out << "\n"
+      out << STR_TYPEDEF << "\n" if @need_str
+      out << types
       HELPER_ORDER.each do |name|
         next unless @used[name]
         out << HELPERS[name] << "\n"
       end
-      @program.funcs.each { |f| out << signature(f) << ";\n" }
+      @enum_names.each_key do |canon|
+        info = @types[canon]
+        names = info.members.map { |m| c_string(m) }.join(", ")
+        out << "static const char *const #{info.c_name}_names[] = { #{names} };\n"
+      end
+      if @checker.main_sig.ret == "!void"
+        names = ["\"\""] + @checker.error_names.map { |n| c_string(n) }
+        out << "static const char *const egg_error_names[] = { #{names.join(', ')} };\n"
+      end
+      out << "\n"
+      @checker.concrete.each { |sig| out << signature(sig) << ";\n" }
       out << "\n" << body
       out
     end
 
+    private
+
     # Record a helper call; every checked helper also needs egg_panic.
     def helper(name)
       @used[name] = true
-      @used["egg_panic"] = true unless name.start_with?("egg_print")
+      @used["egg_panic"] = true unless name.start_with?("egg_print") || name == "egg_str_eq"
+      @need_str = true if name == "egg_str_eq" || name == "egg_print_str"
       name
     end
 
-    private
+    # ---- types --------------------------------------------------------
 
     def c_type(t)
       case t
       when "i64" then "int64_t"
       when "bool" then "bool"
       when "void" then "void"
-      else raise "codegen: unknown type #{t}"
+      when "str"
+        @need_str = true
+        "egg_str"
+      else
+        info = @types[t]
+        raise "codegen: unknown type #{t}" if info.nil?
+        info.c_name
       end
     end
 
-    def signature(f)
-      params = f.params.map { |p| "#{c_type(p.type)} v_#{p.name}" }
-      params_text = params.empty? ? "void" : params.join(", ")
-      "static #{c_type(f.ret)} fn_#{f.name}(#{params_text})"
+    # Typedefs in dependency order: a struct after the types it holds by
+    # value. Slices hold only pointers and come last.
+    def emit_types
+      done = {}
+      @checker.type_order.each { |c| emit_type(c, done) unless @types[c].kind == :slice }
+      @checker.type_order.each { |c| emit_type(c, done) if @types[c].kind == :slice }
     end
 
-    def gen_func(f)
+    def emit_type(canon, done)
+      info = @types[canon]
+      return if info.nil? || info.kind == :prim || done[canon]
+      done[canon] = true
+      case info.kind
+      when :enum
+        mark(info.line)
+        @out << "typedef int32_t #{info.c_name};\n"
+        (info.member_lines || []).uniq.each { |l| mark(l) unless l == info.line }
+        @out << "\n" unless (info.member_lines || []).uniq == [info.line]
+      when :struct
+        info.fields.each { |_, t, _| emit_type(t, done) }
+        mark(info.fn_line) unless info.fn_line.nil?
+        @out << "/* #{canon} */\n" unless info.fn_line.nil?
+        mark(info.return_line || info.line)
+        @out << "typedef struct {\n"
+        if info.fields.empty?
+          @out << "    char unused;\n"
+        else
+          info.fields.each do |name, t, l|
+            mark(l)
+            @out << "    #{c_type(t)} f_#{name};\n"
+          end
+        end
+        @out << "} #{info.c_name};\n\n"
+      when :array
+        emit_type(info.elem, done)
+        @out << "typedef struct { #{c_type(info.elem)} a[#{info.len}]; } #{info.c_name};\n"
+      when :err
+        emit_type(info.inner, done)
+        if info.inner == "void"
+          @out << "typedef struct { int32_t err; } #{info.c_name};\n"
+        else
+          @out << "typedef struct { #{c_type(info.inner)} value; int32_t err; } #{info.c_name};\n"
+        end
+      when :slice
+        emit_type(info.elem, done)
+        @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
+      end
+    end
+
+    # ---- functions ----------------------------------------------------
+
+    def signature(sig)
+      runtime = sig.func.params.reject { |p| p.mode == "comptime" }
+      params = runtime.each_with_index.map do |p, i|
+        t, mode = sig.params[i]
+        mode == "inout" ? "#{c_type(t)} *v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
+      end
+      params_text = params.empty? ? "void" : params.join(", ")
+      "static #{c_type(sig.ret)} #{sig.c_name}(#{params_text})"
+    end
+
+    def gen_func(sig)
+      @sig = sig
+      @tmp = 0
       @locals = [{}]
-      f.params.each { |p| @locals.last[p.name] = p.type }
-      mark(f.line)
-      @out << signature(f) << " {\n"
+      runtime = sig.func.params.reject { |p| p.mode == "comptime" }
+      runtime.each_with_index do |p, i|
+        t, mode = sig.params[i]
+        @locals.last[p.name] = [t, mode == "inout"]
+      end
+      mark(sig.func.line)
+      @out << signature(sig) << " {\n"
       @indent = 1
-      f.body.stmts.each { |s| gen_stmt(s) }
+      sig.func.body.stmts.each { |s| gen_stmt(s) }
+      line("return (#{c_type('!void')}){ 0 };") if sig.ret == "!void"
       @out << "}\n\n"
+      nil
     end
 
     def gen_entry
-      main = @funcs["main"]
-      mark(main.line)
+      main = @checker.main_sig
+      mark(main.func.line)
       @out << "int main(void) {\n"
-      if main.ret == "i64"
-        @out << "    return (int)fn_main();\n"
+      case main.ret
+      when "i64"
+        @out << "    return (int)#{main.c_name}();\n"
+      when "!void"
+        @out << "    #{c_type('!void')} r = #{main.c_name}();\n"
+        @out << "    if (r.err) {\n"
+        @out << "        fprintf(stderr, \"error: %s\\n\", egg_error_names[r.err]);\n"
+        @out << "        return 1;\n"
+        @out << "    }\n"
+        @out << "    return 0;\n"
       else
-        @out << "    fn_main();\n    return 0;\n"
+        @out << "    #{main.c_name}();\n    return 0;\n"
       end
       @out << "}\n"
+      nil
     end
 
     def gen_block(block)
@@ -167,63 +306,142 @@ module Egg
       block.stmts.each { |s| gen_stmt(s) }
       @indent -= 1
       @locals.pop
+      nil
     end
 
     def line(text)
       @out << ("    " * @indent) << text << "\n"
+      nil
     end
 
     # Attribute the C that follows to an .egg line (debug builds only).
     def mark(src_line)
-      return if @line_file.nil?
+      return if @line_file.nil? || src_line.nil?
       @out << "#line #{src_line} #{@line_file}\n"
+      nil
     end
 
     def c_string(text)
       out = +"\""
-      text.each_char do |ch|
-        out << "\\" if ch == "\\" || ch == "\""
-        out << ch
+      text.each_byte do |b|
+        if b == 34 || b == 92
+          out << "\\" << b.chr
+        elsif b >= 32 && b < 127 && b != 63 # '?' escaped against trigraphs
+          out << b.chr
+        else
+          out << format("\\%03o", b)
+        end
       end
       out << "\""
     end
+
+    def tmp
+      @tmp += 1
+      "_t#{@tmp}"
+    end
+
+    # Run the block with output going to a separate buffer; returns
+    # [block's value, the lines it emitted].
+    def capture
+      saved = @out
+      @out = +""
+      value = yield
+      [value, @out]
+    ensure
+      @out = saved
+    end
+
+    def emit_raw(text)
+      @out << text
+    end
+
+    def declare_local(name, ty)
+      @locals.last[name] = [ty, false]
+    end
+
+    # ---- statements ---------------------------------------------------
 
     def gen_stmt(stmt)
       mark(stmt.line)
       case stmt
       in VarDecl[name:, value:, ty:]
-        @locals.last[name] = ty
-        line("#{c_type(ty)} v_#{name} = #{expr(value)};")
-      in Assign[name:, value:]
-        line("v_#{name} = #{expr(value)};")
+        code = coerce(expr(value), value.ty, ty)
+        declare_local(name, ty)
+        line("#{c_type(ty)} v_#{name} = #{code};")
+      in Assign[name:, value:, target:]
+        if target.nil?
+          code = coerce(expr(value), value.ty, local(name)[0])
+          line("#{var_ref(name)} = #{code};")
+        else
+          code = coerce(expr(value), value.ty, target.ty)
+          line("#{lvalue(target)} = #{code};")
+        end
       in If
         gen_if(stmt)
       in While[cond:, body:]
-        line("while (#{cond(cond)}) {")
+        c, pre = capture { cond(cond) }
+        if pre.empty?
+          line("while (#{c}) {")
+        else
+          line("while (1) {")
+          @indent += 1
+          c, pre = capture { cond(cond) }
+          emit_raw(pre)
+          line("if (!(#{c})) break;")
+          @indent -= 1
+        end
         gen_block(body)
         line("}")
+      in For
+        gen_for(stmt)
+      in Break
+        line("break;")
+      in Continue
+        line("continue;")
       in Return[value:]
-        line(value.nil? ? "return;" : "return #{expr(value)};")
+        gen_return(value)
       in ExprStmt[expr: e]
-        line("#{expr(e)};")
+        code = expr(e)
+        line("#{code};") unless code.empty?
       else
         raise "codegen: unhandled statement #{stmt.class}"
       end
     end
 
-    # if / else if / else chains become one flat C chain.
+    def gen_return(value)
+      ret = @sig.ret
+      if value.nil?
+        line(ret == "!void" ? "return (#{c_type(ret)}){ 0 };" : "return;")
+      else
+        line("return #{coerce(expr(value), value.ty, ret)};")
+      end
+    end
+
+    # if / else if / else chains become one flat C chain, unless an else-if
+    # condition needs temporaries: then it nests inside the else.
     def gen_if(stmt)
-      line("if (#{cond(stmt.cond)}) {")
+      c = cond(stmt.cond)
+      line("if (#{c}) {")
       gen_block(stmt.then_body)
       tail = stmt.else_body
+      closers = 0
       while tail.is_a?(If)
-        if @line_file.nil?
-          line("} else if (#{cond(tail.cond)}) {")
-        else
+        tc, pre = capture { cond(tail.cond) }
+        if pre.empty? && @line_file.nil?
+          line("} else if (#{tc}) {")
+        elsif pre.empty?
           # A directive needs its own line, so split "} else if" around it.
           line("}")
           mark(tail.line)
-          line("else if (#{cond(tail.cond)}) {")
+          line("else if (#{tc}) {")
+        else
+          line("} else {")
+          @indent += 1
+          closers += 1
+          mark(tail.line)
+          tc, pre = capture { cond(tail.cond) }
+          emit_raw(pre)
+          line("if (#{tc}) {")
         end
         gen_block(tail.then_body)
         tail = tail.else_body
@@ -233,16 +451,82 @@ module Egg
         gen_block(tail)
       end
       line("}")
+      closers.times do
+        @indent -= 1
+        line("}")
+      end
     end
+
+    def gen_for(stmt)
+      it = stmt.iter
+      t = it.ty
+      idx = tmp
+      if t == "str"
+        s = tmp
+        line("egg_str #{s} = #{expr(it)};")
+        @need_str = true
+        len = "#{s}.len"
+        item = "(int64_t)(unsigned char)#{s}.ptr[#{idx}]"
+        elem = "i64"
+      else
+        info = @types[t]
+        elem = info.elem
+        ptr = tmp
+        if info.kind == :array
+          base = place?(it) ? lvalue(it) : hoist(expr(it), t)
+          line("const #{c_type(elem)} *#{ptr} = #{base}.a;")
+          len = "INT64_C(#{info.len})"
+        else
+          s = hoist(expr(it), t)
+          line("const #{c_type(elem)} *#{ptr} = #{s}.ptr;")
+          len = "#{s}.len"
+        end
+        item = "#{ptr}[#{idx}]"
+      end
+      line("for (int64_t #{idx} = 0; #{idx} < #{len}; #{idx}++) {")
+      @locals << {}
+      @indent += 1
+      unless stmt.var == "_"
+        declare_local(stmt.var, elem)
+        line("const #{c_type(elem)} v_#{stmt.var} = #{item};")
+      end
+      unless stmt.index_var.nil? || stmt.index_var == "_"
+        declare_local(stmt.index_var, "i64")
+        line("const int64_t v_#{stmt.index_var} = #{idx};")
+      end
+      @indent -= 1
+      gen_block(stmt.body)
+      @locals.pop
+      line("}")
+    end
+
+    # ---- expressions --------------------------------------------------
 
     # A condition already sits inside if (...) / while (...), so drop the
     # outer parentheses that expr adds (clang warns on `if ((a == b))`).
     def cond(e)
       text = expr(e)
-      if e.is_a?(Binary) && !ARITH_FN.key?(e.op)
+      if e.is_a?(Binary) && !ARITH_FN.key?(e.op) && text.start_with?("(") && text.end_with?(")")
         text[1...-1]
       else
         text
+      end
+    end
+
+    # Evaluate code once into a temporary of type t; returns its name.
+    def hoist(code, t)
+      name = tmp
+      line("#{c_type(t)} #{name} = #{code};")
+      name
+    end
+
+    # Wrap a value for a !T slot: T -> { value, 0 }, error.X -> { .err = X }.
+    def coerce(code, from, to)
+      return code if to.nil? || from == to || !to.start_with?("!")
+      if from == "anyerror"
+        "((#{c_type(to)}){ .err = #{code} })"
+      else
+        "((#{c_type(to)}){ .value = #{code}, .err = 0 })"
       end
     end
 
@@ -252,47 +536,227 @@ module Egg
         value == -9_223_372_036_854_775_808 ? "INT64_MIN" : "INT64_C(#{value})"
       in BoolLit[value:]
         value ? "true" : "false"
+      in StrLit[value:]
+        @need_str = true
+        "((egg_str){ #{c_string(value)}, #{value.bytesize} })"
       in Var[name:]
-        "v_#{name}"
+        var_ref(name)
       in Unary[op:, operand:]
         op == "-" ? "#{helper("egg_neg")}(#{expr(operand)})" : "(!#{expr(operand)})"
       in Binary[op:, lhs:, rhs:]
-        fn = ARITH_FN[op]
-        if fn
-          "#{helper(fn)}(#{expr(lhs)}, #{expr(rhs)})"
-        elsif op == "and"
-          "(#{expr(lhs)} && #{expr(rhs)})"
-        elsif op == "or"
-          "(#{expr(lhs)} || #{expr(rhs)})"
-        else
-          "(#{expr(lhs)} #{op} #{expr(rhs)})"
+        binary(op, lhs, rhs)
+      in Call[info:]
+        call(info[:c_name], info[:args], info[:params], [], e.ty)
+      in MethodCall[obj:, info:]
+        recv = []
+        unless info[:static]
+          recv << (info[:self_inout] ? "&#{lvalue(obj)}" : expr(obj))
         end
-      in Call[name:, args:]
-        "fn_#{name}(#{args.map { |a| expr(a) }.join(', ')})"
-      in Builtin[name: "print", args:]
-        arg = args[0]
-        fn = type_of(arg) == "bool" ? "egg_print_bool" : "egg_print_i64"
-        "#{helper(fn)}(#{expr(arg)})"
+        call(info[:c_name], info[:args], info[:params], recv, e.ty)
+      in Builtin[name:, args:]
+        builtin(e, name, args)
+      in Field[obj:, name:, info:]
+        return "((#{c_type(e.ty)})#{info[:enum_index]})" unless info[:enum_index].nil?
+        "#{struct_value(obj)}.f_#{name}"
+      in Index[obj:, index:]
+        index_expr(obj, index, e.info[:len])
+      in SliceExpr
+        slice_expr(e)
+      in StructLit[fields:]
+        info = @types[e.ty]
+        inits = fields.map do |fname, value, _, _|
+          ftype = info.fields.find { |n, _| n == fname }[1]
+          ".f_#{fname} = #{coerce(expr(value), value.ty, ftype)}"
+        end
+        inits = ["0"] if inits.empty?
+        "((#{c_type(e.ty)}){ #{inits.join(', ')} })"
+      in ArrayLit[items:]
+        elem = @types[e.ty].elem
+        vals = items.map { |i| coerce(expr(i), i.ty, elem) }
+        "((#{c_type(e.ty)}){ { #{vals.join(', ')} } })"
+      in EnumLit[info:]
+        "((#{c_type(e.ty)})#{info[:enum_index]})"
+      in ErrorLit[info:]
+        info[:error_id].to_s
+      in Try[expr: inner]
+        r = hoist(expr(inner), inner.ty)
+        line("if (#{r}.err) return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
+        e.ty == "void" ? "" : "#{r}.value"
+      in Catch[expr: inner, fallback:]
+        r = hoist(expr(inner), inner.ty)
+        if e.ty == "void"
+          line("if (#{r}.err) {")
+          @indent += 1
+          fb = expr(fallback)
+          line("#{fb};") unless fb.empty?
+          @indent -= 1
+          line("}")
+          return ""
+        end
+        out = tmp
+        line("#{c_type(e.ty)} #{out};")
+        line("if (#{r}.err) {")
+        @indent += 1
+        fb = expr(fallback)
+        line("#{out} = #{fb};")
+        @indent -= 1
+        line("} else {")
+        line("    #{out} = #{r}.value;")
+        line("}")
+        out
       else
         raise "codegen: unhandled expression #{e.class}"
       end
     end
 
-    # The checker already proved types are consistent; codegen only needs
-    # to tell i64 from bool for @print.
-    def type_of(e)
-      case e
-      in IntLit then "i64"
-      in BoolLit then "bool"
-      in Var[name:] then local_type(name)
-      in Unary[op:] then op == "-" ? "i64" : "bool"
-      in Binary[op:] then ARITH_FN.key?(op) ? "i64" : "bool"
-      in Call[name:] then @funcs[name].ret
-      in Builtin then "void"
+    def binary(op, lhs, rhs)
+      fn = ARITH_FN[op]
+      if fn
+        a = expr(lhs)
+        b = expr(rhs)
+        return "#{helper(fn)}(#{a}, #{b})"
+      end
+      if op == "and" || op == "or"
+        a = expr(lhs)
+        b, pre = capture { expr(rhs) }
+        return "(#{a} #{op == 'and' ? '&&' : '||'} #{b})" if pre.empty?
+        # The right side needs temporaries: evaluate it only when needed.
+        r = tmp
+        line("bool #{r} = #{a};")
+        line(op == "and" ? "if (#{r}) {" : "if (!#{r}) {")
+        @indent += 1
+        b, pre = capture { expr(rhs) }
+        emit_raw(pre)
+        line("#{r} = #{b};")
+        @indent -= 1
+        line("}")
+        return r
+      end
+      a = expr(lhs)
+      b = expr(rhs)
+      if lhs.ty == "str"
+        call = "#{helper('egg_str_eq')}(#{a}, #{b})"
+        return op == "==" ? call : "(!#{call})"
+      end
+      "(#{a} #{op} #{b})"
+    end
+
+    # Arguments are evaluated left to right into the call; a non-void result
+    # is hoisted into a temporary, so the call happens here and now.
+    def call(c_name, args, params, receiver, ret)
+      codes = receiver.dup
+      args.each_with_index do |a, i|
+        pt = params[i][0]
+        codes << case a
+                 in AddrOf[expr: place] then "&#{lvalue(place)}"
+                 in SliceExpr then slice_expr(a)
+                 else coerce(expr(a), a.ty, pt)
+                 end
+      end
+      text = "#{c_name}(#{codes.join(', ')})"
+      return text if ret == "void"
+      hoist(text, ret)
+    end
+
+    def builtin(e, name, args)
+      a = args[0]
+      case name
+      when "print"
+        t = a.ty
+        code = expr(a)
+        case t
+        when "bool" then "#{helper('egg_print_bool')}(#{code})"
+        when "str" then "#{helper('egg_print_str')}(#{code})"
+        when "i64" then "#{helper('egg_print_i64')}(#{code})"
+        else
+          @enum_names[t] = true
+          "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{code}])"
+        end
+      when "len"
+        code = expr(a)
+        len = e.info[:len]
+        len.nil? ? "#{code}.len" : "((void)#{code}, INT64_C(#{len}))"
+      when "sizeOf"
+        "((int64_t)sizeof(#{c_type(e.info[:type])}))"
+      when "typeName"
+        name = e.info[:type]
+        @need_str = true
+        "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
+      when "splat"
+        info = @types[e.ty]
+        v = hoist(expr(a), info.elem)
+        out = tmp
+        i = tmp
+        line("#{c_type(e.ty)} #{out};")
+        line("for (int64_t #{i} = 0; #{i} < #{info.len}; #{i}++) #{out}.a[#{i}] = #{v};")
+        out
       end
     end
 
-    def local_type(name)
+    # A struct value to read a field from: places are read in place,
+    # other expressions (calls) are already hoisted temporaries.
+    def struct_value(obj)
+      place?(obj) ? lvalue(obj) : expr(obj)
+    end
+
+    def index_expr(obj, index, len)
+      t = obj.ty
+      base = place?(obj) ? lvalue(obj) : expr(obj)
+      i = expr(index)
+      if t == "str"
+        s = place?(obj) ? base : base
+        return "((int64_t)(unsigned char)#{s}.ptr[#{helper('egg_index')}(#{i}, #{s}.len)])"
+      end
+      if @types[t].kind == :slice
+        return "#{base}.ptr[#{helper('egg_index')}(#{i}, #{base}.len)]"
+      end
+      "#{base}.a[#{helper('egg_index')}(#{i}, INT64_C(#{len}))]"
+    end
+
+    def slice_expr(e)
+      obj = e.obj
+      t = obj.ty
+      base = place?(obj) ? lvalue(obj) : hoist(expr(obj), t)
+      lo = hoist(expr(e.lo), "i64")
+      info = @types[t]
+      len = if t == "str" || info.kind == :slice then "#{base}.len" else "INT64_C(#{info.len})" end
+      hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64")
+      line("#{helper('egg_slice_check')}(#{lo}, #{hi}, #{len});")
+      if t == "str"
+        "((egg_str){ #{base}.ptr + #{lo}, #{hi} - #{lo} })"
+      elsif info.kind == :slice
+        "((#{c_type(e.ty)}){ #{base}.ptr + #{lo}, #{hi} - #{lo} })"
+      else
+        "((#{c_type(e.ty)}){ #{base}.a + #{lo}, #{hi} - #{lo} })"
+      end
+    end
+
+    # Is e a place (variable, field of a place, element of a place)?
+    def place?(e)
+      case e
+      in Var[info:] then !info.nil? && info[:local] == true
+      in Field[obj:, info:] then (info.nil? || info[:enum_index].nil?) && place?(obj)
+      in Index[obj:] then place?(obj) && obj.ty != "str" && @types[obj.ty]&.kind == :array
+      else false
+      end
+    end
+
+    def lvalue(e)
+      case e
+      in Var[name:] then var_ref(name)
+      in Field[obj:, name:] then "#{lvalue(obj)}.f_#{name}"
+      in Index[obj:, index:, info:]
+        "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
+      else raise "codegen: not a place: #{e.class}"
+      end
+    end
+
+    def var_ref(name)
+      _, inout = local(name)
+      inout ? "(*v_#{name})" : "v_#{name}"
+    end
+
+    def local(name)
       i = @locals.length - 1
       while i >= 0
         t = @locals[i][name]

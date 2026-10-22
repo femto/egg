@@ -1,0 +1,88 @@
+// Arrays, slices (second-class: parameters only), inout, for, break.
+// expect: 23
+// expect: 11
+// expect: 1
+// expect: 17
+// expect: 21
+// expect: 19
+// expect: 0
+// expect: 3
+// expect: ana
+// expect: egg
+// expect: flow
+
+fn sum(xs: []i64) i64 {
+    var total = 0
+    for (xs) |x| {
+        total = total + x
+    }
+    return total
+}
+
+fn max_index(xs: []i64) i64 {
+    var best = 0
+    for (xs) |x, i| {
+        if (x > xs[best]) {
+            best = i
+        }
+    }
+    return best
+}
+
+fn bump_all(inout xs: [4]i64, by: i64) void {
+    var i = 0
+    while (i < @len(xs)) {
+        xs[i] = xs[i] + by
+        i = i + 1
+    }
+}
+
+fn swap(inout a: i64, inout b: i64) void {
+    const t = a
+    a = b
+    b = t
+}
+
+fn first_over(xs: []i64, limit: i64) i64 {
+    var found = -1
+    for (xs) |x| {
+        if (x > limit) {
+            found = x
+            break
+        }
+    }
+    return found
+}
+
+fn count_char(s: str, c: i64) i64 {
+    var n = 0
+    for (s) |b| {
+        if (b == c) {
+            n = n + 1
+        }
+    }
+    return n
+}
+
+fn main() void {
+    var a = [4]i64{ 5, 9, 2, 7 }
+    @print(sum(a[0..]))
+    @print(sum(a[1..3]))
+    @print(max_index(a[0..]))
+    bump_all(&a, 10)
+    @print(a[3])
+    var x = 1
+    var y = 2
+    swap(&x, &y)
+    @print(x * 10 + y)
+    @print(first_over(a[0..], 16))
+    const zeros: [3]i64 = @splat(0)
+    @print(sum(zeros[0..]))
+    const s = "banana"
+    @print(count_char(s, 97))
+    @print(s[1..4])
+    const words = [_]str{ "egg", "flow" }
+    for (words) |w| {
+        @print(w)
+    }
+}

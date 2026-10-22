@@ -1,0 +1,40 @@
+// Error values: !T, error.X, try, catch; main returns !void.
+// expect: 123
+// expect: -1
+// expect: -2
+// expect: 0
+// fails: TooBig
+
+fn parse_digit(c: i64) !i64 {
+    if (c < 48 or c > 57) {
+        return error.NotADigit
+    }
+    return c - 48
+}
+
+fn parse_number(s: str) !i64 {
+    if (@len(s) == 0) {
+        return error.Empty
+    }
+    var n = 0
+    for (s) |c| {
+        n = n * 10 + try parse_digit(c)
+    }
+    return n
+}
+
+fn check(n: i64) !void {
+    if (n > 100) {
+        return error.TooBig
+    }
+}
+
+fn main() !void {
+    @print(try parse_number("123"))
+    @print(parse_number("12x") catch -1)
+    @print(parse_number("") catch -2)
+    try check(5)
+    check(500) catch @print(0)
+    try check(1000)
+    @print(999)
+}
