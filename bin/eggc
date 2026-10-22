@@ -7,6 +7,7 @@
 #   eggc run    FILE.egg            build to a temp file and run it
 #   eggc spec                       print the whole language spec (core, grammar,
 #                                   diagnostics) for loading into an AI's context
+#   eggc lsp                        language server on stdin/stdout, for editors
 #
 #   --json   print diagnostics as JSON lines (for tools and AI agents)
 #   -g       debug build: #line directives map the C back to the .egg file,
@@ -15,7 +16,7 @@
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g]\n       eggc spec"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g]\n       eggc (spec|lsp)"
 
 def fail_usage
   warn USAGE
@@ -30,6 +31,11 @@ if ARGV == ["spec"]
     puts File.read(File.join(spec_dir, f))
   end
   exit 0
+end
+
+if ARGV == ["lsp"]
+  require_relative "../lib/egg/lsp"
+  exit Egg::LSP::Server.new.run
 end
 
 args = ARGV.dup

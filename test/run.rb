@@ -9,9 +9,12 @@
 # spec/core.md      -- every ```egg block is a test of one of the kinds above
 #                      ("// error: CODE" there needs no line), so the spec
 #                      cannot drift from the compiler.
+# eggc lsp          -- the language server answers definition, hover,
+#                      outline and diagnostics requests.
 #
 # Usage: ruby test/run.rb
 
+require "json"
 require "open3"
 require "tmpdir"
 require_relative "../lib/egg"
@@ -99,6 +102,81 @@ def check_errors(name, src)
   report(!want.empty? && missing.empty?, name, detail)
 end
 
+# Run one LSP session against bin/eggc lsp; returns responses by id and
+# the diagnostics notifications in order.
+def lsp_session(messages)
+  input = messages.map do |m|
+    body = JSON.generate(m.merge("jsonrpc" => "2.0"))
+    "Content-Length: #{body.bytesize}\r\n\r\n#{body}"
+  end.join
+  out, err, status = Open3.capture3(File.join(ROOT, "bin", "eggc"), "lsp", stdin_data: input)
+  replies = {}
+  diags = []
+  out.split(/Content-Length: \d+\r\n\r\n/).reject(&:empty?).each do |text|
+    msg = JSON.parse(text)
+    if msg["method"] == "textDocument/publishDiagnostics"
+      diags << msg["params"]["diagnostics"]
+    else
+      replies[msg["id"]] = msg
+    end
+  end
+  [replies, diags, status, err]
+end
+
+def check_lsp
+  uri = "file:///t/a.egg"
+  src = <<~EGG
+    fn add(a: i64, b: i64) i64 {
+        return a + b
+    }
+
+    fn main() void {
+        var total = 0
+        total = add(total, 2)
+        @print(total)
+    }
+  EGG
+  doc = { "uri" => uri }
+  at = ->(line, ch) { { "textDocument" => doc, "position" => { "line" => line, "character" => ch } } }
+  edit = ->(text) { { "method" => "textDocument/didChange", "params" => { "textDocument" => doc, "contentChanges" => [{ "text" => text }] } } }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/definition", "params" => at.(6, 13) },  # add( in main
+    { "id" => 3, "method" => "textDocument/definition", "params" => at.(7, 11) },  # total in @print
+    { "id" => 4, "method" => "textDocument/definition", "params" => at.(6, 4) },   # total = ...
+    { "id" => 5, "method" => "textDocument/definition", "params" => at.(1, 11) },  # a in add
+    { "id" => 6, "method" => "textDocument/definition", "params" => at.(7, 6) },   # @print: nothing
+    { "id" => 7, "method" => "textDocument/hover", "params" => at.(6, 12) },
+    { "id" => 8, "method" => "textDocument/hover", "params" => at.(5, 8) },
+    { "id" => 9, "method" => "textDocument/documentSymbol", "params" => { "textDocument" => doc } },
+    edit.(src.sub("add(total, 2)", "add(totl, 2)")),
+    edit.(src.sub("return a + b", "return a +")),
+    { "id" => 10, "method" => "textDocument/definition", "params" => at.(6, 13) }, # last good version
+    { "id" => 11, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, diags, status, err = lsp_session(req)
+  result = ->(id) { replies.dig(id, "result") }
+  start = ->(id) { result.(id) && result.(id)["range"]["start"].values_at("line", "character") }
+  hover = ->(id) { result.(id) && result.(id)["contents"]["value"].lines[1].to_s.strip }
+  report(result.(1)&.dig("capabilities", "definitionProvider") == true, "lsp initialize")
+  report(start.(2) == [0, 3], "lsp definition of a function", start.(2).inspect)
+  report(start.(3) == [5, 8] && start.(4) == [5, 8], "lsp definition of a local", [start.(3), start.(4)].inspect)
+  report(start.(5) == [0, 7], "lsp definition of a parameter", start.(5).inspect)
+  report(replies.key?(6) && result.(6).nil?, "lsp definition on a builtin is empty", replies[6].inspect)
+  report(hover.(7) == "fn add(a: i64, b: i64) i64" && hover.(8) == "var total: i64", "lsp hover", [hover.(7), hover.(8)].inspect)
+  names = (result.(9) || []).map { |sym| sym["name"] }
+  report(names == %w[add main], "lsp document symbols", names.inspect)
+  codes = diags.map { |ds| ds.map { |d| d["code"] } }
+  report(codes == [[], ["E101"], ["E002"]], "lsp diagnostics follow edits", codes.inspect)
+  e101 = diags[1] && diags[1][0] && diags[1][0]["range"]
+  report(e101 == { "start" => { "line" => 6, "character" => 16 }, "end" => { "line" => 6, "character" => 20 } },
+         "lsp diagnostic range covers the token", e101.inspect)
+  report(start.(10) == [0, 3], "lsp navigation survives a syntax error", start.(10).inspect)
+  report(status.success? && err.empty?, "lsp shutdown and exit", "status #{status.exitstatus}, stderr: #{err}")
+end
+
 Dir.mktmpdir do |dir|
   puts "examples"
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
@@ -110,6 +188,9 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "test", "errors", "*.egg")].sort.each do |path|
     check_errors(File.basename(path), File.read(path))
   end
+
+  puts "lsp"
+  check_lsp
 
   puts "spec/core.md"
   spec = File.read(File.join(ROOT, "spec", "core.md"))

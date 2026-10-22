@@ -27,6 +27,7 @@ bin/eggc build examples/fib.egg -o fib
 bin/eggc check file.egg --json       # diagnostics as JSON lines
 bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
 bin/eggc spec                        # whole spec, for pasting into an AI
+bin/eggc lsp                         # language server for editors (stdin/stdout)
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ```
 
@@ -54,6 +55,7 @@ lib/egg/parser.rb      tokens -> AST (recursive descent)
 lib/egg/ast.rb         AST as Structs
 lib/egg/typecheck.rb   types and Zig-style strictness checks
 lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
+lib/egg/lsp.rb         language server (a tool: uses the json stdlib, not Spinel)
 spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
@@ -79,23 +81,27 @@ test/run.rb            test runner, no gems
 
 ## Editor support
 
-VS Code syntax highlighting lives in `editors/vscode`. Install it with:
+`editors/vscode` is a VS Code extension: highlighting, go to definition,
+hover, outline, errors as you type (all served by `eggc lsp`) and
+breakpoints. Install it with:
 
 ```bash
-code --install-extension editors/vscode/egg-lang-0.0.2.vsix
+code --install-extension editors/vscode/egg-lang-0.0.3.vsix
 ```
 
 Or in VS Code: Extensions view → `...` menu → *Install from VSIX...* →
-pick `editors/vscode/egg-lang-0.0.2.vsix`. Reload the window and `.egg`
+pick `editors/vscode/egg-lang-0.0.3.vsix`. Reload the window and `.egg`
 files are highlighted.
 
-To hack on the grammar without repackaging, symlink the folder and reload:
+To work on the extension without repackaging, build it once, symlink the
+folder and reload (rerun the build after changing `extension.js`):
 
 ```bash
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.2
+(cd editors/vscode && npm install && npm run vscode:prepublish)
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.3
 ```
 
-Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package`.
+Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package --no-dependencies`.
 
 ## Debugging
 

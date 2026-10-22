@@ -1,19 +1,32 @@
 {
   "name": "egg-lang",
   "displayName": "Egg",
-  "description": "Syntax highlighting and breakpoints for the Egg programming language",
-  "version": "0.0.2",
+  "description": "Syntax highlighting, go to definition, hover, outline, diagnostics and breakpoints for the Egg programming language",
+  "version": "0.0.3",
   "publisher": "femto",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/femto/egg" },
-  "engines": { "vscode": "^1.60.0" },
-  "categories": ["Programming Languages", "Debuggers"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/femto/egg"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "egg",
-        "aliases": ["Egg", "egg"],
-        "extensions": [".egg"],
+        "aliases": [
+          "Egg",
+          "egg"
+        ],
+        "extensions": [
+          ".egg"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -24,6 +37,33 @@
         "path": "./syntaxes/egg.tmLanguage.json"
       }
     ],
-    "breakpoints": [{ "language": "egg" }]
+    "breakpoints": [
+      {
+        "language": "egg"
+      }
+    ],
+    "configuration": {
+      "title": "Egg",
+      "properties": {
+        "egg.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to eggc, which is started as `eggc lsp`. Empty: bin/eggc in the open workspace if it is an egg checkout, else eggc on PATH."
+        }
+      }
+    }
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:egg"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  },
+  "scripts": {
+    "vscode:prepublish": "esbuild extension.js --bundle --platform=node --external:vscode --outfile=dist/extension.js --minify"
   }
 }
