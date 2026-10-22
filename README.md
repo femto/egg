@@ -7,7 +7,7 @@ for the full picture.
 
 This repository holds **eggc v0**: the first compiler, written in the Ruby
 subset that [Spinel](https://github.com/matz/spinel) compiles. It runs on
-CRuby today and emits portable C99.
+CRuby 3.0+ today and emits portable C99.
 
 ```
 fn fib(n: i64) i64 {
@@ -86,11 +86,11 @@ hover, outline, errors as you type (all served by `eggc lsp`) and
 breakpoints. Install it with:
 
 ```bash
-code --install-extension editors/vscode/egg-lang-0.0.3.vsix
+code --install-extension editors/vscode/egg-lang-0.0.4.vsix
 ```
 
 Or in VS Code: Extensions view → `...` menu → *Install from VSIX...* →
-pick `editors/vscode/egg-lang-0.0.3.vsix`. Reload the window and `.egg`
+pick `editors/vscode/egg-lang-0.0.4.vsix`. Reload the window and `.egg`
 files are highlighted.
 
 To work on the extension without repackaging, build it once, symlink the
@@ -98,7 +98,7 @@ folder and reload (rerun the build after changing `extension.js`):
 
 ```bash
 (cd editors/vscode && npm install && npm run vscode:prepublish)
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.3
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.4
 ```
 
 Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package --no-dependencies`.

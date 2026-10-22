@@ -13,6 +13,13 @@
 #   -g       debug build: #line directives map the C back to the .egg file,
 #            and build/run compile with -g -O0, so gdb/lldb break on .egg lines
 
+# The compiler uses `case ... in`; older Rubies (macOS ships 2.6 as
+# /usr/bin/ruby) would only report a confusing syntax error.
+if RUBY_VERSION < "3.0"
+  warn "eggc: needs Ruby 3.0 or newer, but #{RUBY_VERSION} is running (#{RbConfig.ruby})"
+  exit 2
+end
+
 require "tmpdir"
 require_relative "../lib/egg"
 
