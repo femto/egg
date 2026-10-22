@@ -2,8 +2,7 @@
 
 An AI-native systems language with a core that has no capabilities at all.
 GC, exceptions, IO and allocation are capability modules a program declares
-on demand. See the design doc ([English](design.md) · [中文](design.zh.md))
-for the full picture.
+on demand. See the design doc for the full picture.
 
 This repository holds **eggc v0**: the first compiler, written in the Ruby
 subset that [Spinel](https://github.com/matz/spinel) compiles. It runs on
@@ -25,6 +24,7 @@ bin/eggc run examples/fib.egg        # 6765
 bin/eggc emit-c examples/fib.egg     # show the generated C
 bin/eggc build examples/fib.egg -o fib
 bin/eggc check file.egg --json       # diagnostics as JSON lines
+bin/eggc spec                        # whole spec, for pasting into an AI
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ```
 
@@ -45,11 +45,14 @@ division by zero panic instead of being undefined behaviour.
 
 ```
 bin/eggc               command-line driver
+docs/design.md         design doc, English and Chinese
+editors/vscode/        VS Code syntax highlighting (install the .vsix)
 lib/egg/lexer.rb       source -> tokens (newlines are significant)
 lib/egg/parser.rb      tokens -> AST (recursive descent)
 lib/egg/ast.rb         AST as Structs
 lib/egg/typecheck.rb   types and Zig-style strictness checks
 lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
+spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
 examples/              programs with `// expect:` / `// panic:` lines
@@ -71,23 +74,3 @@ test/run.rb            test runner, no gems
 - Passes `-std=c99 -Wall -Wextra -pedantic -Werror` on gcc and clang
 - No POSIX calls; only `<stdio.h>`, `<stdlib.h>`, `<stdint.h>`,
   `<stdbool.h>`, `<inttypes.h>`
-
-## Editor support
-
-VS Code syntax highlighting lives in `editors/vscode`. Install it with:
-
-```bash
-code --install-extension editors/vscode/egg-lang-0.0.1.vsix
-```
-
-Or in VS Code: Extensions view → `...` menu → *Install from VSIX...* →
-pick `editors/vscode/egg-lang-0.0.1.vsix`. Reload the window and `.egg`
-files are highlighted.
-
-To hack on the grammar without repackaging, symlink the folder and reload:
-
-```bash
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.1
-```
-
-Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package`.

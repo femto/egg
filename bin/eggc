@@ -5,17 +5,29 @@
 #   eggc emit-c FILE.egg [-o OUT.c] print or write the generated C
 #   eggc build  FILE.egg [-o EXE]   compile to an executable via $CC (default cc)
 #   eggc run    FILE.egg            build to a temp file and run it
+#   eggc spec                       print the whole language spec (core, grammar,
+#                                   diagnostics) for loading into an AI's context
 #
 #   --json   print diagnostics as JSON lines (for tools and AI agents)
 
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json]"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json]\n       eggc spec"
 
 def fail_usage
   warn USAGE
   exit 2
+end
+
+if ARGV == ["spec"]
+  spec_dir = File.expand_path("../spec", __dir__)
+  %w[core.md grammar.ebnf diagnostics.md].each_with_index do |f, i|
+    puts unless i.zero?
+    puts "===== spec/#{f} ====="
+    puts File.read(File.join(spec_dir, f))
+  end
+  exit 0
 end
 
 args = ARGV.dup
