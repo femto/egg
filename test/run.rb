@@ -80,7 +80,8 @@ end
 
 # Every line that starts code must get a #line mark, and nothing else may:
 # returns the lines that differ. Lines of only "}" or "} else {" start
-# nothing, and neither do continuation lines (after "," "(" or an operator).
+# nothing, and neither do continuation lines (after "," "(" or an operator,
+# or a `.field = value` line of a struct literal).
 def bad_line_marks(c_source, src)
   marked = c_source.scan(/^#line (\d+) /).map { |m| m[0].to_i }.uniq
   texts = src.lines.map { |l| l.sub(%r{//.*}, "").strip }
@@ -88,7 +89,9 @@ def bad_line_marks(c_source, src)
   prev = ""
   texts.each_with_index do |text, i|
     next if text.empty?
-    continued = prev.match?(/(,|\(|\band|\bor|[-+*\/%<>=!])\z/)
+    # A line continues the previous one after "," "(" or an operator, and
+    # when it is a `.field = value` line of a multi-line struct literal.
+    continued = prev.match?(/(,|\(|\band|\bor|[-+*\/%<>=!])\z/) || text.start_with?(".")
     code << i + 1 unless continued || text.match?(/\A\}( else \{)?\z/)
     prev = text
   end
@@ -130,6 +133,48 @@ def lsp_session(messages)
     end
   end
   [replies, diags, status, err]
+end
+
+# v1 syntax: types and methods in the outline, method and type navigation.
+def check_lsp_v1
+  uri = "file:///t/b.egg"
+  src = <<~EGG
+    const Point = struct {
+        x: i64
+
+        fn bump(inout self: Point) void {
+            self.x = self.x + 1
+        }
+    }
+
+    fn main() void {
+        var p = Point{ .x = 1 }
+        p.bump()
+        for ([2]i64{ 1, 2 }) |v| {
+            @print(v + p.x)
+        }
+    }
+  EGG
+  doc = { "uri" => uri }
+  at = ->(line, ch) { { "textDocument" => doc, "position" => { "line" => line, "character" => ch } } }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/documentSymbol", "params" => { "textDocument" => doc } },
+    { "id" => 3, "method" => "textDocument/definition", "params" => at.(10, 7) },  # p.bump()
+    { "id" => 4, "method" => "textDocument/definition", "params" => at.(9, 13) },  # Point{
+    { "id" => 5, "method" => "textDocument/definition", "params" => at.(12, 15) }, # v in the loop
+    { "id" => 6, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, _, status, err = lsp_session(req)
+  start = ->(id) { r = replies.dig(id, "result", "range", "start"); r && [r["line"], r["character"]] }
+  names = (replies.dig(2, "result") || []).map { |x| x["name"] }
+  report(names == %w[Point Point.bump main], "lsp v1 outline lists types and methods", names.inspect)
+  report(start.(3) == [3, 7], "lsp v1 definition of a method", start.(3).inspect)
+  report(start.(4) == [0, 6], "lsp v1 definition of a type from a literal", start.(4).inspect)
+  report(start.(5) == [11, 4], "lsp v1 definition of a loop variable", start.(5).inspect)
+  report(status.success? && err.empty?, "lsp v1 session ends cleanly", err)
 end
 
 def check_lsp
@@ -200,6 +245,7 @@ Dir.mktmpdir do |dir|
 
   puts "lsp"
   check_lsp
+  check_lsp_v1
 
   puts "spec/core.md"
   spec = File.read(File.join(ROOT, "spec", "core.md"))

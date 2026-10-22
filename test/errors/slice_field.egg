@@ -1,0 +1,7 @@
+// error: E116 @3
+const View = struct {
+    items: []i64
+}
+fn main() void {
+    @print(1)
+}

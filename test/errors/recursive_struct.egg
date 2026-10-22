@@ -1,0 +1,8 @@
+// error: E119 @2
+const Node = struct {
+    value: i64
+    next: Node
+}
+fn main() void {
+    @print(1)
+}

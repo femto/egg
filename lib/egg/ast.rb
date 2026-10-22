@@ -70,6 +70,19 @@ module Egg
   Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info)     # e catch f
   TypeExpr   = Struct.new(:type, :line, :col, :ty, :info)                # a type in value position: []i64
 
+  # A source type as text: "i64", "[3]i64", "[]str", "!i64", "Pair(i64)".
+  def self.type_src(t)
+    case t
+    when String then t
+    when ArrayType then "[#{t.len.nil? ? '_' : t.len}]#{type_src(t.elem)}"
+    when SliceType then "[]#{type_src(t.elem)}"
+    when ErrType then "!#{type_src(t.inner)}"
+    when GenericType then "#{t.name}(#{t.args.map { |a| type_src(a) }.join(', ')})"
+    when ThisType then "@This()"
+    else t.to_s
+    end
+  end
+
   def self.deep_copy(node)
     Marshal.load(Marshal.dump(node))
   end

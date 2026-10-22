@@ -1,0 +1,9 @@
+// error: E105 @7
+fn inc(inout n: i64) void {
+    n = n + 1
+}
+fn main() void {
+    const x = 1
+    inc(&x)
+    @print(x)
+}

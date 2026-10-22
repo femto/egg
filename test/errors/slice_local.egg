@@ -1,0 +1,6 @@
+// error: E116 @4
+fn main() void {
+    const a = [3]i64{ 1, 2, 3 }
+    const s = a[0..2]
+    @print(@len(s))
+}

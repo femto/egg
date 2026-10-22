@@ -1,0 +1,5 @@
+// error: E124 @3
+fn main() void {
+    const a = [3]i64{ 1, 2 }
+    @print(a[0])
+}

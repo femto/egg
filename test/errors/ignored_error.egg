@@ -1,0 +1,9 @@
+// error: E113 @8
+fn check(n: i64) !void {
+    if (n > 1) {
+        return error.Big
+    }
+}
+fn main() void {
+    check(2)
+}

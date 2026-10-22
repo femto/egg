@@ -1,0 +1,5 @@
+// error: E120 @3
+fn main() void {
+    const T = struct { x: i64 }
+    @print(1)
+}

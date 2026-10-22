@@ -1,0 +1,7 @@
+// error: E118 @6
+fn f() !i64 {
+    return 1
+}
+fn main() void {
+    @print(try f())
+}

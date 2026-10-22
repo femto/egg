@@ -1,0 +1,8 @@
+// error: E105 @3
+fn zero(xs: []i64) void {
+    xs[0] = 0
+}
+fn main() void {
+    const a = [1]i64{ 5 }
+    zero(a[0..])
+}

@@ -1,0 +1,4 @@
+// error: E126 @3
+fn main() void {
+    break
+}

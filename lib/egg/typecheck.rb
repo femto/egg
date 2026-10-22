@@ -476,7 +476,8 @@ module Egg
         check_block(body)
         @loop_depth -= 1
       in For[iter:, var:, index_var:, body:, line:, col:]
-        it = check_expr(iter)
+        # A slice may be iterated directly: it lives only as long as the loop.
+        it = iter.is_a?(SliceExpr) ? check_slice_arg(iter, nil) : check_expr(iter)
         elem = elem_type(it)
         if elem.nil? && it != "error"
           err("E103", "'for' needs an array, a slice or a str, found #{it}", iter.line, iter.col)

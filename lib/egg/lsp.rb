@@ -12,7 +12,7 @@ require "json"
 
 module Egg
   module LSP
-    # A declared name: a function, parameter or local.
+    # A declared name: a function, method, type, parameter or local.
     Decl = Struct.new(:kind, :name, :line, :col, :detail, :end_line, :end_col)
     # A use (or the declaration itself) of a name at line:col.
     Ref = Struct.new(:line, :col, :length, :decl)
@@ -60,29 +60,71 @@ module Egg
       private
 
       def build(program)
-        by_pos = {}
-        @tokens.each_with_index { |t, i| by_pos["#{t.line}:#{t.col}"] = i }
+        @by_pos = {}
+        @tokens.each_with_index { |t, i| @by_pos["#{t.line}:#{t.col}"] = i }
         globals = {}
-        program.funcs.each do |f|
-          i = by_pos["#{f.line}:#{f.col}"]
-          name_tok = @tokens[i + 1]
+        @types = {}
+        @methods = {}
+        bodies = []
+        # Types: `const Name = struct/enum {`; the decl sits on its name.
+        (program.types || []).each do |td|
+          i = @by_pos["#{td.line}:#{td.col}"]
+          name_tok = @tokens[i - 2]
           close = closing_brace(i)
-          params = f.params.map { |p| "#{p.name}: #{p.type}" }.join(", ")
-          decl = Decl.new(:fn, f.name, name_tok.line, name_tok.col,
-                          "fn #{f.name}(#{params}) #{f.ret}", close.line, close.col + 1)
-          @funcs << [decl, f.line, f.col]
-          next if globals.key?(f.name) # E106; the first definition wins
-          globals[f.name] = decl
+          decl = Decl.new(:type, td.name, name_tok.line, name_tok.col,
+                          "const #{td.name} = #{td.kind}", close.line, close.col + 1)
+          @funcs << [decl, name_tok.line, name_tok.col]
+          @types[td.name] ||= decl
+          ref(decl.line, decl.col, decl)
+          td.methods.each do |m|
+            mdecl = func_decl(m, "#{td.name}.#{m.name}")
+            @funcs << [mdecl, m.line, m.col]
+            @methods["#{td.name}.#{m.name}"] ||= mdecl
+            bodies << [m, mdecl, false]
+          end
         end
-        program.funcs.each_with_index do |f, n|
-          decl = @funcs[n][0]
-          ref(decl.line, decl.col, decl) if globals[f.name] == decl
-          @globals = globals
+        program.funcs.each do |f|
+          decl = func_decl(f, f.name)
+          @funcs << [decl, f.line, f.col]
+          first = !globals.key?(f.name) # E106; the first definition wins
+          globals[f.name] = decl if first
+          bodies << [f, decl, first]
+        end
+        @funcs.sort_by! { |_, l, c| [l, c] }
+        @globals = globals
+        bodies.each do |f, decl, first|
+          ref(decl.line, decl.col, decl) if first || f.owner
           @scopes = [{}]
           f.params.each do |p|
-            declare(Decl.new(:param, p.name, p.line, p.col, "#{p.name}: #{p.type}  (parameter)", nil, nil))
+            mode = p.mode.nil? ? "" : "#{p.mode} "
+            declare(Decl.new(:param, p.name, p.line, p.col, "#{mode}#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
           end
           walk_block(f.body)
+          walk_type_fn(f.body)
+        end
+      end
+
+      def func_decl(f, label)
+        i = @by_pos["#{f.line}:#{f.col}"]
+        name_tok = @tokens[i + 1]
+        close = closing_brace(i)
+        params = f.params.map { |p| "#{p.mode.nil? ? '' : "#{p.mode} "}#{p.name}: #{Egg.type_src(p.type)}" }.join(", ")
+        Decl.new(:fn, label, name_tok.line, name_tok.col,
+                 "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}", close.line, close.col + 1)
+      end
+
+      # Methods inside `return struct { ... }` of a type function.
+      def walk_type_fn(body)
+        st = body.stmts.length == 1 && body.stmts[0].is_a?(Return) ? body.stmts[0].value : nil
+        return unless st.is_a?(StructTypeExpr)
+        st.methods.each do |m|
+          saved = @scopes
+          @scopes = [{}]
+          m.params.each do |p|
+            declare(Decl.new(:param, p.name, p.line, p.col, "#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
+          end
+          walk_block(m.body)
+          @scopes = saved
         end
       end
 
@@ -114,9 +156,21 @@ module Egg
           walk_expr(value) # the value cannot see the name being declared
           kw = mutable ? "var" : "const"
           declare(Decl.new(:local, name, line, col, "#{kw} #{name}: #{ty}", nil, nil))
-        in Assign[name:, value:, line:, col:]
-          use(name, line, col)
+        in Assign[name:, value:, line:, col:, target:]
+          if target.nil?
+            use(name, line, col)
+          else
+            walk_expr(target)
+          end
           walk_expr(value)
+        in For[iter:, var:, index_var:, body:, line:, col:]
+          walk_expr(iter)
+          @scopes << {}
+          declare(Decl.new(:local, var, line, col, "#{var}  (loop item)", nil, nil)) unless var == "_"
+          declare(Decl.new(:local, index_var, line, col, "#{index_var}: i64  (loop index)", nil, nil)) unless index_var.nil?
+          walk_block(body)
+          @scopes.pop
+        in Break | Continue then nil
         in If[cond:, then_body:, else_body:]
           walk_expr(cond)
           walk_block(then_body)
@@ -139,9 +193,45 @@ module Egg
 
       def walk_expr(expr)
         case expr
-        in IntLit | BoolLit then nil
+        in IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | StructTypeExpr then nil
         in Var[name:, line:, col:]
-          use(name, line, col)
+          decl = @types[name]
+          if !decl.nil? && lookup_local(name).nil?
+            ref(line, col, decl, name.length)
+          else
+            use(name, line, col)
+          end
+        in Field[obj:]
+          walk_expr(obj)
+        in Index[obj:, index:]
+          walk_expr(obj)
+          walk_expr(index)
+        in SliceExpr[obj:, lo:, hi:]
+          walk_expr(obj)
+          walk_expr(lo)
+          walk_expr(hi) unless hi.nil?
+        in MethodCall[obj:, name:, args:, line:, col:]
+          walk_expr(obj)
+          owner = obj.info.nil? ? nil : (obj.info[:type] || obj.ty)
+          decl = owner.nil? ? nil : @methods["#{owner}.#{name}"]
+          ref(line, col, decl, name.length) unless decl.nil?
+          args.each { |a| walk_expr(a) }
+        in StructLit[type:, fields:, line:, col:]
+          # The literal sits on its '{'; the type name is the token before.
+          decl = type.is_a?(String) ? @types[type] : nil
+          i = @by_pos["#{line}:#{col}"]
+          name_tok = decl.nil? || i.nil? ? nil : @tokens[i - 1]
+          ref(name_tok.line, name_tok.col, decl, type.length) if !name_tok.nil? && name_tok.text == type
+          fields.each { |f| walk_expr(f[1]) }
+        in ArrayLit[items:]
+          items.each { |i| walk_expr(i) }
+        in AddrOf[expr: inner]
+          walk_expr(inner)
+        in Try[expr: inner]
+          walk_expr(inner)
+        in Catch[expr: inner, fallback:]
+          walk_expr(inner)
+          walk_expr(fallback)
         in Unary[operand:]
           walk_expr(operand)
         in Binary[lhs:, rhs:]
@@ -161,6 +251,16 @@ module Egg
       def declare(decl)
         @scopes.last[decl.name] = decl
         ref(decl.line, decl.col, decl)
+      end
+
+      def lookup_local(name)
+        i = @scopes.length - 1
+        while i >= 0
+          d = @scopes[i][name]
+          return d unless d.nil?
+          i -= 1
+        end
+        nil
       end
 
       def use(name, line, col)
