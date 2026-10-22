@@ -1,0 +1,5 @@
+// error: E111 @3
+fn main() void {
+    var x = 1
+    @print(x)
+}

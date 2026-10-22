@@ -1,0 +1,72 @@
+# Egg
+
+An AI-native systems language with a core that has no capabilities at all.
+GC, exceptions, IO and allocation are capability modules a program declares
+on demand. See the design doc for the full picture.
+
+This repository holds **eggc v0**: the first compiler, written in the Ruby
+subset that [Spinel](https://github.com/matz/spinel) compiles. It runs on
+CRuby today and emits portable C99.
+
+```
+fn fib(n: i64) i64 {
+    if (n < 2) { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() void {
+    @print(fib(20))
+}
+```
+
+```bash
+bin/eggc run examples/fib.egg        # 6765
+bin/eggc emit-c examples/fib.egg     # show the generated C
+bin/eggc build examples/fib.egg -o fib
+bin/eggc check file.egg --json       # diagnostics as JSON lines
+ruby test/run.rb                     # all tests (CC=clang to switch compilers)
+```
+
+## What v0 supports
+
+- Types: `i64`, `bool`, `void` (return type only)
+- `fn`, `const` / `var` (with optional type), assignment
+- `if` / `else if` / `else`, `while`, `return`
+- Operators: `+ - * / %`, comparisons, `and` `or` `!`, unary `-`
+- `@print(x)`: a temporary builtin until the `io` capability arrives in v2
+
+Checks in the Zig spirit, all compile errors: unused locals, a `var` never
+reassigned, an ignored non-void result, shadowing, missing returns, no
+implicit conversions. Arithmetic is checked at run time: overflow and
+division by zero panic instead of being undefined behaviour.
+
+## Layout
+
+```
+bin/eggc               command-line driver
+lib/egg/lexer.rb       source -> tokens (newlines are significant)
+lib/egg/parser.rb      tokens -> AST (recursive descent)
+lib/egg/ast.rb         AST as Structs
+lib/egg/typecheck.rb   types and Zig-style strictness checks
+lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
+spec/grammar.ebnf      the grammar, machine-readable
+spec/diagnostics.md    every error code
+examples/              programs with `// expect:` / `// panic:` lines
+test/errors/           programs that must fail with `// error: CODE @LINE`
+test/run.rb            test runner, no gems
+```
+
+## Coding rules (to stay in the Spinel subset)
+
+- No `send`, `define_method`, `method_missing`, `eval`
+- AST nodes are Structs, handled with `case ... in`; every `case` ends in an
+  `else` that raises, because Ruby does not check exhaustiveness
+- No gems in the compiler (the test runner may use stdlib `open3`)
+
+## Generated C
+
+- Egg functions become `fn_<name>`, locals `v_<name>`, runtime helpers
+  `egg_*`, so nothing an Egg program names can collide with C or the runtime
+- Passes `-std=c99 -Wall -Wextra -pedantic -Werror` on gcc and clang
+- No POSIX calls; only `<stdio.h>`, `<stdlib.h>`, `<stdint.h>`,
+  `<stdbool.h>`, `<inttypes.h>`

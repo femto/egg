@@ -1,0 +1,4 @@
+// error: E001 @3
+fn main() void {
+    @print(1 $ 2)
+}

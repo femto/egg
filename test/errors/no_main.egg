@@ -1,0 +1,2 @@
+// error: E109 @1
+fn helper() void {}

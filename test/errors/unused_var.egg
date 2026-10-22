@@ -1,0 +1,6 @@
+// error: E110 @4
+fn main() void {
+    const used = 1
+    const unused = 2
+    @print(used)
+}

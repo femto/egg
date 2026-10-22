@@ -1,0 +1,8 @@
+// error: E105 @3
+fn inc(n: i64) i64 {
+    n = n + 1
+    return n
+}
+fn main() void {
+    @print(inc(1))
+}

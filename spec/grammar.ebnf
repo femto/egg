@@ -1,0 +1,42 @@
+(* Egg v0 core grammar.
+   Machine-readable source of truth for the parser in lib/egg/parser.rb.
+   NL is a newline token. Statements end at NL or before '}'.
+   A newline may appear after a binary operator, after '(' and ',',
+   and before 'else'; nowhere else inside an expression. *)
+
+program     = { NL } , { func , { NL } } , EOF ;
+
+func        = "fn" , IDENT , "(" , [ params ] , ")" , type , block ;
+params      = param , { "," , param } , [ "," ] ;
+param       = IDENT , ":" , type ;
+type        = "i64" | "bool" | "void" ;            (* void only as a return type *)
+
+block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}" ;
+
+stmt        = var_decl | assign | if_stmt | while_stmt | return_stmt | expr ;
+var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
+assign      = IDENT , "=" , expr ;
+if_stmt     = "if" , "(" , expr , ")" , block , [ "else" , ( if_stmt | block ) ] ;
+while_stmt  = "while" , "(" , expr , ")" , block ;
+return_stmt = "return" , [ expr ] ;
+
+expr        = or_expr ;
+or_expr     = and_expr , { "or" , and_expr } ;
+and_expr    = cmp_expr , { "and" , cmp_expr } ;
+cmp_expr    = add_expr , [ cmp_op , add_expr ] ;   (* not chainable: a < b < c is E002 *)
+cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+add_expr    = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+mul_expr    = unary , { ( "*" | "/" | "%" ) , unary } ;
+unary       = ( "-" | "!" ) , unary | primary ;
+primary     = INT | "true" | "false"
+            | IDENT , [ args ]                      (* variable or call *)
+            | BUILTIN , args                        (* @print(...) *)
+            | "(" , expr , ")" ;
+args        = "(" , [ expr , { "," , expr } , [ "," ] ] , ")" ;
+
+(* Lexical *)
+IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)
+INT         = digit , { digit | "_" } ;            (* must fit in i64 *)
+BUILTIN     = "@" , IDENT ;
+COMMENT     = "//" , { any char except newline } ;
+KEYWORDS    = fn return if else while var const true false and or ;

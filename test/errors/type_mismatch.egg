@@ -1,0 +1,5 @@
+// error: E103 @3
+fn main() void {
+    const x: i64 = true
+    @print(x)
+}

@@ -1,0 +1,6 @@
+// error: E105 @4
+fn main() void {
+    const x = 1
+    x = 2
+    @print(x)
+}

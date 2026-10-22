@@ -1,0 +1,7 @@
+// error: E108 @2
+fn f(a: u8) void {
+    @print(a)
+}
+fn main() void {
+    f(1)
+}

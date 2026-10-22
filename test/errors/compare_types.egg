@@ -1,0 +1,4 @@
+// error: E103 @3
+fn main() void {
+    @print(1 == true)
+}

@@ -1,0 +1,82 @@
+#!/usr/bin/env ruby
+# eggc: the Egg compiler (v0, written in the Spinel-compilable Ruby subset).
+#
+#   eggc check  FILE.egg            type-check only
+#   eggc emit-c FILE.egg [-o OUT.c] print or write the generated C
+#   eggc build  FILE.egg [-o EXE]   compile to an executable via $CC (default cc)
+#   eggc run    FILE.egg            build to a temp file and run it
+#
+#   --json   print diagnostics as JSON lines (for tools and AI agents)
+
+require "tmpdir"
+require_relative "../lib/egg"
+
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json]"
+
+def fail_usage
+  warn USAGE
+  exit 2
+end
+
+args = ARGV.dup
+json = !args.delete("--json").nil?
+out_path = nil
+if (i = args.index("-o"))
+  out_path = args[i + 1]
+  fail_usage if out_path.nil?
+  args.slice!(i, 2)
+end
+command = args[0]
+path = args[1]
+fail_usage if command.nil? || path.nil? || args.length != 2
+
+unless File.exist?(path)
+  warn "eggc: cannot read #{path}"
+  exit 2
+end
+
+result = Egg.compile_to_c(File.read(path))
+unless result.diagnostics.empty?
+  result.diagnostics.each do |d|
+    if json
+      puts d.to_json_text(path)
+    else
+      warn d.to_text(path)
+    end
+  end
+  exit 1
+end
+
+def build_exe(c_source, c_path, exe_path)
+  File.write(c_path, c_source)
+  cc = ENV["CC"] || "cc"
+  ok = system(cc, "-std=c99", "-O2", "-o", exe_path, c_path)
+  unless ok
+    warn "eggc: C compiler '#{cc}' failed"
+    exit 1
+  end
+end
+
+case command
+when "check"
+  exit 0
+when "emit-c"
+  if out_path
+    File.write(out_path, result.c_source)
+  else
+    print result.c_source
+  end
+when "build"
+  exe = out_path || File.basename(path, ".egg")
+  build_exe(result.c_source, "#{exe}.c", exe)
+when "run"
+  base = File.join(Dir.tmpdir, "eggc-#{Process.pid}")
+  build_exe(result.c_source, "#{base}.c", base)
+  ok = system(base)
+  status = $?.exitstatus
+  File.delete(base) if File.exist?(base)
+  File.delete("#{base}.c") if File.exist?("#{base}.c")
+  exit(status.nil? ? 1 : status) unless ok
+else
+  fail_usage
+end

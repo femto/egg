@@ -1,0 +1,22 @@
+// Euclid's algorithm, multi-line expressions, logical operators.
+// expect: 21
+// expect: false
+
+fn gcd(a: i64, b: i64) i64 {
+    var x = a
+    var y = b
+    while (y != 0) {
+        const t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+fn main() void {
+    const g = gcd(1071,
+                  462)
+    @print(g)
+    @print(g > 100 or
+           g < 0)
+}
