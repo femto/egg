@@ -12,12 +12,14 @@ module Egg
   # Exactly one of c_source / diagnostics is meaningful.
   CompileResult = Struct.new(:c_source, :diagnostics)
 
-  def self.compile_to_c(src)
+  # With source_path, the C carries #line directives pointing at it
+  # (for debug builds).
+  def self.compile_to_c(src, source_path = nil)
     tokens = Lexer.new(src).tokenize
     program = Parser.new(tokens).parse_program
     diags = TypeChecker.new(program).check
     return CompileResult.new(nil, diags) unless diags.empty?
-    CompileResult.new(CodegenC.new(program).generate, [])
+    CompileResult.new(CodegenC.new(program, source_path).generate, [])
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end

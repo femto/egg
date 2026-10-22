@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "eggc build -g",
+      "type": "shell",
+      "command": "mkdir -p build && bin/eggc build -g '${file}' -o 'build/${fileBasenameNoExtension}'",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

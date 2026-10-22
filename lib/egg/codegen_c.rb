@@ -8,6 +8,10 @@
 # Name mangling keeps Egg names away from C keywords and libc:
 #   functions -> fn_<name>, locals and parameters -> v_<name>
 #   runtime helpers all start with egg_, so they can never collide
+#
+# Given a source path, each function and statement is preceded by a
+# `#line N "file.egg"` directive, so a debugger built with -g shows and
+# breaks on .egg lines instead of lines of the generated C.
 
 module Egg
   class CodegenC
@@ -83,8 +87,9 @@ module Egg
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
 
-    def initialize(program)
+    def initialize(program, source_path = nil)
       @program = program
+      @line_file = source_path.nil? ? nil : c_string(source_path)
       @out = +""
       @indent = 0
       @funcs = {}
@@ -137,6 +142,7 @@ module Egg
     def gen_func(f)
       @locals = [{}]
       f.params.each { |p| @locals.last[p.name] = p.type }
+      mark(f.line)
       @out << signature(f) << " {\n"
       @indent = 1
       f.body.stmts.each { |s| gen_stmt(s) }
@@ -145,6 +151,7 @@ module Egg
 
     def gen_entry
       main = @funcs["main"]
+      mark(main.line)
       @out << "int main(void) {\n"
       if main.ret == "i64"
         @out << "    return (int)fn_main();\n"
@@ -166,7 +173,23 @@ module Egg
       @out << ("    " * @indent) << text << "\n"
     end
 
+    # Attribute the C that follows to an .egg line (debug builds only).
+    def mark(src_line)
+      return if @line_file.nil?
+      @out << "#line #{src_line} #{@line_file}\n"
+    end
+
+    def c_string(text)
+      out = +"\""
+      text.each_char do |ch|
+        out << "\\" if ch == "\\" || ch == "\""
+        out << ch
+      end
+      out << "\""
+    end
+
     def gen_stmt(stmt)
+      mark(stmt.line)
       case stmt
       in VarDecl[name:, value:, ty:]
         @locals.last[name] = ty
@@ -194,7 +217,14 @@ module Egg
       gen_block(stmt.then_body)
       tail = stmt.else_body
       while tail.is_a?(If)
-        line("} else if (#{cond(tail.cond)}) {")
+        if @line_file.nil?
+          line("} else if (#{cond(tail.cond)}) {")
+        else
+          # A directive needs its own line, so split "} else if" around it.
+          line("}")
+          mark(tail.line)
+          line("else if (#{cond(tail.cond)}) {")
+        end
         gen_block(tail.then_body)
         tail = tail.else_body
       end

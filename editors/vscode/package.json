@@ -1,12 +1,13 @@
 {
   "name": "egg-lang",
   "displayName": "Egg",
-  "description": "Syntax highlighting for the Egg programming language",
-  "version": "0.0.1",
+  "description": "Syntax highlighting and breakpoints for the Egg programming language",
+  "version": "0.0.2",
   "publisher": "femto",
   "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/femto/egg" },
   "engines": { "vscode": "^1.60.0" },
-  "categories": ["Programming Languages"],
+  "categories": ["Programming Languages", "Debuggers"],
   "contributes": {
     "languages": [
       {
@@ -22,6 +23,7 @@
         "scopeName": "source.egg",
         "path": "./syntaxes/egg.tmLanguage.json"
       }
-    ]
+    ],
+    "breakpoints": [{ "language": "egg" }]
   }
 }

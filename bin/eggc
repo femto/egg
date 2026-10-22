@@ -9,11 +9,13 @@
 #                                   diagnostics) for loading into an AI's context
 #
 #   --json   print diagnostics as JSON lines (for tools and AI agents)
+#   -g       debug build: #line directives map the C back to the .egg file,
+#            and build/run compile with -g -O0, so gdb/lldb break on .egg lines
 
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json]\n       eggc spec"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g]\n       eggc spec"
 
 def fail_usage
   warn USAGE
@@ -32,6 +34,7 @@ end
 
 args = ARGV.dup
 json = !args.delete("--json").nil?
+debug = !args.delete("-g").nil?
 out_path = nil
 if (i = args.index("-o"))
   out_path = args[i + 1]
@@ -47,7 +50,7 @@ unless File.exist?(path)
   exit 2
 end
 
-result = Egg.compile_to_c(File.read(path))
+result = Egg.compile_to_c(File.read(path), debug ? File.expand_path(path) : nil)
 unless result.diagnostics.empty?
   result.diagnostics.each do |d|
     if json
@@ -59,10 +62,12 @@ unless result.diagnostics.empty?
   exit 1
 end
 
-def build_exe(c_source, c_path, exe_path)
+def build_exe(c_source, c_path, exe_path, debug)
   File.write(c_path, c_source)
   cc = ENV["CC"] || "cc"
-  ok = system(cc, "-std=c99", "-O2", "-o", exe_path, c_path)
+  # Columns would be C columns, not .egg ones, so leave them out.
+  opt = debug ? ["-g", "-gno-column-info", "-O0"] : ["-O2"]
+  ok = system(cc, "-std=c99", *opt, "-o", exe_path, c_path)
   unless ok
     warn "eggc: C compiler '#{cc}' failed"
     exit 1
@@ -80,10 +85,10 @@ when "emit-c"
   end
 when "build"
   exe = out_path || File.basename(path, ".egg")
-  build_exe(result.c_source, "#{exe}.c", exe)
+  build_exe(result.c_source, "#{exe}.c", exe, debug)
 when "run"
   base = File.join(Dir.tmpdir, "eggc-#{Process.pid}")
-  build_exe(result.c_source, "#{base}.c", base)
+  build_exe(result.c_source, "#{base}.c", base, debug)
   ok = system(base)
   status = $?.exitstatus
   File.delete(base) if File.exist?(base)

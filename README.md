@@ -25,6 +25,7 @@ bin/eggc run examples/fib.egg        # 6765
 bin/eggc emit-c examples/fib.egg     # show the generated C
 bin/eggc build examples/fib.egg -o fib
 bin/eggc check file.egg --json       # diagnostics as JSON lines
+bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
 bin/eggc spec                        # whole spec, for pasting into an AI
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ```
@@ -81,17 +82,36 @@ test/run.rb            test runner, no gems
 VS Code syntax highlighting lives in `editors/vscode`. Install it with:
 
 ```bash
-code --install-extension editors/vscode/egg-lang-0.0.1.vsix
+code --install-extension editors/vscode/egg-lang-0.0.2.vsix
 ```
 
 Or in VS Code: Extensions view → `...` menu → *Install from VSIX...* →
-pick `editors/vscode/egg-lang-0.0.1.vsix`. Reload the window and `.egg`
+pick `editors/vscode/egg-lang-0.0.2.vsix`. Reload the window and `.egg`
 files are highlighted.
 
 To hack on the grammar without repackaging, symlink the folder and reload:
 
 ```bash
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.1
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.2
 ```
 
 Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package`.
+
+## Debugging
+
+`eggc build -g` puts `#line` directives in the generated C and compiles with
+`-g -O0`, so gdb and lldb break, step and show the stack in `.egg` source:
+
+```bash
+bin/eggc build -g examples/loops.egg -o build/loops
+lldb build/loops -o "breakpoint set --file loops.egg --line 37" -o run
+```
+
+In VS Code (with the extension above, plus CodeLLDB or the C/C++
+extension): open a `.egg` file, click the gutter to set a breakpoint, pick
+*Debug .egg (lldb)* or *Debug .egg (gdb)* and press F5. The repo's
+`.vscode/tasks.json` builds the current file into `build/` first.
+
+Limits: variables show under their C names (`v_n` for `n`), and stepping
+into a checked operation lands in a C runtime helper (`egg_add` and so on);
+use step over.
