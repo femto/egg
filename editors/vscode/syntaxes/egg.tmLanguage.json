@@ -1,0 +1,144 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Egg",
+  "scopeName": "source.egg",
+  "fileTypes": ["egg"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#function-definition" },
+    { "include": "#use-capability" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#numbers" },
+    { "include": "#user-types" },
+    { "include": "#function-calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.documentation.egg",
+          "match": "///.*$"
+        },
+        {
+          "name": "comment.line.double-slash.egg",
+          "begin": "//",
+          "end": "$",
+          "patterns": [
+            {
+              "comment": "Test directives used by test/run.rb",
+              "match": "\\b(expect|panic|error):",
+              "captures": { "1": { "name": "keyword.other.directive.egg" } }
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.egg",
+          "begin": "\"",
+          "end": "\"|$",
+          "patterns": [
+            { "name": "constant.character.escape.egg", "match": "\\\\(?:[nrt\\\\\"'0]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})" },
+            { "name": "constant.other.placeholder.egg", "match": "\\{[^{}\"]*\\}" }
+          ]
+        },
+        {
+          "name": "string.quoted.single.egg",
+          "match": "'(?:\\\\(?:[nrt\\\\\"'0]|x[0-9A-Fa-f]{2})|[^'\\\\])'"
+        }
+      ]
+    },
+    "function-definition": {
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.function.egg" },
+        "2": { "name": "entity.name.function.egg" }
+      }
+    },
+    "use-capability": {
+      "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+      "captures": {
+        "1": { "name": "keyword.control.import.egg" },
+        "2": { "name": "entity.name.namespace.egg" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.egg",
+          "match": "\\b(if|else|while|for|switch|return|break|continue|try|catch|defer|errdefer|orelse|unreachable)\\b"
+        },
+        {
+          "name": "storage.modifier.egg",
+          "match": "\\b(var|const|pub|comptime|inline|extern)\\b"
+        },
+        {
+          "name": "storage.type.egg",
+          "match": "\\b(fn|struct|enum|union|error|test)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.word.egg",
+          "match": "\\b(and|or)\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "support.type.primitive.egg",
+      "match": "\\b(i(?:8|16|32|64|128)|u(?:8|16|32|64|128)|isize|usize|f(?:16|32|64)|bool|void|type|noreturn|anyerror|anytype)\\b"
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.boolean.egg", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.egg", "match": "\\b(null|undefined)\\b" }
+      ]
+    },
+    "builtins": {
+      "name": "support.function.builtin.egg",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.egg", "match": "\\b0x[0-9A-Fa-f][0-9A-Fa-f_]*\\b" },
+        { "name": "constant.numeric.binary.egg", "match": "\\b0b[01][01_]*\\b" },
+        { "name": "constant.numeric.octal.egg", "match": "\\b0o[0-7][0-7_]*\\b" },
+        { "name": "constant.numeric.float.egg", "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?\\b" },
+        { "name": "constant.numeric.integer.egg", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "user-types": {
+      "name": "entity.name.type.egg",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "function-calls": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+      "captures": { "1": { "name": "entity.name.function.call.egg" } }
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.comparison.egg", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.assignment.egg", "match": "=" },
+        { "name": "keyword.operator.arithmetic.egg", "match": "\\+|-|\\*|/|%" },
+        { "name": "keyword.operator.logical.egg", "match": "!" },
+        { "name": "keyword.operator.type.egg", "match": "\\?" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.comma.egg", "match": "," },
+        { "name": "punctuation.separator.colon.egg", "match": ":" },
+        { "name": "punctuation.accessor.egg", "match": "\\." },
+        { "name": "punctuation.section.braces.egg", "match": "[{}]" },
+        { "name": "punctuation.section.parens.egg", "match": "[()]" },
+        { "name": "punctuation.section.brackets.egg", "match": "[\\[\\]]" }
+      ]
+    }
+  }
+}

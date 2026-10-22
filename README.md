@@ -70,3 +70,23 @@ test/run.rb            test runner, no gems
 - Passes `-std=c99 -Wall -Wextra -pedantic -Werror` on gcc and clang
 - No POSIX calls; only `<stdio.h>`, `<stdlib.h>`, `<stdint.h>`,
   `<stdbool.h>`, `<inttypes.h>`
+
+## Editor support
+
+VS Code syntax highlighting lives in `editors/vscode`. Install it with:
+
+```bash
+code --install-extension editors/vscode/egg-lang-0.0.1.vsix
+```
+
+Or in VS Code: Extensions view → `...` menu → *Install from VSIX...* →
+pick `editors/vscode/egg-lang-0.0.1.vsix`. Reload the window and `.egg`
+files are highlighted.
+
+To hack on the grammar without repackaging, symlink the folder and reload:
+
+```bash
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/femto.egg-lang-0.0.1
+```
+
+Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package`.
