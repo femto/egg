@@ -210,11 +210,11 @@ module Egg
       t = cur
       if at?(:int)
         advance
-        value = t.text.to_i
-        if value > MAX_I64
+        # Range-check the digits before to_i: under Spinel, to_i raises on overflow.
+        unless fits_i64?(t.text)
           raise CompileError.new(Diagnostic.new("E003", "integer literal #{t.text} does not fit in i64", t.line, t.col))
         end
-        IntLit.new(value, t.line, t.col)
+        IntLit.new(t.text.to_i, t.line, t.col)
       elsif kw?("true") || kw?("false")
         advance
         BoolLit.new(t.text == "true", t.line, t.col)
@@ -313,6 +313,12 @@ module Egg
       when :eof then "end of file"
       else "'#{t.text}'"
       end
+    end
+
+    def fits_i64?(digits)
+      d = digits.sub(/\A0+/, "")
+      max = MAX_I64.to_s
+      d.length < max.length || (d.length == max.length && d <= max)
     end
 
     def error_here(msg)
