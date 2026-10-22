@@ -28,8 +28,9 @@ module Egg
   GenericType = Struct.new(:name, :args)         # Pair(i64): args are types
   ThisType    = Struct.new(:line, :col)          # @This() inside a struct body
 
-  # const Name = struct { ... } / enum { ... }
-  # members: FieldDecl list; methods: Func list (struct only)
+  # const Name = struct { ... } / enum { ... } / union(enum) { ... }
+  # members: FieldDecl list (a union member with no payload has type nil);
+  # methods: Func list (struct and union)
   TypeDecl  = Struct.new(:name, :kind, :members, :methods, :line, :col)
   FieldDecl = Struct.new(:name, :type, :line, :col)
   # `struct { ... }` as an expression: the body of a type-returning function
@@ -43,6 +44,10 @@ module Egg
   If       = Struct.new(:cond, :then_body, :else_body, :line, :col)       # else_body: Block, If or nil
   While    = Struct.new(:cond, :body, :line, :col)
   For      = Struct.new(:iter, :var, :index_var, :body, :line, :col)      # for (xs) |x| / |x, i|
+  # switch (x) { .a, .b => { } .c => |payload| { } else => { } }
+  Switch    = Struct.new(:subject, :arms, :line, :col)
+  # names: member names, nil for `else`; capture: payload name or nil
+  SwitchArm = Struct.new(:names, :capture, :body, :line, :col)
   Break    = Struct.new(:line, :col)
   Continue = Struct.new(:line, :col)
   Return   = Struct.new(:value, :line, :col)                              # value may be nil

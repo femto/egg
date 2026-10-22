@@ -1,0 +1,6 @@
+// error: E127 @3
+fn main() void {
+    switch (5) {
+        else => {}
+    }
+}

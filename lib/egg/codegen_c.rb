@@ -233,6 +233,19 @@ module Egg
           end
         end
         @out << "} #{info.c_name};\n\n"
+      when :union
+        # { tag, union of payloads }; tag is the member's index.
+        info.fields.each { |_, t, _| emit_type(t, done) unless t == "void" }
+        mark(info.line)
+        payloads = info.fields.reject { |_, t, _| t == "void" }
+        @out << "typedef struct {\n    int32_t tag;\n"
+        unless payloads.empty?
+          @out << "    union {\n"
+          payloads.each { |n, t, _| @out << "        #{c_type(t)} m_#{n};\n" }
+          @out << "    } u;\n"
+        end
+        info.fields.each { |_, _, l| mark(l) unless l == info.line }
+        @out << "} #{info.c_name};\n\n"
       when :array
         emit_type(info.elem, done)
         @out << "typedef struct { #{c_type(info.elem)} a[#{info.len}]; } #{info.c_name};\n"
@@ -394,6 +407,8 @@ module Egg
         line("}")
       in For
         gen_for(stmt)
+      in Switch
+        gen_switch(stmt)
       in Break
         line("break;")
       in Continue
@@ -500,6 +515,53 @@ module Egg
       line("}")
     end
 
+    # switch becomes an if chain over the tag (not a C switch, so that a
+    # `break` in an arm still leaves the enclosing loop).
+    def gen_switch(stmt)
+      subject = stmt.subject
+      t = subject.ty
+      info = @types[t]
+      base = place?(subject) ? lvalue(subject) : hoist(expr(subject), t)
+      tag = info.kind == :union ? "#{base}.tag" : base
+      # The checker proved the arms exhaustive, so the last arm needs no
+      # test; C then also sees that every path returns.
+      last = stmt.arms.length - 1
+      stmt.arms.each_with_index do |arm, i|
+        if arm.names.nil? || i == last
+          if i.zero?
+            mark(arm.line)
+            line("{")
+          else
+            line("}")
+            mark(arm.line)
+            line("else {")
+          end
+        else
+          test = arm.names.map do |n|
+            idx = info.kind == :union ? info.fields.index { |m, _| m == n } : info.members.index(n)
+            "#{tag} == #{idx}"
+          end.join(" || ")
+          if i.zero?
+            mark(arm.line)
+            line("if (#{test}) {")
+          else
+            line("}")
+            mark(arm.line)
+            line("else if (#{test}) {")
+          end
+        end
+        @locals << {}
+        unless arm.capture.nil? || arm.capture == "_"
+          payload = info.fields.find { |m, _| m == arm.names[0] }[1]
+          declare_local(arm.capture, payload)
+          line("    const #{c_type(payload)} v_#{arm.capture} = #{base}.u.m_#{arm.names[0]};")
+        end
+        gen_block(arm.body)
+        @locals.pop
+      end
+      line("}")
+    end
+
     # ---- expressions --------------------------------------------------
 
     # A condition already sits inside if (...) / while (...), so drop the
@@ -556,12 +618,17 @@ module Egg
       in Builtin[name:, args:]
         builtin(e, name, args)
       in Field[obj:, name:, info:]
+        return "((#{c_type(e.ty)}){ .tag = #{info[:union_tag]} })" unless info[:union_tag].nil?
         return "((#{c_type(e.ty)})#{info[:enum_index]})" unless info[:enum_index].nil?
         "#{struct_value(obj)}.f_#{name}"
       in Index[obj:, index:]
         index_expr(obj, index, e.info[:len])
       in SliceExpr
         slice_expr(e)
+      in StructLit[fields:, info: { union_tag: Integer => tag, member: String => member }]
+        value = fields[0][1]
+        payload = @types[e.ty].fields[tag][1]
+        "((#{c_type(e.ty)}){ .tag = #{tag}, .u.m_#{member} = #{coerce(expr(value), value.ty, payload)} })"
       in StructLit[fields:]
         info = @types[e.ty]
         inits = fields.map do |fname, value, _, _|
@@ -574,6 +641,8 @@ module Egg
         elem = @types[e.ty].elem
         vals = items.map { |i| coerce(expr(i), i.ty, elem) }
         "((#{c_type(e.ty)}){ { #{vals.join(', ')} } })"
+      in EnumLit[info: { union_tag: Integer => tag }]
+        "((#{c_type(e.ty)}){ .tag = #{tag} })"
       in EnumLit[info:]
         "((#{c_type(e.ty)})#{info[:enum_index]})"
       in ErrorLit[info:]
@@ -735,7 +804,7 @@ module Egg
     def place?(e)
       case e
       in Var[info:] then !info.nil? && info[:local] == true
-      in Field[obj:, info:] then (info.nil? || info[:enum_index].nil?) && place?(obj)
+      in Field[obj:, info:] then (info.nil? || (info[:enum_index].nil? && info[:union_tag].nil?)) && place?(obj)
       in Index[obj:] then place?(obj) && obj.ty != "str" && @types[obj.ty]&.kind == :array
       else false
       end

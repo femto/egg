@@ -130,6 +130,33 @@ module Egg
         t = advance
         members, methods = parse_struct_body(name.text)
         TypeDecl.new(name.text, :struct, members, methods, t.line, t.col)
+      elsif kw?("union")
+        t = advance
+        expect_op("(")
+        expect_kw("enum")
+        expect_op(")")
+        expect_op("{")
+        members = []
+        methods = []
+        skip_nl
+        until op?("}")
+          if kw?("fn")
+            methods << parse_func(name.text)
+          else
+            m = expect(:ident, "union member")
+            mtype = nil
+            if op?(":")
+              advance
+              mtype = parse_type
+            end
+            members << FieldDecl.new(m.text, mtype, m.line, m.col)
+            advance if op?(",")
+          end
+          skip_nl
+        end
+        expect_op("}")
+        error_here("a union needs at least one member") if members.empty?
+        TypeDecl.new(name.text, :union, members, methods, t.line, t.col)
       elsif kw?("enum")
         t = advance
         expect_op("{")
@@ -145,7 +172,7 @@ module Egg
         error_here("an enum needs at least one member") if members.empty?
         TypeDecl.new(name.text, :enum, members, [], t.line, t.col)
       else
-        error_here("expected 'struct' or 'enum' (a top-level const declares a type)")
+        error_here("expected 'struct', 'enum' or 'union(enum)' (a top-level const declares a type)")
       end
     end
 
@@ -212,6 +239,8 @@ module Egg
         While.new(cond, parse_block, t.line, t.col)
       elsif kw?("for")
         parse_for
+      elsif kw?("switch")
+        parse_switch
       elsif kw?("break")
         advance
         Break.new(t.line, t.col)
@@ -293,6 +322,49 @@ module Egg
       end
       expect_op("|")
       For.new(iter, var.text, index_var, parse_block, t.line, t.col)
+    end
+
+    # switch (x) {
+    #     .a, .b => { ... }
+    #     .c => |payload| { ... }
+    #     else => { ... }
+    # }
+    def parse_switch
+      t = expect_kw("switch")
+      expect_op("(")
+      subject = parse_expr
+      expect_op(")")
+      expect_op("{")
+      arms = []
+      skip_nl
+      until op?("}")
+        at = cur
+        names = nil
+        if kw?("else")
+          advance
+        else
+          names = []
+          while true
+            expect_op(".")
+            names << expect(:ident, "member name").text
+            break unless op?(",")
+            advance
+            skip_nl
+          end
+        end
+        expect_op("=>")
+        capture = nil
+        if op?("|")
+          advance
+          capture = expect(:ident, "payload name").text
+          expect_op("|")
+        end
+        arms << SwitchArm.new(names, capture, parse_block, at.line, at.col)
+        advance if op?(",")
+        skip_nl
+      end
+      expect_op("}")
+      Switch.new(subject, arms, t.line, t.col)
     end
 
     # ---- expressions --------------------------------------------------

@@ -1,0 +1,13 @@
+// error: E127 @4
+const Light = enum { red, green }
+fn f(l: Light) i64 {
+    switch (l) {
+        .red => {
+            return 1
+        }
+    }
+    return 0
+}
+fn main() void {
+    @print(f(.red))
+}

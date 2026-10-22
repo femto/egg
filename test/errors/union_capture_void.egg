@@ -1,0 +1,11 @@
+// error: E127 @6
+const U = union(enum) { a: i64, b }
+fn main() void {
+    const u = U.b
+    switch (u) {
+        .b => |x| {
+            @print(x)
+        }
+        .a => {}
+    }
+}

@@ -171,6 +171,16 @@ module Egg
           walk_block(body)
           @scopes.pop
         in Break | Continue then nil
+        in Switch[subject:, arms:]
+          walk_expr(subject)
+          arms.each do |arm|
+            @scopes << {}
+            unless arm.capture.nil?
+              declare(Decl.new(:local, arm.capture, arm.line, arm.col, "#{arm.capture}  (payload)", nil, nil))
+            end
+            walk_block(arm.body)
+            @scopes.pop
+          end
         in If[cond:, then_body:, else_body:]
           walk_expr(cond)
           walk_block(then_body)

@@ -1,0 +1,8 @@
+// error: E127 @6
+const Light = enum { red, green }
+fn main() void {
+    switch (Light.red) {
+        .red => {}
+        .red, .green => {}
+    }
+}

@@ -7,10 +7,10 @@ module Egg
   Token = Struct.new(:kind, :text, :line, :col)
 
   KEYWORDS = %w[fn return if else while var const true false and or
-                struct enum for break continue try catch error inout comptime].freeze
+                struct enum union switch for break continue try catch error inout comptime].freeze
 
   # Longest operators first so "==" wins over "=" and ".." over ".".
-  OPERATORS = %w[== != <= >= .. ( ) { } [ ] , : = < > + - * / % ! . | &].freeze
+  OPERATORS = %w[== != <= >= => .. ( ) { } [ ] , : = < > + - * / % ! . | &].freeze
 
   class Lexer
     def initialize(src)

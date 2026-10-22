@@ -192,6 +192,12 @@ module Egg
         err("E106", "enum member '#{dup}' is listed twice", d.line, d.col) unless dup.nil?
         info.members = names
         info.member_lines = d.members.map(&:line)
+      elsif d.kind == :union
+        with_env({}, d.name) { info.fields = resolve_fields(d.members, true) }
+        d.methods.each do |m|
+          m.owner = d.name
+          add_method(d.name, m, {}, d.name)
+        end
       else
         with_env({}, d.name) { info.fields = resolve_fields(d.members) }
         d.methods.each do |m|
@@ -214,11 +220,17 @@ module Egg
       enqueue(sig)
     end
 
-    def resolve_fields(members)
+    # Struct fields, or union members (a union member may have no payload:
+    # its type is "void").
+    def resolve_fields(members, union = false)
       fields = []
       members.each do |f|
         if fields.any? { |n, _| n == f.name }
-          err("E106", "field '#{f.name}' is declared twice", f.line, f.col)
+          err("E106", "#{union ? 'member' : 'field'} '#{f.name}' is declared twice", f.line, f.col)
+          next
+        end
+        if union && f.type.nil?
+          fields << [f.name, "void", f.line]
           next
         end
         t = resolve_type(f.type, f.line, f.col)
@@ -367,6 +379,7 @@ module Egg
     def value_deps(info)
       case info.kind
       when :struct then (info.fields || []).map { |_, t| t }
+      when :union then (info.fields || []).map { |_, t| t }.reject { |t| t == "void" }
       when :array then [info.elem]
       when :err then [info.inner]
       else []
@@ -489,6 +502,8 @@ module Egg
         check_block(body)
         close_scope(@scopes.pop)
         @loop_depth -= 1
+      in Switch[subject:, arms:, line:, col:]
+        check_switch(stmt, subject, arms, line, col)
       in Break[line:, col:]
         err("E126", "'break' outside a loop", line, col) if @loop_depth.zero?
       in Continue[line:, col:]
@@ -518,6 +533,64 @@ module Egg
       else
         raise "typecheck: unhandled statement #{stmt.class}"
       end
+    end
+
+    # switch over an enum or a union: every member handled once, or an else.
+    def check_switch(stmt, subject, arms, line, col)
+      t = check_expr(subject)
+      info = @types[t]
+      if t != "error" && (info.nil? || (info.kind != :enum && info.kind != :union))
+        err("E127", "switch needs an enum or a union(enum), found #{t}", subject.line, subject.col)
+      end
+      ok = t != "error" && !info.nil? && (info.kind == :enum || info.kind == :union)
+      members = ok ? (info.kind == :enum ? info.members : info.fields.map(&:first)) : []
+      seen = {}
+      has_else = false
+      arms.each do |arm|
+        payload = nil
+        if arm.names.nil?
+          err("E127", "switch has more than one else", arm.line, arm.col) if has_else
+          err("E127", "else must be the last arm of a switch", arm.line, arm.col) unless arm.equal?(arms.last)
+          has_else = true
+        elsif ok
+          arm.names.each do |n|
+            if !members.include?(n)
+              err("E122", "#{t} has no member '#{n}'", arm.line, arm.col)
+            elsif seen[n]
+              err("E127", "'.#{n}' is handled twice", arm.line, arm.col)
+            end
+            seen[n] = true
+          end
+          if !arm.capture.nil?
+            if info.kind == :enum
+              err("E127", "an enum member has no payload to capture", arm.line, arm.col)
+            elsif arm.names.length != 1
+              err("E127", "a payload can be captured only in an arm for a single member", arm.line, arm.col)
+            else
+              payload = info.fields.find { |n, _| n == arm.names[0] }&.[](1)
+              if payload == "void"
+                err("E127", "'.#{arm.names[0]}' has no payload to capture", arm.line, arm.col)
+                payload = nil
+              end
+            end
+          end
+        end
+        @scopes << {}
+        unless arm.capture.nil? || arm.capture == "_"
+          declare(arm.capture, VarInfo.new(payload || "error", false, false, false, arm.line, arm.col, false, false))
+        end
+        check_block(arm.body)
+        close_scope(@scopes.pop)
+      end
+      return unless ok
+      missing = members.reject { |m| seen[m] }
+      if !missing.empty? && !has_else
+        err("E127", "switch does not handle #{missing.map { |m| ".#{m}" }.join(', ')}; add arms or an else", line, col)
+      elsif missing.empty? && has_else
+        err("E127", "every member is already handled, so the else can never run", line, col)
+      end
+      stmt_info = { kind: info.kind, members: members }
+      stmt.subject.info[:switch] = stmt_info
     end
 
     def elem_type(t)
@@ -629,6 +702,7 @@ module Egg
         if t == "type"
           enum_t = obj.info[:type]
           info = @types[enum_t]
+          return union_tag_value(e, info, enum_t, name, line, col) if info&.kind == :union
           if info&.kind == :enum
             idx = info.members.index(name)
             if idx.nil?
@@ -650,13 +724,16 @@ module Egg
       in SliceExpr[obj:, lo:, hi:, line:, col:]
         check_slice(e, obj, lo, hi, line, col)
       in StructLit[type:, fields:, line:, col:]
-        check_struct_lit(type, fields, line, col)
+        check_struct_lit(e, type, fields, line, col)
       in ArrayLit[type:, items:, line:, col:]
         check_array_lit(type, items, expected, line, col)
       in EnumLit[name:, line:, col:]
         target = expected
         target = @types[expected].inner if !expected.nil? && @types[expected]&.kind == :err
         info = target.nil? ? nil : @types[target]
+        if !info.nil? && info.kind == :union
+          return union_tag_value(e, info, target, name, line, col)
+        end
         if info.nil? || info.kind != :enum
           err("E115", "cannot infer the enum type of '.#{name}'; write Type.#{name}", line, col) unless expected == "error"
           return "error"
@@ -715,6 +792,21 @@ module Egg
       end
     end
 
+    # `.none` / `Shape.none`: a union member without a payload.
+    def union_tag_value(e, info, t, name, line, col)
+      idx = info.fields.index { |n, _| n == name }
+      if idx.nil?
+        err("E122", "#{t} has no member '#{name}'", line, col)
+        return "error"
+      end
+      if info.fields[idx][1] != "void"
+        err("E123", "'#{name}' carries a #{info.fields[idx][1]}; write #{t}{ .#{name} = value }", line, col)
+        return "error"
+      end
+      e.info[:union_tag] = idx
+      t
+    end
+
     # A type named by an identifier in a value position, or nil.
     def type_named(name)
       return @tenv[name] if @tenv.key?(name)
@@ -727,6 +819,10 @@ module Egg
     def field_type(t, name, line, col)
       return "error" if t == "error"
       info = @types[t]
+      if info&.kind == :union
+        err("E122", "#{t} is a union; read its members with switch", line, col)
+        return "error"
+      end
       if info.nil? || info.kind != :struct
         err("E122", "a #{t} has no field '#{name}'", line, col)
         return "error"
@@ -1025,10 +1121,34 @@ module Egg
       end
     end
 
-    def check_struct_lit(type, fields, line, col)
+    def check_struct_lit(e, type, fields, line, col)
       t = resolve_type(type, line, col)
       return check_all_error(fields.map { |f| f[1] }) if t == "error"
       info = @types[t]
+      if info.kind == :union
+        if fields.length != 1
+          err("E123", "a #{t} value sets exactly one member, found #{fields.length}", line, col)
+          return check_all_error(fields.map { |f| f[1] })
+        end
+        fname, value, fl, fc = fields[0]
+        idx = info.fields.index { |n, _| n == fname }
+        if idx.nil?
+          err("E123", "#{t} has no member '#{fname}'", fl, fc)
+          check_expr(value)
+          return t
+        end
+        payload = info.fields[idx][1]
+        if payload == "void"
+          err("E123", "'#{fname}' has no payload; write .#{fname} or #{t}.#{fname}", fl, fc)
+          check_expr(value)
+          return t
+        end
+        vt = check_expr(value, payload)
+        expect_type(payload, vt, value)
+        e.info[:union_tag] = idx
+        e.info[:member] = fname
+        return t
+      end
       if info.kind != :struct
         err("E123", "#{t} is not a struct", line, col)
         return check_all_error(fields.map { |f| f[1] })
@@ -1167,6 +1287,7 @@ module Egg
     def stmt_returns?(stmt)
       case stmt
       in Return then true
+      in Switch[arms:] then arms.all? { |a| block_returns?(a.body) }
       in If[then_body:, else_body:]
         case else_body
         in nil then false

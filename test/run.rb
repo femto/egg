@@ -91,7 +91,7 @@ def bad_line_marks(c_source, src)
     next if text.empty?
     # A line continues the previous one after "," "(" or an operator, and
     # when it is a `.field = value` line of a multi-line struct literal.
-    continued = prev.match?(/(,|\(|\band|\bor|[-+*\/%<>=!])\z/) || text.start_with?(".")
+    continued = prev.match?(/(,|\(|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/)
     code << i + 1 unless continued || text.match?(/\A\}( else \{)?\z/)
     prev = text
   end
