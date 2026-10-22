@@ -192,12 +192,12 @@ The C that Egg generates must be portable from day one:
 
 ## Roadmap
 
-Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting.
+Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. Next, v2 adds raw pointers and function values behind `allow unsafe`, `extern fn`, the `Allocator` and `Io` capability values, and ownership checking.
 
 | Phase | Scope | Acceptance gate |
 | --- | --- | --- |
-| v0 · Core subset | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
-| v1 · Types and comptime | `struct`, `enum`, tagged unions, slices; error values, comptime generics, reflection | Generic `Pair` and error-value examples pass their tests |
+| v0 · Core subset ✅ | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
+| v1 · Types and comptime ✅ | `struct` with methods, `enum`, tagged unions, `str`, arrays, second-class slices, `inout`; error values; comptime generics; `@sizeOf`, `@typeName` | Generic `Pair` and error-value examples pass their tests |
 | v2 · Capability checks | `alloc` and `io` capabilities; recursive check along the call graph | Programs using undeclared capabilities are rejected |
 | v3 · GC written in core | `gc` library uses only core code | `gc` declares no capabilities and passes the capability check |
 | v4 · Self-hosting | `eggc` rewritten in Egg, compiled by the previous generation | Generation 2 and 3 output is byte-identical |

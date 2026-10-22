@@ -208,7 +208,10 @@ module Egg
       info
     end
 
-    def add_method(owner, m, tenv, this)
+    # Methods of plain types are checked eagerly; methods of a generic
+    # instance only when called (lazy, as in Zig), so Stack(T) can have a
+    # method that needs `>` on T and still be used with a T that has none.
+    def add_method(owner, m, tenv, this, eager = true)
       key = "#{owner}.#{m.name}"
       if @sigs.key?(key) || @types[owner]&.fields&.any? { |f, _| f == m.name }
         err("E106", "'#{m.name}' is defined more than once in #{owner}", m.line, m.col)
@@ -217,7 +220,7 @@ module Egg
       sig = Sig.new(m.name, nil, nil, m, c_name("fn_#{owner}__#{m.name}"), tenv, this, owner, false)
       @sigs[key] = sig
       build_sig(sig)
-      enqueue(sig)
+      enqueue(sig) if eager
     end
 
     # Struct fields, or union members (a union member may have no payload:
@@ -350,7 +353,7 @@ module Egg
       with_env(tenv, canon) { info.fields = resolve_fields(st.members) }
       st.methods.each do |m|
         m.owner = canon
-        add_method(canon, m, tenv, canon)
+        add_method(canon, m, tenv, canon, false)
       end
       canon
     end
@@ -968,6 +971,7 @@ module Egg
           err("E122", "#{owner} has no function '#{name}'", line, col)
           return check_all_error(args)
         end
+        enqueue(sig)
         e.info[:c_name] = sig.c_name
         e.info[:static] = true
         e.info[:args] = args
@@ -990,6 +994,7 @@ module Egg
         check_lvalue(obj, "modify")
         mark_root_used(obj)
       end
+      enqueue(sig)
       e.info[:c_name] = sig.c_name
       e.info[:self_inout] = self_mode == "inout"
       e.info[:args] = args

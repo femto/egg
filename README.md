@@ -5,18 +5,38 @@ GC, exceptions, IO and allocation are capability modules a program declares
 on demand. See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
-This repository holds **eggc v0**: the first compiler, written in the Ruby
-subset that [Spinel](https://github.com/matz/spinel) compiles. It runs on
-CRuby 3.0+ today and emits portable C99.
+This repository holds **eggc**, the first compiler, now at **v1**: written
+in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
+compiles), running on CRuby 3.0+, emitting portable C99.
 
 ```
-fn fib(n: i64) i64 {
-    if (n < 2) { return n }
-    return fib(n - 1) + fib(n - 2)
+const Shape = union(enum) {
+    circle: i64
+    rect: Size
+    empty
+}
+
+const Size = struct { w: i64, h: i64 }
+
+fn area(s: Shape) i64 {
+    switch (s) {
+        .circle => |r| { return 3 * r * r }
+        .rect => |sz| { return sz.w * sz.h }
+        .empty => { return 0 }
+    }
+}
+
+fn total(shapes: []Shape) i64 {
+    var sum = 0
+    for (shapes) |s| {
+        sum = sum + area(s)
+    }
+    return sum
 }
 
 fn main() void {
-    @print(fib(20))
+    const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
+    @print(total(shapes[0..]))   // 24
 }
 ```
 
@@ -33,8 +53,10 @@ ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 
 ### Native eggc
 
-Spinel compiles eggc itself to a native binary (about 30 s; it then starts
-in ~5 ms instead of ~350 ms and needs no Ruby):
+Spinel compiled eggc v0 to a native binary (about 30 s; it then starts in
+~5 ms instead of ~350 ms and needs no Ruby). **The v1 compiler does not
+build under Spinel yet**: Spinel currently emits C that fails to compile for
+it, so use CRuby for v1. With v0 sources:
 
 ```bash
 mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
@@ -45,18 +67,35 @@ The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
 rebuild to switch back.
 
-## What v0 supports
+## What v1 supports
 
-- Types: `i64`, `bool`, `void` (return type only)
-- `fn`, `const` / `var` (with optional type), assignment
-- `if` / `else if` / `else`, `while`, `return`
-- Operators: `+ - * / %`, comparisons, `and` `or` `!`, unary `-`
-- `@print(x)`: a temporary builtin until the `io` capability arrives in v2
+The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
-Checks in the Zig spirit, all compile errors: unused locals, a `var` never
-reassigned, an ignored non-void result, shadowing, missing returns, no
-implicit conversions. Arithmetic is checked at run time: overflow and
-division by zero panic instead of being undefined behaviour.
+- Types: `i64`, `bool`, `str`, `void`; structs with methods; enums;
+  tagged unions `union(enum)`; arrays `[N]T`; slices `[]T`; error unions `!T`
+- `const` / `var`, assignment to variables, fields and elements; `if`,
+  `while`, `for (xs) |x, i|`, `break`, `continue`, exhaustive `switch` with
+  payload capture
+- Parameters by value, `inout` (passed as `&x`, with exclusivity checked),
+  or `comptime T: type`; generic functions and type functions
+  (`fn Pair(comptime T: type) type { return struct { ... } }`)
+- Errors as values: `error.X`, `try`, `catch`; `main` may return `!void`
+- Builtins: `@print`, `@len`, `@sizeOf`, `@typeName`, `@splat`, `@This`
+
+Design choices worth knowing:
+
+- **Slices are second-class**: they exist only as parameters, arguments and
+  `for` subjects, so a view can never outlive its array, with no lifetime
+  annotations (E116).
+- **Left-to-right evaluation** on every C compiler: each call is evaluated
+  into a temporary in source order.
+- **No undefined behaviour**: integer overflow, division by zero and
+  out-of-bounds indexing panic.
+- **Zig-style strictness**, all compile errors: unused locals, a `var`
+  never changed, an ignored result or error, shadowing, missing returns,
+  non-exhaustive switches, no implicit conversions.
+- **Lazy generics**: a method of a generic type is checked only when
+  called, as in Zig.
 
 ## Layout
 
@@ -73,7 +112,7 @@ lib/egg/lsp.rb         language server (a tool: uses the json stdlib, not Spinel
 spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
-examples/              programs with `// expect:` / `// panic:` lines
+examples/              programs with `// expect:` / `// panic:` / `// fails:` lines
 test/errors/           programs that must fail with `// error: CODE @LINE`
 test/run.rb            test runner, no gems
 ```

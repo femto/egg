@@ -271,7 +271,10 @@ module Egg
         mode == "inout" ? "#{c_type(t)} *v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
       end
       params_text = params.empty? ? "void" : params.join(", ")
-      "static #{c_type(sig.ret)} #{sig.c_name}(#{params_text})"
+      # Not static: an unused function is not an error in Egg, and external
+      # linkage keeps C's -Wunused-function quiet. Names are prefixed, so
+      # they cannot clash with libc.
+      "#{c_type(sig.ret)} #{sig.c_name}(#{params_text})"
     end
 
     def gen_func(sig)
