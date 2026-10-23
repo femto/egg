@@ -1,4 +1,6 @@
-// error: E003 @3
-fn main() void {
-    @print(99999999999999999999)
+// error: E003 @5
+uses io
+
+fn main(out: Io) void {
+    out.print(99999999999999999999)
 }

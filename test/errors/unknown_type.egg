@@ -1,7 +1,9 @@
-// error: E108 @2
-fn f(a: u8) void {
-    @print(a)
+// error: E108 @4
+uses io
+
+fn f(out: Io, a: u8) void {
+    out.print(a)
 }
-fn main() void {
-    f(1)
+fn main(out: Io) void {
+    f(out, 1)
 }

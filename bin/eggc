@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# eggc: the Egg compiler (v0, written in the Spinel-compilable Ruby subset).
+# eggc: the Egg compiler (written in the Spinel-compilable Ruby subset).
 #
 #   eggc check  FILE.egg            type-check only
 #   eggc emit-c FILE.egg [-o OUT.c] print or write the generated C
@@ -63,7 +63,7 @@ unless File.exist?(path)
   exit 2
 end
 
-result = Egg.compile_to_c(File.read(path), debug ? File.expand_path(path) : nil)
+result = Egg.compile_to_c(File.read(path), path, debug: debug)
 unless result.diagnostics.empty?
   result.diagnostics.each do |d|
     if json

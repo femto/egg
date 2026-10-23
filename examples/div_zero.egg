@@ -1,9 +1,11 @@
 // panic: division by zero
 
+uses io
+
 fn div(a: i64, b: i64) i64 {
     return a / b
 }
 
-fn main() void {
-    @print(div(1, 0))
+fn main(out: Io) void {
+    out.print(div(1, 0))
 }

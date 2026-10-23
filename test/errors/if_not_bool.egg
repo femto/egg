@@ -1,4 +1,6 @@
-// error: E103 @3
-fn main() void {
-    if (1) { @print(1) }
+// error: E103 @5
+uses io
+
+fn main(out: Io) void {
+    if (1) { out.print(1) }
 }

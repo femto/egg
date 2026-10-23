@@ -1,7 +1,9 @@
-// error: E121 @4
-fn main() void {
+// error: E121 @6
+uses io
+
+fn main(out: Io) void {
     var x = 1
     const y = &x
     x = 2
-    @print(y)
+    out.print(y)
 }

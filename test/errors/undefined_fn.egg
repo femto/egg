@@ -1,4 +1,6 @@
-// error: E102 @3
-fn main() void {
-    @print(nope(1))
+// error: E102 @5
+uses io
+
+fn main(out: Io) void {
+    out.print(nope(1))
 }

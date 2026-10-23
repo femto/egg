@@ -1,6 +1,8 @@
-// error: E122 @5
+// error: E122 @7
+uses io
+
 const U = union(enum) { a: i64, b }
-fn main() void {
+fn main(out: Io) void {
     const u = U{ .a = 1 }
-    @print(u.a)
+    out.print(u.a)
 }

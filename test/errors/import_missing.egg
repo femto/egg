@@ -1,0 +1,5 @@
+// error: E129 @2
+const nope = @import("lib/nope.egg")
+
+fn main() void {
+}

@@ -1,0 +1,29 @@
+// The alloc capability: strings built at run time live in an arena for
+// the whole program. A capability value can be kept in a struct.
+// expect: n = 42
+// expect: -7 and 0
+// expect: 3 lines
+// expect: 
+
+uses alloc, io
+
+const Log = struct {
+    out: Io
+    a: Allocator
+
+    fn line(self: Log, label: str, n: i64) void {
+        self.out.print(self.a.concat(label, self.a.int_str(n)))
+    }
+}
+
+fn pair(a: Allocator, x: i64, y: i64) str {
+    return a.concat(a.int_str(x), a.concat(" and ", a.int_str(y)))
+}
+
+fn main(out: Io, a: Allocator) void {
+    const log = Log{ .out = out, .a = a }
+    log.line("n = ", 42)
+    out.print(pair(a, -7, 0))
+    out.print(a.concat(a.int_str(3), " lines"))
+    out.print(a.concat("", ""))
+}

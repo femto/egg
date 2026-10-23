@@ -1,0 +1,8 @@
+// error: E130 @lib/quiet_print.egg:3
+uses io
+
+const quiet = @import("lib/quiet_print.egg")
+
+fn main(out: Io) void {
+    quiet.shout(out)
+}

@@ -1,6 +1,8 @@
-// error: E115 @4
+// error: E115 @6
+uses io
+
 const Color = enum { red, green }
-fn main() void {
+fn main(out: Io) void {
     const c = .red
-    @print(c)
+    out.print(c)
 }

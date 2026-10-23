@@ -2,6 +2,8 @@
 // expect: 21
 // expect: false
 
+uses io
+
 fn gcd(a: i64, b: i64) i64 {
     var x = a
     var y = b
@@ -13,10 +15,10 @@ fn gcd(a: i64, b: i64) i64 {
     return x
 }
 
-fn main() void {
+fn main(out: Io) void {
     const g = gcd(1071,
                   462)
-    @print(g)
-    @print(g > 100 or
+    out.print(g)
+    out.print(g > 100 or
            g < 0)
 }

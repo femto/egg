@@ -8,23 +8,25 @@
 // expect: 20
 // expect: 30
 
-fn one() i64 {
-    @print(1)
+uses io
+
+fn one(out: Io) i64 {
+    out.print(1)
     return 1
 }
 
-fn two() i64 {
-    @print(2)
+fn two(out: Io) i64 {
+    out.print(2)
     return 2
 }
 
-fn show(a: i64, b: i64) i64 {
-    @print(a * 10)
-    @print(b * 10)
+fn show(out: Io, a: i64, b: i64) i64 {
+    out.print(a * 10)
+    out.print(b * 10)
     return a + b
 }
 
-fn main() void {
-    @print(one() + two())
-    @print(show(one() - 0, two() * 1) * 10)
+fn main(out: Io) void {
+    out.print(one(out) + two(out))
+    out.print(show(out, one(out) - 0, two(out) * 1) * 10)
 }

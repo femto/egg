@@ -1,6 +1,7 @@
-# Egg core language specification (v1)
+# Egg core language specification (v2)
 
-This is the complete definition of the v1 core. It is written to be loaded
+This is the complete definition of the v2 core: the v1 language plus
+modules (section 16) and the `io` and `alloc` capabilities (section 17). It is written to be loaded
 into a model's context in one piece, together with `grammar.ebnf` (syntax)
 and `diagnostics.md` (error codes). `eggc spec` prints all three.
 
@@ -11,20 +12,30 @@ required output; `// error: CODE` means it must fail with that code;
 
 ## 1. Programs
 
-A program is one source file containing functions and type declarations
-(`const Name = struct / enum / union(enum) { ... }`), in any order. Every
-function can call every other function, including itself.
+A program is a root file plus the files it imports (section 16). A file
+holds, in any order, functions, type declarations (`const Name = struct /
+enum / union(enum) { ... }`), imports (`const m = @import("m.egg")`) and
+`uses` lines naming the capabilities it needs (section 17). Every function
+can call every other function of its file, including itself.
 
-There must be a function `main` with no parameters returning `void`, `i64`
-or `!void` (E109). When `main` returns `i64`, the value becomes the process
-exit status (the operating system keeps only the low bits, usually 8). When
-it returns an error, the program prints `error: Name` to standard error and
+The root file must have a function `main` returning `void`, `i64` or
+`!void`, whose parameters are only capability values, each type at most
+once: `fn main()`, `fn main(out: Io)`, `fn main(out: Io, a: Allocator)`
+(E109). The runtime creates them; they are the only source of
+capabilities. When `main` returns `i64`, the value becomes the process exit
+status (the operating system keeps only the low bits, usually 8). When it
+returns an error, the program prints `error: Name` to standard error and
 exits with status 1.
+
+Most examples below print, so they start with `uses io` and take
+`out: Io`.
 
 ```egg
 // expect: 3
-fn main() void {
-    @print(add(1, 2))   // add is declared below; order does not matter
+uses io
+
+fn main(out: Io) void {
+    out.print(add(1, 2))   // add is declared below; order does not matter
 }
 
 fn add(a: i64, b: i64) i64 {
@@ -36,7 +47,7 @@ fn add(a: i64, b: i64) i64 {
 
 - Source is UTF-8. Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `fn return if else while for break continue switch var const
-  true false and or struct enum union try catch error inout comptime`.
+  true false and or struct enum union try catch error inout comptime uses`.
 - Integer literals are decimal digits, optionally separated by `_`
   (`1_000_000`). The value must be at most 9223372036854775807 (E003).
   There are no negative literals; `-5` is unary minus applied to `5`.
@@ -53,6 +64,8 @@ fn add(a: i64, b: i64) i64 {
 ```egg
 // expect: 6
 // expect: 3
+uses io
+
 fn Pair(comptime T: type) type {
     return struct {
         a: T
@@ -66,12 +79,12 @@ fn sum(p: Pair(
     return p.a + p.b
 }
 
-fn main() void {
+fn main(out: Io) void {
     const total = 1 +
                   2 +
                   3
-    @print(total)
-    @print(sum(
+    out.print(total)
+    out.print(sum(
         Pair(i64){ .a = 1, .b = 2 }
     ))
 }
@@ -83,7 +96,7 @@ fn main() void {
 | --- | --- | --- |
 | `i64` | signed 64-bit integers | the only numeric type |
 | `bool` | `true`, `false` | |
-| `str` | immutable byte strings | literals only in v1; see section 8 |
+| `str` | immutable byte strings | section 8 |
 | `void` | none | only as a function result (E108 elsewhere) |
 | struct `Name` | records of named fields | section 9 |
 | enum `Name` | one of a fixed set of names | section 10 |
@@ -92,6 +105,8 @@ fn main() void {
 | `[]T` | a read-only view of consecutive T | parameters only; section 11 |
 | `!T` | a T or an error | section 13 |
 | `type` | a type, at compile time only | `comptime` parameters; section 14 |
+| `Io` | the io capability | received by `main`, passed down; section 17 |
+| `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
 
 Every type that has runtime values, except slices, is a **value type**:
 assignment, passing and returning copy the value (`void` and `type` have
@@ -103,8 +118,10 @@ is an error.
 
 ```egg
 // error: E103
-fn main() void {
-    if (1) { @print(1) }
+uses io
+
+fn main(out: Io) void {
+    if (1) { out.print(1) }
 }
 ```
 
@@ -120,10 +137,11 @@ var name: T = expr
 Rules, all checked at compile time:
 
 1. **Every name is declared before use** within its block (E101). Functions
-   and types are the exception: they are visible everywhere.
+   and types are the exception: they are visible everywhere in their file,
+   and in other files through an import (section 16).
 2. **A local lives until the end of the block that declares it.**
 3. **No shadowing.** A local or parameter may not reuse the name of any
-   visible local, parameter, function or type (E106).
+   visible local, parameter, function, type or import (E106).
 4. **`const` and parameters cannot be assigned** (E105), nor can their
    fields or elements. Copy a parameter into a `var` to change it, or make
    it `inout` (section 12).
@@ -138,19 +156,23 @@ code does not say what it means, so it is rejected rather than tolerated.
 
 ```egg
 // error: E111
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     var x = 1          // never changed: must be const
-    @print(x)
+    out.print(x)
 }
 ```
 
 ```egg
 // error: E106
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const x = 1
     if (x > 0) {
         const x = 2    // shadows the outer x
-        @print(x)
+        out.print(x)
     }
 }
 ```
@@ -178,12 +200,14 @@ fn name(p1: T1, inout p2: T2, comptime T: type) R { ... }
 
 ```egg
 // error: E107
+uses io
+
 fn sign(n: i64) i64 {
     if (n < 0) { return -1 }
 }
 
-fn main() void {
-    @print(sign(1))
+fn main(out: Io) void {
+    out.print(sign(1))
 }
 ```
 
@@ -208,7 +232,9 @@ Loop variables are constants; name one `_` to ignore it. Rule E113 is why
 ```egg
 // expect: 1
 // expect: 3
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const xs = [4]i64{ 1, 2, 3, 4 }
     for (xs) |x, i| {
         if (x % 2 == 0) {
@@ -217,7 +243,7 @@ fn main() void {
         if (i > 2) {
             break
         }
-        @print(x)
+        out.print(x)
     }
 }
 ```
@@ -264,19 +290,23 @@ error and aborts the process with a non-zero status.
 // expect: -1
 // expect: 3
 // expect: 1
-fn main() void {
-    @print(-7 / 2)
-    @print(-7 % 2)
-    @print(7 / 2)
-    @print(7 % -2)
+uses io
+
+fn main(out: Io) void {
+    out.print(-7 / 2)
+    out.print(-7 % 2)
+    out.print(7 / 2)
+    out.print(7 % -2)
 }
 ```
 
 ```egg
 // panic: integer overflow
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const big = 9223372036854775807
-    @print(big + 1)
+    out.print(big + 1)
 }
 ```
 
@@ -284,42 +314,48 @@ fn main() void {
 // expect: 1
 // expect: 2
 // expect: 3
-fn one() i64 {
-    @print(1)
+uses io
+
+fn one(out: Io) i64 {
+    out.print(1)
     return 1
 }
 
-fn two() i64 {
-    @print(2)
+fn two(out: Io) i64 {
+    out.print(2)
     return 2
 }
 
-fn main() void {
-    @print(one() + two())
+fn main(out: Io) void {
+    out.print(one(out) + two(out))
 }
 ```
 
 ## 8. Strings
 
-`str` is an immutable sequence of bytes. In v1 every `str` is a literal or
-a slice of one, so it never needs freeing.
+`str` is an immutable sequence of bytes: a literal, a slice of a `str`, or
+a string built with an `Allocator` (section 17). None of them is ever
+freed, so a `str` is always valid.
 
 - `@len(s)` is its length in bytes; `s[i]` is the byte at `i` as an `i64`
   (0 to 255); `s[lo..hi]` and `s[lo..]` are `str`s.
 - `==` compares contents. `for (s) |b|` visits each byte.
-- Strings cannot be concatenated in v1: that needs an allocator (v2).
+- Building a string allocates, so it needs the alloc capability:
+  `a.concat(s, t)` and `a.int_str(n)` (section 17).
 
 ```egg
 // expect: 5
 // expect: 104
 // expect: ell
 // expect: true
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const s = "hello"
-    @print(@len(s))
-    @print(s[0])
-    @print(s[1..4])
-    @print(s[1..] == "ello")
+    out.print(@len(s))
+    out.print(s[0])
+    out.print(s[1..4])
+    out.print(s[1..] == "ello")
 }
 ```
 
@@ -349,11 +385,13 @@ const Point = struct {
 ```egg
 // expect: 25
 // expect: 4
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     var p = Point.origin()
     p.move(3, 4)
-    @print(p.len2())
-    @print(p.y)
+    out.print(p.len2())
+    out.print(p.y)
 }
 
 const Point = struct {
@@ -407,14 +445,16 @@ arm act on the enclosing loop.
 ```egg
 // expect: 24
 // expect: green
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
     var total = 0
     for (shapes) |s| {
         total = total + s.area()
     }
-    @print(total)
-    @print(next(.red))
+    out.print(total)
+    out.print(next(.red))
 }
 
 const Size = struct { w: i64, h: i64 }
@@ -455,12 +495,14 @@ fn next(l: Light) Light {
 
 ```egg
 // error: E127
+uses io
+
 const Light = enum { red, green }
 
-fn main() void {
+fn main(out: Io) void {
     switch (Light.red) {
         .red => {
-            @print(1)
+            out.print(1)
         }
     }
 }
@@ -484,6 +526,8 @@ annotations. An array is not implicitly a slice: pass `a[0..]` (E103).
 // expect: 10
 // expect: 5
 // expect: 3
+uses io
+
 fn sum(xs: []i64) i64 {
     var total = 0
     for (xs) |x| {
@@ -492,21 +536,23 @@ fn sum(xs: []i64) i64 {
     return total
 }
 
-fn main() void {
+fn main(out: Io) void {
     const a = [4]i64{ 1, 2, 3, 4 }
-    @print(sum(a[0..]))
-    @print(sum(a[1..3]))
+    out.print(sum(a[0..]))
+    out.print(sum(a[1..3]))
     const zeros: [3]i64 = @splat(1)
-    @print(sum(zeros[0..]))
+    out.print(sum(zeros[0..]))
 }
 ```
 
 ```egg
 // error: E116
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const a = [3]i64{ 1, 2, 3 }
     const view = a[0..2]
-    @print(@len(view))
+    out.print(@len(view))
 }
 ```
 
@@ -524,30 +570,34 @@ same memory.
 
 ```egg
 // expect: 21
+uses io
+
 fn swap(inout a: i64, inout b: i64) void {
     const t = a
     a = b
     b = t
 }
 
-fn main() void {
+fn main(out: Io) void {
     var x = 1
     var y = 2
     swap(&x, &y)
-    @print(x * 10 + y)
+    out.print(x * 10 + y)
 }
 ```
 
 ```egg
 // error: E117
+uses io
+
 fn add_into(inout acc: i64, x: i64) void {
     acc = acc + x
 }
 
-fn main() void {
+fn main(out: Io) void {
     var total = 1
     add_into(&total, total)
-    @print(total)
+    out.print(total)
 }
 ```
 
@@ -567,6 +617,8 @@ error (names are global, and need no declaration).
 // expect: 42
 // expect: -1
 // fails: Empty
+uses io
+
 fn parse_digit(c: i64) !i64 {
     if (c < 48 or c > 57) {
         return error.NotADigit
@@ -585,10 +637,10 @@ fn parse(s: str) !i64 {
     return n
 }
 
-fn main() !void {
-    @print(try parse("42"))
-    @print(parse("4x") catch -1)
-    @print(try parse(""))
+fn main(out: Io) !void {
+    out.print(try parse("42"))
+    out.print(parse("4x") catch -1)
+    out.print(try parse(""))
 }
 ```
 
@@ -613,6 +665,8 @@ compile time: no variable or field can hold one.
 // expect: 2
 // expect: 9
 // expect: Pair(bool)
+uses io
+
 fn Pair(comptime T: type) type {
     return struct {
         a: T
@@ -631,11 +685,11 @@ fn max(comptime T: type, a: T, b: T) T {
     return b
 }
 
-fn main() void {
+fn main(out: Io) void {
     const p = Pair(i64){ .a = 1, .b = 2 }
-    @print(p.swap().a)
-    @print(max(i64, 3, 9))
-    @print(@typeName(Pair(bool)))
+    out.print(p.swap().a)
+    out.print(max(i64, 3, 9))
+    out.print(@typeName(Pair(bool)))
 }
 ```
 
@@ -645,29 +699,149 @@ Builtins start with `@`; any other name is E112.
 
 | Builtin | Meaning |
 | --- | --- |
-| `@print(x)` | prints an `i64`, `bool`, `str` or enum and a newline to standard output |
 | `@len(x)` | length of an array, a slice or a `str`, as `i64` |
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@This()` | inside a struct or union: its own type |
+| `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 
-`@print` is temporary. When the `io` capability arrives in v2, printing moves
-out of the core, and a program will need an `Out` capability to print.
+v1's `@print` is gone: printing is io, so it is `out.print(x)` with the io
+capability (section 17). `@print` is E112.
 
-## 16. Not in v1
+## 16. Modules
 
-Pointers, function values, closures, allocation and anything that owns
-memory, string building, integer types other than `i64`, floating point,
-reflection beyond `@sizeOf`/`@typeName`, modules, and capabilities. See the
-design document's roadmap for when each arrives.
+```
+const shapes = @import("lib/shapes.egg")
+```
 
-## 17. A complete program
+imports another file, as a path relative to the importing file ending in
+`.egg` (a missing file is E129). The name, here `shapes`, is local to the
+importing file and reaches the top-level names of the imported one:
+
+| Written | Means |
+| --- | --- |
+| `shapes.perimeter(r)` | a function |
+| `shapes.Rect`, `shapes.Box(i64)` | a type, a type function's type |
+| `shapes.Rect{ .w = 1, .h = 2 }` | a struct literal |
+| `shapes.Kind.rect`, `shapes.Rect.square(3)` | an enum member, a function of a type |
+| `shapes.biggest(i64, xs[0..])` | a generic function |
+
+A name not declared by the module is E102 (function), E108 (type) or E122;
+an import name used as a value is E129. Imported names are not visible
+unqualified, and every top-level name is visible to importers (there is
+no `pub` yet).
+
+Each file is loaded once, however many files import it, so all importers
+see the same types. Imports may form cycles. Diagnostics name the file
+an error is in, and call imported things by the file's base name
+(`shapes.perimeter`), whatever the import is called.
+
+```
+// lib/shapes.egg: declares no capabilities
+const Rect = struct {
+    w: i64
+    h: i64
+
+    fn area(self: Rect) i64 {
+        return self.w * self.h
+    }
+}
+
+// main.egg
+uses io
+
+const shapes = @import("lib/shapes.egg")
+
+fn main(out: Io) void {
+    out.print(shapes.Rect{ .w = 2, .h = 3 }.area())   // 6
+}
+```
+
+`examples/modules.egg` and its `examples/lib/` files are the tested
+version of this section.
+
+## 17. Capabilities
+
+A capability is something the core does not have: io and heap allocation
+in v2. A file declares the capabilities it needs on a `uses` line:
+
+```
+uses alloc, io
+```
+
+Naming an unknown capability, or one twice, is E128. Each capability comes
+with a value type that is the only way to use it:
+
+| Capability | Value | Methods |
+| --- | --- | --- |
+| `io` | `Io` | `out.print(x)`: prints an `i64`, `bool`, `str` or enum and a newline to standard output |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: n in decimal |
+
+Capability values cannot be created or compared. `main` receives them
+from the runtime, and other code gets them as arguments; they may be
+stored in locals and struct fields like any value.
+
+**The check (E130).** A function *uses* a capability when it calls a
+method of its value, or calls a function that uses it. The compiler
+follows the call graph, across files and through generic instances, and
+rejects a function whose file does not declare every capability it uses.
+So a file without `uses io` cannot print, even with an `Io` it was given,
+and even inside a generic function instantiated with `Io`: it can only
+pass the value on. The error is reported where the capability enters the
+file: at the method call, or at the call into another file.
+
+```egg
+// error: E130
+fn main(out: Io) void {
+    out.print(1)       // no `uses io`
+}
+```
+
+The `Allocator` is one arena for the whole program: what it allocates is
+never freed, so nothing can be used after being freed. Allocators that
+free come with ownership checking.
+
+```egg
+// expect: total: 42
+// expect: -7
+uses alloc, io
+
+const Log = struct {
+    out: Io
+    a: Allocator
+
+    fn show(self: Log, label: str, n: i64) void {
+        self.out.print(self.a.concat(label, self.a.int_str(n)))
+    }
+}
+
+fn main(out: Io, a: Allocator) void {
+    const log = Log{ .out = out, .a = a }
+    log.show("total: ", 42)
+    out.print(a.int_str(-7))
+}
+```
+
+`eggc` lists the capabilities a function uses when the language server
+shows it (hover).
+
+## 18. Not yet
+
+Pointers, function values, closures, `extern fn`, freeing memory and
+anything that owns it, integer types other than `i64`, floating point,
+reflection beyond `@sizeOf`/`@typeName`, private (non-`pub`) names, and
+capabilities other than `io` and `alloc`. See the design document's
+roadmap for when each arrives.
+
+## 19. A complete program
 
 ```egg
 // expect: 21
 // expect: 6765
 // expect: true
+uses io
+
 fn gcd(a: i64, b: i64) i64 {
     var x = a
     var y = b
@@ -692,9 +866,9 @@ fn fib(n: i64) i64 {
     return a
 }
 
-fn main() void {
-    @print(gcd(1071, 462))
-    @print(fib(20))
-    @print(gcd(10, 4) == 2 and fib(10) == 55)
+fn main(out: Io) void {
+    out.print(gcd(1071, 462))
+    out.print(fib(20))
+    out.print(gcd(10, 4) == 2 and fib(10) == 55)
 }
 ```

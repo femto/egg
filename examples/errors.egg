@@ -5,6 +5,8 @@
 // expect: 0
 // fails: TooBig
 
+uses io
+
 fn parse_digit(c: i64) !i64 {
     if (c < 48 or c > 57) {
         return error.NotADigit
@@ -29,12 +31,12 @@ fn check(n: i64) !void {
     }
 }
 
-fn main() !void {
-    @print(try parse_number("123"))
-    @print(parse_number("12x") catch -1)
-    @print(parse_number("") catch -2)
+fn main(out: Io) !void {
+    out.print(try parse_number("123"))
+    out.print(parse_number("12x") catch -1)
+    out.print(parse_number("") catch -2)
     try check(5)
-    check(500) catch @print(0)
+    check(500) catch out.print(0)
     try check(1000)
-    @print(999)
+    out.print(999)
 }

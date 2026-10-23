@@ -1,5 +1,7 @@
-// error: E103 @3
-fn main() void {
+// error: E103 @5
+uses io
+
+fn main(out: Io) void {
     const x: i64 = true
-    @print(x)
+    out.print(x)
 }

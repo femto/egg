@@ -7,6 +7,8 @@
 // expect: Pair(bool)
 // expect: [3]i64
 
+uses io
+
 fn Pair(comptime T: type) type {
     return struct {
         a: T
@@ -33,15 +35,15 @@ const Wrapper = struct {
     inner: Pair(bool)
 }
 
-fn main() void {
+fn main(out: Io) void {
     const p = Pair(i64){ .a = 1, .b = 2 }
     const q = p.swap()
-    @print(q.a)
-    @print(sum_pair(q))
-    @print(max(i64, 3, 9))
+    out.print(q.a)
+    out.print(sum_pair(q))
+    out.print(max(i64, 3, 9))
     const w = Wrapper{ .inner = Pair(bool){ .a = true, .b = false } }
-    @print(w.inner.swap().a)
-    @print(@sizeOf(Pair(i64)))
-    @print(@typeName(Pair(bool)))
-    @print(@typeName([3]i64))
+    out.print(w.inner.swap().a)
+    out.print(@sizeOf(Pair(i64)))
+    out.print(@typeName(Pair(bool)))
+    out.print(@typeName([3]i64))
 }

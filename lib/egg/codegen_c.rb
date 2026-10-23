@@ -21,9 +21,15 @@
 # error union !T to { T value; int32_t err; } (err 0 = no error). A slice
 # is { const T *ptr; int64_t len; }; an inout parameter is a pointer.
 #
-# Given a source path, each declaration and statement is preceded by a
-# `#line N "file.egg"` directive, so a debugger built with -g shows and
-# breaks on .egg lines instead of lines of the generated C.
+# In a debug build, each declaration and statement is preceded by a
+# `#line N "file.egg"` directive (naming the module's own file), so a
+# debugger built with -g shows and breaks on .egg lines instead of lines
+# of the generated C.
+#
+# Capability values (Io, Allocator) carry no data: the capability is in
+# the type, which the checker tracks. The Allocator is one arena for the
+# whole program: memory is never freed, so nothing can be used after it
+# is freed. Freeing comes with ownership checking.
 
 module Egg
   class CodegenC
@@ -38,12 +44,17 @@ module Egg
     C
 
     STR_TYPEDEF = "typedef struct { const char *ptr; int64_t len; } egg_str;\n"
+    CAP_TYPEDEFS = {
+      "Io" => "typedef struct { char unused; } egg_io;\n",
+      "Allocator" => "typedef struct { char unused; } egg_allocator;\n"
+    }.freeze
 
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
-                      egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr].freeze
+                      egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
+                      egg_alloc egg_concat egg_int_str].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -118,18 +129,50 @@ module Egg
       "egg_print_str" => <<~C,
         static void egg_print_str(egg_str s) { fwrite(s.ptr, 1, (size_t)s.len, stdout); putchar('\\n'); }
       C
-      "egg_print_cstr" => <<~C
+      "egg_print_cstr" => <<~C,
         static void egg_print_cstr(const char *s) { puts(s); }
+      C
+      "egg_alloc" => <<~C,
+        static char *egg_alloc(int64_t n) {
+            char *p = malloc(n > 0 ? (size_t)n : 1);
+            if (p == NULL) egg_panic("out of memory");
+            return p;
+        }
+      C
+      "egg_concat" => <<~C,
+        static egg_str egg_concat(egg_str a, egg_str b) {
+            if (a.len > INT64_MAX - b.len) egg_panic("out of memory");
+            char *p = egg_alloc(a.len + b.len);
+            if (a.len > 0) memcpy(p, a.ptr, (size_t)a.len);
+            if (b.len > 0) memcpy(p + a.len, b.ptr, (size_t)b.len);
+            return (egg_str){ p, a.len + b.len };
+        }
+      C
+      "egg_int_str" => <<~C
+        static egg_str egg_int_str(int64_t x) {
+            char buf[24];
+            int n = snprintf(buf, sizeof buf, "%" PRId64, x);
+            char *p = egg_alloc(n);
+            memcpy(p, buf, (size_t)n);
+            return (egg_str){ p, n };
+        }
       C
     }.freeze
 
+    # Helpers that call others.
+    HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"] }.freeze
+
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
 
-    def initialize(program, checker, source_path = nil)
+    # debug_path: the root file's absolute path for a debug build, or nil
+    def initialize(program, checker, debug_path = nil)
       @program = program
       @checker = checker
       @types = checker.types
-      @line_file = source_path.nil? ? nil : c_string(source_path)
+      @debug = !debug_path.nil?
+      @root_path = debug_path
+      @line_file = nil
+      @need_cap = {}
       @out = +""
       @indent = 0
       @locals = []
@@ -153,6 +196,7 @@ module Egg
       out = HEADER.dup
       out << "\n"
       out << STR_TYPEDEF << "\n" if @need_str
+      CAP_TYPEDEFS.each { |t, text| out << text << "\n" if @need_cap[t] }
       out << types
       HELPER_ORDER.each do |name|
         next unless @used[name]
@@ -179,8 +223,16 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || name == "egg_str_eq"
-      @need_str = true if name == "egg_str_eq" || name == "egg_print_str"
+      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str].include?(name)
+      (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
+    end
+
+    # The quoted file name for #line marks in code of module `prefix`.
+    def file_of(prefix)
+      return nil unless @debug
+      path = @checker.modules[prefix || ""].path || @root_path
+      c_string(path)
     end
 
     # ---- types --------------------------------------------------------
@@ -193,6 +245,12 @@ module Egg
       when "str"
         @need_str = true
         "egg_str"
+      when "Io"
+        @need_cap[t] = true
+        "egg_io"
+      when "Allocator"
+        @need_cap[t] = true
+        "egg_allocator"
       else
         info = @types[t]
         raise "codegen: unknown type #{t}" if info.nil?
@@ -212,6 +270,16 @@ module Egg
       info = @types[canon]
       return if info.nil? || info.kind == :prim || done[canon]
       done[canon] = true
+      # Marks name the declaring module's file; emitting a field's type
+      # (maybe from another module) first must not change that. Arrays,
+      # error unions and slices have no module and keep the enclosing one.
+      saved = @line_file
+      @line_file = file_of(info.mod) unless info.mod.nil?
+      emit_type_body(canon, info, done)
+      @line_file = saved
+    end
+
+    def emit_type_body(canon, info, done)
       case info.kind
       when :enum
         mark(info.line)
@@ -279,6 +347,7 @@ module Egg
 
     def gen_func(sig)
       @sig = sig
+      @line_file = file_of(sig.func.mod)
       @tmp = 0
       @locals = [{}]
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
@@ -295,22 +364,26 @@ module Egg
       nil
     end
 
+    # main's capability parameters are made here: the runtime is where
+    # capabilities come from.
     def gen_entry
       main = @checker.main_sig
+      @line_file = file_of("")
       mark(main.func.line)
       @out << "int main(void) {\n"
+      args = main.params.map { |t, _| "(#{c_type(t)}){ 0 }" }.join(", ")
       case main.ret
       when "i64"
-        @out << "    return (int)#{main.c_name}();\n"
+        @out << "    return (int)#{main.c_name}(#{args});\n"
       when "!void"
-        @out << "    #{c_type('!void')} r = #{main.c_name}();\n"
+        @out << "    #{c_type('!void')} r = #{main.c_name}(#{args});\n"
         @out << "    if (r.err) {\n"
         @out << "        fprintf(stderr, \"error: %s\\n\", egg_error_names[r.err]);\n"
         @out << "        return 1;\n"
         @out << "    }\n"
         @out << "    return 0;\n"
       else
-        @out << "    #{main.c_name}();\n    return 0;\n"
+        @out << "    #{main.c_name}(#{args});\n    return 0;\n"
       end
       @out << "}\n"
       nil
@@ -612,6 +685,8 @@ module Egg
         binary(op, lhs, rhs)
       in Call[info:]
         call(info[:c_name], info[:args], info[:params], [], e.ty)
+      in MethodCall[obj:, info: { cap_method: String => m }]
+        cap_call(m, obj, e.args, e.ty)
       in MethodCall[obj:, info:]
         recv = []
         unless info[:static]
@@ -730,20 +805,34 @@ module Egg
       hoist(text, ret)
     end
 
+    # out.print(x), a.concat(s, t), a.int_str(n). The receiver carries no
+    # data but is still evaluated, first, like any receiver.
+    def cap_call(m, obj, args, ret)
+      recv = expr(obj)
+      codes = args.map { |a| expr(a) }
+      text = case m
+             when "Io.print"
+               t = args[0].ty
+               case t
+               when "bool" then "#{helper('egg_print_bool')}(#{codes[0]})"
+               when "str" then "#{helper('egg_print_str')}(#{codes[0]})"
+               when "i64" then "#{helper('egg_print_i64')}(#{codes[0]})"
+               else
+                 @enum_names[t] = true
+                 "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{codes[0]}])"
+               end
+             when "Allocator.concat" then "#{helper('egg_concat')}(#{codes[0]}, #{codes[1]})"
+             when "Allocator.int_str" then "#{helper('egg_int_str')}(#{codes[0]})"
+             else raise "codegen: unknown capability method #{m}"
+             end
+      text = "((void)#{recv}, #{text})"
+      return text if ret == "void"
+      hoist(text, ret)
+    end
+
     def builtin(e, name, args)
       a = args[0]
       case name
-      when "print"
-        t = a.ty
-        code = expr(a)
-        case t
-        when "bool" then "#{helper('egg_print_bool')}(#{code})"
-        when "str" then "#{helper('egg_print_str')}(#{code})"
-        when "i64" then "#{helper('egg_print_i64')}(#{code})"
-        else
-          @enum_names[t] = true
-          "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{code}])"
-        end
       when "len"
         code = expr(a)
         len = e.info[:len]

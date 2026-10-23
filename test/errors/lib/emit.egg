@@ -1,0 +1,5 @@
+// A generic function in a module without io: instantiating it with Io
+// does not give it io.
+fn emit(comptime W: type, w: W, n: i64) void {
+    w.print(n)
+}

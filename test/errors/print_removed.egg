@@ -1,0 +1,4 @@
+// error: E112 @3
+fn main() void {
+    @print(1)
+}
