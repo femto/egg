@@ -1,0 +1,18 @@
+// error: E103 @14
+// error: E103 @15
+// error: E102 @17
+fn id(comptime T: type, x: T) T {
+    return x
+}
+
+fn bump(inout x: i64) void {
+    x = x + 1
+}
+
+fn main() void {
+    const n = 1
+    const f = id
+    const g = bump
+    const h = n
+    h(1)
+}

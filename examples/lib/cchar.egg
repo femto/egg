@@ -1,0 +1,8 @@
+// A safe API over C's toupper: the unsafe part stays in this file.
+allow unsafe
+
+extern fn toupper(c: i32) i32
+
+fn upper(b: u8) u8 {
+    return @as(u8, toupper(@as(i32, b)))
+}

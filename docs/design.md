@@ -24,10 +24,10 @@ The core follows Zig but stays smaller: it keeps only features that need no runt
 
 | Area | Contents | First version |
 | --- | --- | --- |
-| Integers | `i8`…`i64`, `u8`…`u64`, `usize` | v0 (`i64` only) |
+| Integers | `i8`…`i64`, `u8`…`u64`, `usize` | v0 (`i64` only); all widths v2 |
 | Other primitives | `bool`, `f32`, `f64`, `void` | v0 |
 | Composite types | `struct`, `enum`, tagged unions | v1 |
-| Pointers and memory | slices, arrays; single-item pointers | v1; pointers v2 (behind `allow unsafe`) |
+| Pointers and memory | slices, arrays; single-item pointers | v1; raw pointers v2 (holding them is safe; pointer operations such as `p.*` need `allow unsafe`) |
 | Control flow | `if`, `while`, `for`, `switch`, all expressions | v0 (`if`, `while` first) |
 | Errors | errors as values (like `!T`), `try` | v1 |
 | Compile time | `comptime` parameters, generics (functions returning `type`); reflection (`@typeInfo`) | v1; reflection after v1 |
@@ -193,13 +193,13 @@ The C that Egg generates must be portable from day one:
 
 ## Roadmap
 
-Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. v2 is under way: its first step, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done; still to come are raw pointers and function values behind `allow unsafe`, `extern fn`, and ownership checking.
+Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. v2 is under way. Step 1, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done. Step 2 is done too: integer types of every width with `@as`, raw pointers usable in files that `allow unsafe` (local to the file, not carried along the call graph, so an unsafe module can offer a safe API), function values, and `extern fn` declaring the capabilities the C function uses. Function values turned out not to need `allow unsafe`: taking a function as a value counts as calling it for the capability check, so a function value carries capabilities the way an `Io` value does. Still to come is ownership checking, with an allocator that frees.
 
 | Phase | Scope | Acceptance gate |
 | --- | --- | --- |
 | v0 · Core subset ✅ | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
 | v1 · Types and comptime ✅ | `struct` with methods, `enum`, tagged unions, `str`, arrays, second-class slices, `inout`; error values; comptime generics; `@sizeOf`, `@typeName` | Generic `Pair` and error-value examples pass their tests |
-| v2 · Capability checks (capability check ✅) | modules; `alloc` and `io` capabilities; recursive check along the call graph | Programs using undeclared capabilities are rejected |
+| v2 · Capability checks (capability check ✅, pointers and extern ✅) | modules; `alloc` and `io` capabilities; recursive check along the call graph; integer types, raw pointers, function values, `extern fn`; ownership | Programs using undeclared capabilities are rejected |
 | v3 · GC written in core | `gc` library uses only core code | `gc` declares no capabilities and passes the capability check |
 | v4 · Self-hosting | `eggc` rewritten in Egg, compiled by the previous generation | Generation 2 and 3 output is byte-identical |
 

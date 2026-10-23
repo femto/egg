@@ -1,0 +1,11 @@
+// error: E130 @lib/write_b.egg:5
+// The second declaration of a C function is checked like the first.
+uses io
+
+const a = @import("lib/write_a.egg")
+const b = @import("lib/write_b.egg")
+
+fn main(out: Io) i64 {
+    out.print(1)
+    return b.say("hi")
+}

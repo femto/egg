@@ -26,13 +26,18 @@
 # global one. The checker also records, per function, the capabilities it
 # uses directly and the functions it calls, for the capability check
 # (caps.rb).
+#
+# Pointer operations and `extern fn` need `allow unsafe` in their own file
+# (E131); unlike capabilities, this is not carried along calls.
 
 module Egg
   VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
   # params: [[type, mode]] (comptime parameters removed); ret: type
   # direct: capability -> [line, col, what] for its first direct use
   # calls: [[Sig, line, col]] for every call in the body
-  Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls)
+  # unused: names of parameters the body never reads (Egg allows them; C
+  # warns, so codegen marks them used)
+  Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls, :unused)
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
   # mod: prefix of the module that declares the type (for #line marks)
   TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod)
@@ -40,20 +45,69 @@ module Egg
   class TypeChecker
     # Io and Allocator are capability values: opaque, and only `main`
     # receives them (from the runtime); everything else is passed them.
-    PRIMS = %w[i64 bool str void Io Allocator].freeze
+    INT_TYPES = %w[i8 i16 i32 i64 u8 u16 u32 u64 usize].freeze
+    # Literal ranges; usize is checked as u64 here, and a usize literal
+    # above 32 bits against the target's real width (SIZE_MAX) at run time.
+    INT_RANGE = {
+      "i8" => [-128, 127], "i16" => [-32_768, 32_767],
+      "i32" => [-2_147_483_648, 2_147_483_647],
+      "i64" => [-9_223_372_036_854_775_808, 9_223_372_036_854_775_807],
+      "u8" => [0, 255], "u16" => [0, 65_535], "u32" => [0, 4_294_967_295],
+      "u64" => [0, 18_446_744_073_709_551_615], "usize" => [0, 18_446_744_073_709_551_615]
+    }.freeze
+    PRIMS = (INT_TYPES + %w[bool str void Io Allocator]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc" }.freeze
     CAPABILITIES = %w[alloc io].freeze
     # Methods of capability values: name -> [parameter types, result]
-    # ("printable" accepts i64, bool, str and enums).
+    # ("printable" accepts integers, bool, str and enums; "integer" any
+    # integer type).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
-      "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["i64"], "str"] }
+      "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["integer"], "str"],
+                       "create" => [["value"], "pointer to the value"] }
     }.freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
-    BUILTINS = %w[len sizeOf typeName splat].freeze
+    # Builtins and how many arguments each takes.
+    BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
+                      "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
+    # Builtins that need `allow unsafe`.
+    UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
+    BUILTINS = BUILTIN_ARITY.keys.freeze
 
-    attr_reader :diagnostics, :types, :type_order, :concrete, :error_names, :main_sig, :modules
+    # Names an extern fn may not take: C keywords, and the functions of the
+    # C headers the generated code includes (redeclaring one with Egg's
+    # types would not compile).
+    C_RESERVED = %w[
+      auto break case char const continue default do double else enum extern float for goto if inline int long
+      register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while
+      _Bool _Complex _Imaginary bool true false main
+      remove rename tmpfile tmpnam fclose fflush fopen freopen setbuf setvbuf fprintf fscanf printf scanf snprintf
+      sprintf sscanf vfprintf vfscanf vprintf vscanf vsnprintf vsprintf vsscanf fgetc fgets fputc fputs getc getchar
+      gets putc putchar puts ungetc fread fwrite fgetpos fseek fsetpos ftell rewind clearerr feof ferror perror
+      stdin stdout stderr
+      atof atoi atol atoll strtod strtof strtold strtol strtoll strtoul strtoull rand srand calloc free malloc realloc
+      abort atexit exit _Exit getenv system bsearch qsort abs labs llabs div ldiv lldiv mblen mbtowc wctomb mbstowcs
+      wcstombs
+      memcpy memmove strcpy strncpy strcat strncat memcmp strcmp strcoll strncmp strxfrm memchr strchr strcspn strpbrk
+      strrchr strspn strstr strtok memset strerror strlen
+      imaxabs imaxdiv strtoimax strtoumax wcstoimax wcstoumax
+      NULL EOF BUFSIZ FILENAME_MAX FOPEN_MAX L_tmpnam SEEK_CUR SEEK_END SEEK_SET TMP_MAX _IOFBF _IOLBF _IONBF
+      EXIT_FAILURE EXIT_SUCCESS RAND_MAX MB_CUR_MAX SIZE_MAX PTRDIFF_MIN PTRDIFF_MAX SIG_ATOMIC_MIN SIG_ATOMIC_MAX
+      WCHAR_MIN WCHAR_MAX WINT_MIN WINT_MAX FILE fpos_t size_t div_t ldiv_t lldiv_t imaxdiv_t wchar_t
+      __bool_true_false_are_defined
+    ].freeze
+    # Families of names those headers also define: int8_t, INT8_MAX,
+    # INT64_C, PRId64, ...; and C's reserved _X and __x names.
+    C_RESERVED_PATTERNS = [
+      /\Au?int(_least|_fast)?\d+_t\z/, /\Au?int(ptr|max)_t\z/,
+      /\AU?INT(_LEAST|_FAST)?\d+_(MIN|MAX|C)\z/, /\AU?INT(PTR|MAX)_(MIN|MAX|C)\z/,
+      /\A(PRI|SCN)[a-zA-Z0-9_]+\z/, /\A_[A-Z_]/
+    ].freeze
+    # Prefixes of generated C names.
+    C_PREFIXES = %w[egg_ fn_ ty_ v_ f_ m_ _t].freeze
+
+    attr_reader :diagnostics, :types, :type_order, :concrete, :error_names, :main_sig, :modules, :externs
 
     def initialize(program)
       @program = program
@@ -73,7 +127,9 @@ module Egg
       @this = nil
       @current = nil
       @loop_depth = 0
-      @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], []) }
+      @externs = []        # Sigs of extern fns, every declaration, in order
+      @extern_c = {}       # C name -> Sig, to catch clashing declarations
+      @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], [], program.allows || []) }
       @mod = @modules[""]
       PRIMS.each { |p| @types[p] = TInfo.new(p, :prim) }
     end
@@ -114,7 +170,11 @@ module Egg
             err("E106", "function '#{f.name}' is defined more than once", f.line, f.col)
             next
           end
-          if f.ret == "type"
+          if !f.ext.nil?
+            sig = new_sig(f.name, f, base_name(f.name), {}, nil, nil)
+            sig.checked = true # no body
+            @sigs[f.name] = sig
+          elsif f.ret == "type"
             @type_fns[f.name] = f
           elsif f.params.any? { |p| p.mode == "comptime" }
             @generic_fns[f.name] = f
@@ -129,8 +189,56 @@ module Egg
         sig = @sigs[f.name]
         next if sig.nil? || sig.func != f
         build_sig(sig)
-        enqueue(sig)
+        if f.ext.nil?
+          enqueue(sig)
+        else
+          in_module(f.mod) { check_extern(sig) }
+        end
       end
+    end
+
+    # extern fn name(params) R [uses ...]: a C function called by its own
+    # name. Only scalars and pointers cross, so the C types are exact.
+    def check_extern(sig)
+      f = sig.func
+      return unless require_unsafe("extern fn", f.line, f.col)
+      c = sig.c_name
+      if C_RESERVED.include?(c) || C_RESERVED_PATTERNS.any? { |r| c.match?(r) } || C_PREFIXES.any? { |p| c.start_with?(p) }
+        err("E132", "an extern fn cannot be named '#{c}': it is a C keyword, a name the C headers eggc includes declare, reserved in C, or uses a prefix of generated names", f.line, f.col)
+        return
+      end
+      if f.params.any? { |p| !p.mode.nil? }
+        err("E132", "an extern fn takes its parameters by value; no inout or comptime", f.line, f.col)
+        return
+      end
+      bad = sig.params.map(&:first).find { |t| t != "error" && !c_scalar?(t) }
+      bad ||= sig.ret unless sig.ret == "void" || sig.ret == "error" || c_scalar?(sig.ret)
+      unless bad.nil?
+        err("E132", "an extern fn passes only integers, bool, pointers and function values (and may return void), not #{bad}", f.line, f.col)
+        return
+      end
+      f.ext.each do |u|
+        if CAPABILITIES.include?(u.name)
+          sig.direct[u.name] ||= [u.line, u.col, "extern fn #{c}"]
+        else
+          err("E128", "unknown capability '#{u.name}' (capabilities: #{CAPABILITIES.join(', ')})", u.line, u.col)
+        end
+      end
+      other = @extern_c[c]
+      if !other.nil? && (other.params != sig.params || other.ret != sig.ret)
+        err("E132", "extern fn '#{c}' is declared elsewhere with a different signature", f.line, f.col)
+        return
+      end
+      @extern_c[c] ||= sig
+      # Every declaration is kept: each is checked against its own file's
+      # capabilities, even when another file declares the same C function.
+      @externs << sig
+      @c_names[c] = true
+    end
+
+    # A type that crosses into C as itself.
+    def c_scalar?(t)
+      int?(t) || t == "bool" || %i[ptr fn].include?(@types[t]&.kind)
     end
 
     # `uses alloc, io`: known capabilities, each named once.
@@ -144,6 +252,35 @@ module Egg
         end
         seen[u.name] = true
       end
+      m.allows.each do |u|
+        err("E131", "only `allow unsafe` exists, found `allow #{u.name}`", u.line, u.col) unless u.name == "unsafe"
+      end
+    end
+
+    # Is the current module `allow unsafe`?
+    def unsafe?
+      @mod.allows.any? { |u| u.name == "unsafe" }
+    end
+
+    # Pointer operations need `allow unsafe` in the file (E131).
+    def require_unsafe(what, line, col)
+      return true if unsafe?
+      where = @mod.file.nil? ? "the file" : @mod.file
+      err("E131", "#{what} needs `allow unsafe`: add it at the top of #{where}", line, col)
+      false
+    end
+
+    # "*T", registered.
+    def ptr_type(inner)
+      canon = "*#{inner}"
+      register(canon, :ptr, nil, nil).inner = inner
+      canon
+    end
+
+    # The type a pointer type points to, or nil.
+    def pointee(t)
+      info = @types[t]
+      info&.kind == :ptr ? info.inner : nil
     end
 
     # Methods are keyed apart from functions, which may be named "m.f".
@@ -407,6 +544,22 @@ module Egg
         args = t.args.map { |a| resolve_type(a, line, col) }
         return "error" if args.include?("error")
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
+      when PtrType
+        inner = resolve_type(t.inner, line, col)
+        return "error" if inner == "error"
+        return value_type_error(inner, "a pointer's target", line, col) unless storable?(inner)
+        ptr_type(inner)
+      when FnType
+        params = t.params.map { |p| resolve_type(p, line, col) }
+        ret = resolve_type(t.ret, line, col)
+        return "error" if params.include?("error") || ret == "error"
+        bad = params.find { |p| p == "void" || p == "type" || p == "anyerror" }
+        return value_type_error(bad, "a function parameter", line, col) unless bad.nil?
+        if ret.start_with?("[]") || ret == "type"
+          err("E108", "a function type cannot return #{ret}", line, col)
+          return "error"
+        end
+        fn_type(params, ret)
       when ThisType
         return @this unless @this.nil?
         err("E108", "@This() is only valid inside a struct", line, col)
@@ -414,6 +567,15 @@ module Egg
       else
         raise "typecheck: unknown type node #{t.inspect}"
       end
+    end
+
+    # "fn(i64, bool) i64", registered: params in fields, result in inner.
+    def fn_type(params, ret)
+      canon = "fn(#{params.join(', ')}) #{ret}"
+      info = register(canon, :fn, nil, nil)
+      info.fields = params
+      info.inner = ret
+      canon
     end
 
     def storable?(t)
@@ -516,6 +678,7 @@ module Egg
           declare(p.name, VarInfo.new("type", false, true, false, p.line, p.col, true, false))
         end
         check_block(f.body)
+        sig.unused = @scopes[0].select { |_, info| info.param && !info.used && info.type != "type" }.keys
         ret = sig.ret
         if ret != "void" && ret != "!void" && ret != "error" && !block_returns?(f.body)
           err("E107", "function '#{f.name}' can reach its end without returning #{ret}", f.line, f.col)
@@ -747,11 +910,35 @@ module Egg
         e.ty = index_type(t, line, col)
         e.info = { len: @types[t]&.len }
         e.ty
+      in Deref[expr: ptr, line:, col:]
+        # Writing through a pointer: the pointer itself need not be a var.
+        e.info = {}
+        t = check_expr(ptr)
+        return(e.ty = "error") if t == "error" || !require_unsafe("'.*'", line, col)
+        inner = pointee(t)
+        if inner.nil?
+          err("E103", "'.*' needs a pointer, found #{t}", line, col)
+          return(e.ty = "error")
+        end
+        e.ty = inner
       else
         err("E105", "can only #{verb} a variable, a field or an element", e.line, e.col)
         check_expr(e)
         "error"
       end
+    end
+
+    # &place in an `allow unsafe` file: a pointer to a mutable place (a
+    # var, its fields and elements, or a place behind a pointer).
+    def address_of(place)
+      t = check_lvalue(place, "take the address of")
+      mark_root_used(place)
+      return "error" if t == "error"
+      unless storable?(t)
+        err("E108", "cannot take the address of a #{t}", place.line, place.col)
+        return "error"
+      end
+      ptr_type(t)
     end
 
     # ---- expressions --------------------------------------------------
@@ -765,7 +952,8 @@ module Egg
 
     def infer(e, expected)
       case e
-      in IntLit then "i64"
+      in IntLit[value:, line:, col:]
+        int_lit(value, int_target(expected), line, col)
       in BoolLit then "bool"
       in StrLit then "str"
       in Var[name:, line:, col:]
@@ -786,8 +974,11 @@ module Egg
           return "type"
         end
         q = qualify(name)
-        if @sigs.key?(q) || @generic_fns.key?(q)
-          err("E103", "'#{name}' is a function; call it with (...)", line, col)
+        if @sigs.key?(q)
+          return fn_value(e, @sigs[q], name, line, col)
+        elsif @generic_fns.key?(q)
+          err("E103", "'#{name}' is a generic function; call it with (...)", line, col)
+          "error"
         elsif @mod.aliases.key?(name)
           err("E129", "'#{name}' is a module; name something in it, such as #{name}.f(...)", line, col)
         else
@@ -797,17 +988,32 @@ module Egg
       in TypeExpr[type:, line:, col:]
         e.info[:type] = resolve_type(type, line, col)
         "type"
-      in Unary[op:, operand:]
-        t = check_expr(operand)
+      in Unary[op:, operand:, line:, col:]
+        if op == "-" && operand.is_a?(IntLit)
+          # -128 as one literal, so it fits i8.
+          t = int_target(expected) || "i64"
+          if !signed?(t)
+            err("E103", "cannot negate a #{t}: it is unsigned", line, col)
+            return "error"
+          end
+          operand.info = {}
+          operand.ty = int_lit(-operand.value, t, operand.line, operand.col)
+          e.info[:neg_lit] = true
+          return operand.ty
+        end
+        t = check_expr(operand, op == "-" ? int_target(expected) : nil)
         if op == "-"
-          expect_type("i64", t, operand)
-          "i64"
+          if t != "error" && !signed?(t)
+            err("E103", int?(t) ? "cannot negate a #{t}: it is unsigned" : "expected a signed integer, found #{t}", line, col)
+            return "error"
+          end
+          t
         else
           expect_type("bool", t, operand)
           "bool"
         end
       in Binary[op:, lhs:, rhs:, line:, col:]
-        check_binary(op, lhs, rhs, line, col)
+        check_binary(op, lhs, rhs, line, col, expected)
       in Call[name:, args:, line:, col:]
         check_call(e, name, args, line, col)
       in MethodCall[obj:, name:, args:, line:, col:]
@@ -822,8 +1028,10 @@ module Egg
           t = type_named("#{obj.name}.#{name}")
           if t.nil?
             q = qualify("#{obj.name}.#{name}")
-            if @sigs.key?(q) || @generic_fns.key?(q)
-              err("E103", "'#{obj.name}.#{name}' is a function; call it with (...)", line, col)
+            if @sigs.key?(q)
+              return fn_value(e, @sigs[q], "#{obj.name}.#{name}", line, col)
+            elsif @generic_fns.key?(q)
+              err("E103", "'#{obj.name}.#{name}' is a generic function; call it with (...)", line, col)
             elsif @type_fns.key?(q)
               err("E108", "'#{obj.name}.#{name}' is a type function; write #{obj.name}.#{name}(...) with its arguments", line, col)
             else
@@ -917,9 +1125,29 @@ module Egg
         ft = check_expr(fallback, inner)
         expect_type(inner, ft, fallback)
         inner
-      in AddrOf[line:, col:]
-        err("E121", "'&' marks an inout argument; it is only allowed directly in a call", line, col)
-        "error"
+      in AddrOf[expr: place, line:, col:]
+        unless unsafe?
+          err("E121", "'&' marks an inout argument; it is only allowed directly in a call (taking an address needs `allow unsafe`)", line, col)
+          return "error"
+        end
+        address_of(place)
+      in Deref[expr: ptr, line:, col:]
+        t = check_expr(ptr)
+        return "error" if t == "error" || !require_unsafe("'.*'", line, col)
+        inner = pointee(t)
+        if inner.nil?
+          err("E103", "'.*' needs a pointer, found #{t}", line, col)
+          return "error"
+        end
+        inner
+      in NullLit[line:, col:]
+        t = expected
+        t = @types[t].inner if !t.nil? && @types[t]&.kind == :err
+        if t.nil? || pointee(t).nil?
+          err("E115", "cannot infer the pointer type of null; give it a type such as *i64", line, col) unless expected == "error"
+          return "error"
+        end
+        t
       in StructTypeExpr[line:, col:]
         err("E120", "'struct { ... }' is only allowed as the body of a type function", line, col)
         "error"
@@ -988,22 +1216,29 @@ module Egg
       "error"
     end
 
-    def check_binary(op, lhs, rhs, line, col)
-      if (op == "==" || op == "!=") && lhs.is_a?(EnumLit) && !rhs.is_a?(EnumLit)
-        rt = check_expr(rhs)
+    # Both operands of an arithmetic or ordering operator have one integer
+    # type; a literal takes the other side's type (or, for arithmetic, the
+    # type the context expects), so `x + 1` works for any integer x.
+    def check_binary(op, lhs, rhs, line, col, expected = nil)
+      arith = ARITH_OPS.include?(op)
+      typed_by_other = (op == "==" || op == "!=" || arith || ORDER_OPS.include?(op))
+      hint = arith ? int_target(expected) : nil
+      if typed_by_other && untyped_lit?(lhs) && !untyped_lit?(rhs)
+        rt = check_expr(rhs, hint)
         lt = check_expr(lhs, rt)
       else
-        lt = check_expr(lhs)
-        rt = check_expr(rhs, (op == "==" || op == "!=") ? lt : nil)
+        lt = check_expr(lhs, hint)
+        rt = check_expr(rhs, typed_by_other ? lt : nil)
       end
-      if ARITH_OPS.include?(op)
-        expect_type("i64", lt, lhs)
-        expect_type("i64", rt, rhs)
-        "i64"
-      elsif ORDER_OPS.include?(op)
-        expect_type("i64", lt, lhs)
-        expect_type("i64", rt, rhs)
-        "bool"
+      if arith || ORDER_OPS.include?(op)
+        if lt != "error" && !int?(lt)
+          err("E103", "'#{op}' needs integers, found #{lt}", lhs.line, lhs.col)
+        elsif rt != "error" && !int?(rt)
+          err("E103", "'#{op}' needs integers, found #{rt}", rhs.line, rhs.col)
+        elsif lt != "error" && rt != "error" && lt != rt
+          err("E103", "'#{op}' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
+        end
+        return arith ? (int?(lt) ? lt : "error") : "bool"
       elsif op == "==" || op == "!="
         if lt != "error" && rt != "error"
           if lt != rt
@@ -1021,18 +1256,52 @@ module Egg
     end
 
     def comparable?(t)
-      %w[i64 bool str].include?(t) || @types[t]&.kind == :enum
+      %w[bool str].include?(t) || int?(t) || [:enum, :ptr, :fn].include?(@types[t]&.kind)
+    end
+
+    def int?(t)
+      INT_TYPES.include?(t)
+    end
+
+    def signed?(t)
+      int?(t) && t.start_with?("i")
+    end
+
+    # The integer type a literal should take where `expected` is wanted
+    # (T, or the T of !T), or nil.
+    def int_target(expected)
+      return nil if expected.nil?
+      return expected if int?(expected)
+      info = @types[expected]
+      info&.kind == :err && int?(info.inner) ? info.inner : nil
+    end
+
+    # A literal whose type comes from context: 5, -5, .red, null.
+    def untyped_lit?(e)
+      e.is_a?(IntLit) || e.is_a?(EnumLit) || e.is_a?(NullLit) ||
+        (e.is_a?(Unary) && e.op == "-" && e.operand.is_a?(IntLit))
+    end
+
+    def int_lit(value, t, line, col)
+      t ||= "i64"
+      lo, hi = INT_RANGE[t]
+      if value < lo || value > hi
+        err("E003", "integer literal #{value} does not fit in #{t} (#{lo} to #{hi})", line, col)
+        return "error"
+      end
+      t
+    end
+
+    def printable?(t)
+      %w[bool str].include?(t) || int?(t) || @types[t]&.kind == :enum
     end
 
     # ---- calls --------------------------------------------------------
 
     # name: as written ("f", or "m.f" for a call into module m)
     def check_call(e, written, args, line, col)
-      if lookup(written)
-        args.each { |a| check_expr(a) }
-        err("E102", "'#{written}' is a variable, not a function", line, col)
-        return "error"
-      end
+      local = lookup(written)
+      return check_indirect_call(e, local, args, written, line, col) unless local.nil?
       name = qualify(written)
       if @type_fns.key?(name)
         types = args.map { |a| type_arg(a) }
@@ -1069,6 +1338,38 @@ module Egg
       record_call(sig, line, col)
       check_args(sig, args, written, line, col)
       sig.ret
+    end
+
+    # A function used as a value: its type is fn(...) R. Whoever takes the
+    # value can call it, so for the capability check this is a call edge
+    # (a module may hand out a function that uses its capabilities, as it
+    # may hand out a capability value).
+    def fn_value(e, sig, name, line, col)
+      if sig.params.any? { |_, mode| !mode.nil? }
+        err("E103", "'#{name}' has inout parameters, so it cannot be used as a value", line, col)
+        return "error"
+      end
+      return "error" if sig.params.any? { |t, _| t == "error" } || sig.ret == "error"
+      enqueue(sig)
+      record_call(sig, line, col)
+      e.info[:fn_ref] = sig.c_name
+      fn_type(sig.params.map(&:first), sig.ret)
+    end
+
+    # f(args) where f is a local of function type.
+    def check_indirect_call(e, info, args, written, line, col)
+      ft = @types[info.type]
+      info.used = true
+      unless ft&.kind == :fn
+        args.each { |a| check_expr(a) }
+        err("E102", "'#{written}' is a variable, not a function", line, col) unless info.type == "error"
+        return "error"
+      end
+      e.info[:indirect] = true
+      e.info[:args] = args
+      e.info[:params] = ft.fields.map { |t| [t, nil] }
+      check_args(Sig.new(written, e.info[:params], ft.inner), args, written, line, col)
+      ft.inner
     end
 
     # A call edge for the capability check.
@@ -1143,6 +1444,16 @@ module Egg
         return sig.ret
       end
       sig = @sigs[method_key(t, name)]
+      field = @types[t]&.kind == :struct ? (@types[t].fields || []).find { |n, _| n == name } : nil
+      if sig.nil? && !field.nil? && @types[field[1]]&.kind == :fn
+        # s.f(args) where f is a field of function type
+        ft = @types[field[1]]
+        e.info[:field_call] = true
+        e.info[:args] = args
+        e.info[:params] = ft.fields.map { |pt| [pt, nil] }
+        check_args(Sig.new(name, e.info[:params], ft.inner), args, name, line, col, [obj])
+        return ft.inner
+      end
       if sig.nil?
         hint = (@types[t]&.fields || []).any? { |n, _| n == name } ? "; '#{name}' is a field" : ""
         err("E122", "#{t} has no method '#{name}'#{hint}", line, col)
@@ -1188,9 +1499,18 @@ module Egg
           at = check_expr(a)
           if at == "void"
             err("E103", "'#{name}' cannot print a void value", a.line, a.col)
-          elsif at != "error" && !(%w[i64 bool str].include?(at) || @types[at]&.kind == :enum)
-            err("E103", "'#{name}' prints i64, bool, str and enums, not #{at}", a.line, a.col)
+          elsif at != "error" && !printable?(at)
+            err("E103", "'#{name}' prints integers, bool, str and enums, not #{at}", a.line, a.col)
           end
+        elsif pt == "integer"
+          at = check_expr(a)
+          err("E103", "'#{name}' needs an integer, found #{at}", a.line, a.col) unless at == "error" || int?(at)
+        elsif pt == "value"
+          # a.create(v): a copy of v in the arena; returns *T
+          at = check_expr(a)
+          return "error" if at == "error"
+          return value_type_error(at, "an allocated value", a.line, a.col) unless storable?(at)
+          ret = ptr_type(at)
         else
           expect_type(pt, check_expr(a, pt), a)
         end
@@ -1230,6 +1550,9 @@ module Egg
           inout_roots << [root, a] unless root.nil?
         elsif a.is_a?(SliceExpr)
           at = check_slice_arg(a, pt)
+          expect_type(pt, at, a)
+        elsif a.is_a?(AddrOf) && !pointee(pt).nil?
+          at = check_expr(a, pt)
           expect_type(pt, at, a)
         elsif a.is_a?(AddrOf)
           err("E121", "parameter #{i + 1} of '#{name}' is not inout; remove the '&'", a.line, a.col)
@@ -1315,6 +1638,7 @@ module Egg
       in StructLit[fields:] then fields.any? { |f| mentions?(f[1], name) }
       in ArrayLit[items:] then items.any? { |i| mentions?(i, name) }
       in AddrOf[expr:] then mentions?(expr, name)
+      in Deref[expr:] then mentions?(expr, name)
       in Try[expr:] then mentions?(expr, name)
       in Catch[expr:, fallback:] then mentions?(expr, name) || mentions?(fallback, name)
       else false
@@ -1419,12 +1743,67 @@ module Egg
         err("E112", "unknown builtin '@#{name}' (builtins: #{BUILTINS.map { |b| "@#{b}" }.join(', ')}, and @This, @import)", line, col)
         return check_all_error(args)
       end
-      if args.length != 1
-        err("E104", "'@#{name}' takes 1 argument but #{args.length} were given", line, col)
+      arity = BUILTIN_ARITY[name]
+      if args.length != arity
+        err("E104", "'@#{name}' takes #{arity} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
       end
       a = args[0]
+      if UNSAFE_BUILTINS.include?(name) && !require_unsafe("@#{name}", line, col)
+        return check_all_error(args)
+      end
       case name
+      when "ptrAdd"
+        # @ptrAdd(p, n): p moved by n elements (n may be negative)
+        t = check_expr(a)
+        expect_type("i64", check_expr(args[1], "i64"), args[1])
+        return "error" if t == "error"
+        return t unless pointee(t).nil?
+        err("E103", "@ptrAdd needs a pointer, found #{t}", a.line, a.col)
+        "error"
+      when "ptrCast"
+        # @ptrCast(*U, p): the same address as a pointer to U
+        t = type_arg(a)
+        pt = check_expr(args[1])
+        return "error" if t == "error" || pt == "error"
+        if pointee(t).nil? || pointee(pt).nil?
+          err("E103", "@ptrCast converts a pointer to another pointer type, found #{pointee(t).nil? ? t : pt}", line, col)
+          return "error"
+        end
+        t
+      when "strPtr"
+        # @strPtr(s): a pointer to the bytes of s, for C (not 0-terminated)
+        expect_type("str", check_expr(a, "str"), a)
+        ptr_type("u8")
+      when "intFromPtr"
+        t = check_expr(a)
+        err("E103", "@intFromPtr needs a pointer, found #{t}", a.line, a.col) unless t == "error" || !pointee(t).nil?
+        "usize"
+      when "ptrFromInt"
+        t = type_arg(a)
+        expect_type("usize", check_expr(args[1], "usize"), args[1])
+        return "error" if t == "error"
+        if pointee(t).nil?
+          err("E103", "@ptrFromInt makes a pointer, not a #{t}", a.line, a.col)
+          return "error"
+        end
+        t
+      when "as"
+        # @as(T, x): x converted to the integer type T; panics at run time
+        # if the value does not fit (a literal is checked now).
+        t = type_arg(a)
+        x = args[1]
+        if t != "error" && !int?(t)
+          err("E103", "@as converts between integer types, not to #{t}", line, col)
+          check_expr(x)
+          return "error"
+        end
+        xt = check_expr(x, t == "error" ? nil : t)
+        if xt != "error" && !int?(xt)
+          err("E103", "@as converts an integer, found #{xt}", x.line, x.col)
+          return "error"
+        end
+        t
       when "len"
         t = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
         if t != "error" && t != "str" && !%i[array slice].include?(@types[t]&.kind)

@@ -14,11 +14,13 @@ module Egg
   # funcs: top-level functions (including generic and type-returning ones)
   # types: TypeDecl for `const Name = struct/enum { ... }`
   # uses: UsesItem list from `uses alloc, io`; imports: ImportDecl list
+  # allows: UsesItem list from `allow unsafe`
   # modules: filled by the Loader for the merged program (prefix -> ModuleInfo)
-  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules)
+  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules, :allows)
   # owner: the struct a method belongs to (nil for free functions)
   # mod: prefix of the module it is declared in ("" for the root file)
-  Func     = Struct.new(:name, :params, :ret, :body, :line, :col, :owner, :mod)
+  # ext: for `extern fn` (no body), the UsesItem list after `uses`; else nil
+  Func     = Struct.new(:name, :params, :ret, :body, :line, :col, :owner, :mod, :ext)
   # mode: nil (by value), "inout", or "comptime"
   Param    = Struct.new(:name, :type, :line, :col, :mode)
   Block    = Struct.new(:stmts)
@@ -30,6 +32,8 @@ module Egg
   ErrType     = Struct.new(:inner)               # !T
   GenericType = Struct.new(:name, :args)         # Pair(i64): args are types
   ThisType    = Struct.new(:line, :col)          # @This() inside a struct body
+  PtrType     = Struct.new(:inner)               # *T
+  FnType      = Struct.new(:params, :ret)        # fn(T, U) R
 
   # const Name = struct { ... } / enum { ... } / union(enum) { ... }
   # members: FieldDecl list (a union member with no payload has type nil);
@@ -82,6 +86,8 @@ module Egg
   Try        = Struct.new(:expr, :line, :col, :ty, :info)                # try e
   Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info)     # e catch f
   TypeExpr   = Struct.new(:type, :line, :col, :ty, :info)                # a type in value position: []i64
+  Deref      = Struct.new(:expr, :line, :col, :ty, :info)                # p.*
+  NullLit    = Struct.new(:line, :col, :ty, :info)                       # null
 
   # A source type as text: "i64", "[3]i64", "[]str", "!i64", "Pair(i64)".
   def self.type_src(t)
@@ -92,6 +98,8 @@ module Egg
     when ErrType then "!#{type_src(t.inner)}"
     when GenericType then "#{t.name}(#{t.args.map { |a| type_src(a) }.join(', ')})"
     when ThisType then "@This()"
+    when PtrType then "*#{type_src(t.inner)}"
+    when FnType then "fn(#{t.params.map { |a| type_src(a) }.join(', ')}) #{type_src(t.ret)}"
     else t.to_s
     end
   end

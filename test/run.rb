@@ -67,8 +67,11 @@ def check_program(name, src, dir, path = nil, debug: false)
   panic = comment_values(src, "panic").first
   fails = comment_values(src, "fails").first
   if panic
-    ok = !status.success? && err.include?("egg panic: #{panic}")
-    report(ok, name, "expected panic '#{panic}', got status #{status.exitstatus}, stderr: #{err}")
+    # Output printed before the panic must survive it.
+    want = comment_values(src, "expect")
+    got = out.lines.map(&:chomp)
+    ok = !status.success? && err.include?("egg panic: #{panic}") && got == want
+    report(ok, name, "expected panic '#{panic}' after #{want.inspect}\ngot status #{status.exitstatus}, #{got.inspect}, stderr: #{err}")
   elsif fails
     # main returned an error: exit status 1 and "error: Name" on stderr.
     want = comment_values(src, "expect")
@@ -97,8 +100,9 @@ def bad_line_marks(c_source, src, path)
     # A line continues the previous one after "," "(" "[" or an operator, and
     # when it is a `.field = value` line of a multi-line struct literal.
     continued = prev.match?(/(,|\(|\[|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/)
-    # `uses` and `@import` lines declare, and generate no C.
-    declares = text.match?(/\Auses\s/) || text.match?(/\Aconst \w+ = @import\(/)
+    # `uses`, `allow`, `@import` and `extern fn` lines declare, and
+    # generate no code (an extern fn only a prototype).
+    declares = text.match?(/\A(uses|allow|extern)\s/) || text.match?(/\Aconst \w+ = @import\(/)
     code << i + 1 unless continued || declares || text.match?(/\A\}( else \{)?\z/)
     prev = text
   end
@@ -265,12 +269,16 @@ def check_lsp_modules
   good = File.join(ROOT, "examples", "modules.egg")
   bad = File.join(ROOT, "test", "errors", "cap_in_module.egg")
   undeclared = File.join(ROOT, "test", "errors", "cap_undeclared.egg")
+  cchar = File.join(ROOT, "examples", "lib", "cchar.egg")
   open_doc = ->(path) { { "method" => "textDocument/didOpen", "params" => { "textDocument" => { "uri" => "file://#{path}", "text" => File.read(path) } } } }
   req = [
     { "id" => 1, "method" => "initialize", "params" => {} },
     open_doc.(good),
     open_doc.(bad),
     open_doc.(undeclared),
+    open_doc.(cchar),
+    { "id" => 4, "method" => "textDocument/hover", "params" => { "textDocument" => { "uri" => "file://#{cchar}" }, "position" => { "line" => 3, "character" => 11 } } },
+    { "id" => 5, "method" => "textDocument/hover", "params" => { "textDocument" => { "uri" => "file://#{cchar}" }, "position" => { "line" => 5, "character" => 4 } } },
     { "id" => 3, "method" => "textDocument/hover", "params" => { "textDocument" => { "uri" => "file://#{undeclared}" }, "position" => { "line" => 2, "character" => 4 } } },
     { "id" => 2, "method" => "shutdown" },
     { "method" => "exit" }
@@ -279,6 +287,9 @@ def check_lsp_modules
   report(diags[0] == [], "lsp resolves imports next to the file", diags[0].inspect)
   hover = replies.dig(3, "result", "contents", "value").to_s.lines[1].to_s.strip
   report(hover == "fn main(out: Io) void  // uses io", "lsp hover shows capabilities despite E130", hover.inspect)
+  at = ->(id) { replies.dig(id, "result", "contents", "value").to_s.lines[1].to_s.strip }
+  report(at.(4) == "extern fn toupper(c: i32) i32  // allow unsafe" && at.(5) == "fn upper(b: u8) u8  // allow unsafe",
+         "lsp hover marks extern fns and unsafe files", [at.(4), at.(5)].inspect)
   d = diags[1]&.first
   ok = d && d["code"] == "E130" && d["range"]["start"] == { "line" => 0, "character" => 0 } && d["message"].include?("lib/quiet_print.egg:3:9: ")
   report(ok, "lsp shows an error in an imported file at the top", diags[1].inspect)
@@ -309,6 +320,35 @@ def check_loader(dir)
   end
   r = Egg.compile_to_c("fn main() void {\n}\n", nil, debug: true)
   report(r.diagnostics.empty? && !r.c_source.include?("#line"), "debug without a path builds without #line marks")
+end
+
+# An extern fn's symbol covers its whole declaration, over several lines.
+def check_lsp_extern
+  doc = { "uri" => "file:///t/e.egg" }
+  src = <<~EGG
+    allow unsafe
+
+    extern fn write(
+        fd: i32,
+        buf: *u8,
+        n: usize
+    ) i64 uses io
+
+    fn main() void {
+    }
+  EGG
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/documentSymbol", "params" => { "textDocument" => doc } },
+    { "id" => 3, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, _, status, err = lsp_session(req)
+  sym = (replies.dig(2, "result") || []).find { |x| x["name"] == "write" }
+  stop = sym && sym["range"]["end"]
+  report(stop == { "line" => 6, "character" => 13 }, "lsp extern fn symbol spans its declaration", sym.inspect)
+  report(status.success? && err.empty?, "lsp extern session ends cleanly", err)
 end
 
 def check_lsp
@@ -389,6 +429,7 @@ Dir.mktmpdir do |dir|
   check_lsp_generics
   check_lsp_v1
   check_lsp_modules
+  check_lsp_extern
 
   puts "spec/core.md"
   spec = File.read(File.join(ROOT, "spec", "core.md"))

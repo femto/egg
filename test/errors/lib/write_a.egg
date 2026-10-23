@@ -1,0 +1,5 @@
+// Declares write honestly, with uses io.
+uses io
+allow unsafe
+
+extern fn write(fd: i32, buf: *u8, n: usize) i64 uses io

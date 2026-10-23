@@ -1,0 +1,10 @@
+// Every integer type checks overflow, not just i64.
+// panic: integer overflow
+
+uses io
+
+fn main(out: Io) void {
+    const a: u8 = 200
+    const b: u8 = 100
+    out.print(a + b)
+}

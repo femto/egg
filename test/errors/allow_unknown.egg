@@ -1,0 +1,5 @@
+// error: E131 @2
+allow magic
+
+fn main() void {
+}

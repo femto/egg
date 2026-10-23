@@ -1,0 +1,14 @@
+// error: E131 @10
+// error: E121 @11
+// error: E131 @13
+// Pointers can be made (a.create) and held anywhere, but using them needs
+// `allow unsafe`.
+uses io, alloc
+
+fn main(out: Io, a: Allocator) void {
+    const p = a.create(5)
+    out.print(p.*)
+    const q = &p
+    out.print(p == null)
+    out.print(@intFromPtr(p))
+}

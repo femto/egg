@@ -1,0 +1,6 @@
+// error: E130 @lib/quiet_write.egg:4
+const w = @import("lib/quiet_write.egg")
+
+fn main() i64 {
+    return w.say("hi")
+}

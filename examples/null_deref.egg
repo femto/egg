@@ -1,0 +1,10 @@
+// Dereferencing null panics instead of crashing.
+// panic: null pointer dereference
+
+uses io
+allow unsafe
+
+fn main(out: Io) void {
+    const p: *i64 = null
+    out.print(p.*)
+}

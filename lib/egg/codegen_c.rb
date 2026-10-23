@@ -19,7 +19,10 @@
 # Value types map to C types passed by value: a struct to a C struct, an
 # array to a struct wrapping a C array (so it copies like a value), an
 # error union !T to { T value; int32_t err; } (err 0 = no error). A slice
-# is { const T *ptr; int64_t len; }; an inout parameter is a pointer.
+# is { const T *ptr; int64_t len; }; an inout parameter is a pointer. A
+# pointer *T is a C pointer, a function type a C function pointer, an
+# integer type its <stdint.h> type (usize is size_t). Structs and unions
+# are tagged and declared first, so a struct may point to itself.
 #
 # In a debug build, each declaration and statement is preceded by a
 # `#line N "file.egg"` directive (naming the module's own file), so a
@@ -54,11 +57,13 @@ module Egg
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
-                      egg_alloc egg_concat egg_int_str].freeze
+                      egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
         static void egg_panic(const char *msg) {
+            /* abort() need not flush stdio: keep what the program printed. */
+            fflush(stdout);
             fprintf(stderr, "egg panic: %s\\n", msg);
             abort();
         }
@@ -148,7 +153,7 @@ module Egg
             return (egg_str){ p, a.len + b.len };
         }
       C
-      "egg_int_str" => <<~C
+      "egg_int_str" => <<~C,
         static egg_str egg_int_str(int64_t x) {
             char buf[24];
             int n = snprintf(buf, sizeof buf, "%" PRId64, x);
@@ -157,12 +162,41 @@ module Egg
             return (egg_str){ p, n };
         }
       C
+      "egg_null_deref" => <<~C,
+        static void *egg_null_deref(void) {
+            egg_panic("null pointer dereference");
+            return NULL;
+        }
+      C
+      "egg_print_u64" => <<~C,
+        static void egg_print_u64(uint64_t x) { printf("%" PRIu64 "\\n", x); }
+      C
+      "egg_uint_str" => <<~C
+        static egg_str egg_uint_str(uint64_t x) {
+            char buf[24];
+            int n = snprintf(buf, sizeof buf, "%" PRIu64, x);
+            char *p = egg_alloc(n);
+            memcpy(p, buf, (size_t)n);
+            return (egg_str){ p, n };
+        }
+      C
     }.freeze
 
     # Helpers that call others.
-    HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"] }.freeze
+    HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"], "egg_uint_str" => ["egg_alloc"] }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
+    ARITH_NAME = { "+" => "add", "-" => "sub", "*" => "mul", "/" => "div", "%" => "mod" }.freeze
+
+    # Integer types: [C type, minimum, maximum]. i64 uses the helpers above;
+    # the others get theirs generated (int_helper) when used.
+    INT_C = {
+      "i8" => %w[int8_t INT8_MIN INT8_MAX], "i16" => %w[int16_t INT16_MIN INT16_MAX],
+      "i32" => %w[int32_t INT32_MIN INT32_MAX], "i64" => %w[int64_t INT64_MIN INT64_MAX],
+      "u8" => %w[uint8_t 0 UINT8_MAX], "u16" => %w[uint16_t 0 UINT16_MAX],
+      "u32" => %w[uint32_t 0 UINT32_MAX], "u64" => %w[uint64_t 0 UINT64_MAX],
+      "usize" => %w[size_t 0 SIZE_MAX]
+    }.freeze
 
     # debug_path: the root file's absolute path for a debug build, or nil
     def initialize(program, checker, debug_path = nil)
@@ -173,6 +207,7 @@ module Egg
       @root_path = debug_path
       @line_file = nil
       @need_cap = {}
+      @int_helpers = {} # name -> C text, generated in use order
       @out = +""
       @indent = 0
       @locals = []
@@ -202,6 +237,7 @@ module Egg
         next unless @used[name]
         out << HELPERS[name] << "\n"
       end
+      @int_helpers.each_value { |text| out << text << "\n" }
       @enum_names.each_key do |canon|
         info = @types[canon]
         names = info.members.map { |m| c_string(m) }.join(", ")
@@ -212,6 +248,8 @@ module Egg
         out << "static const char *const egg_error_names[] = { #{names.join(', ')} };\n"
       end
       out << "\n"
+      # One prototype per C function, however many files declare it.
+      @checker.externs.uniq(&:c_name).each { |sig| out << extern_prototype(sig) << ";\n" }
       @checker.concrete.each { |sig| out << signature(sig) << ";\n" }
       out << "\n" << body
       out
@@ -220,10 +258,93 @@ module Egg
     private
 
     # Record a helper call; every checked helper also needs egg_panic.
+    # The checked helper for `op` ("+", "-", ..., "neg") on integer type t.
+    def int_op(op, t)
+      return(op == "neg" ? helper("egg_neg") : helper(ARITH_FN[op])) if t == "i64"
+      kind = op == "neg" ? "neg" : ARITH_NAME[op]
+      name = "egg_#{kind}_#{t}"
+      unless @int_helpers.key?(name)
+        helper("egg_panic")
+        @int_helpers[name] = int_helper(kind, t, name)
+      end
+      name
+    end
+
+    # C for one checked operation on a non-i64 integer type. Narrow types
+    # compute in 64 bits and check the range; u64 and usize, which cannot
+    # be widened, check before computing.
+    def int_helper(kind, t, name)
+      ct, min, max = INT_C[t]
+      signed = t.start_with?("i")
+      wide = %w[u64 usize].include?(t)
+      ovf = 'egg_panic("integer overflow")'
+      body =
+        case kind
+        when "add", "sub", "mul"
+          op = { "add" => "+", "sub" => "-", "mul" => "*" }[kind]
+          if signed
+            "int64_t r = (int64_t)a #{op} (int64_t)b;\n    if (r < #{min} || r > #{max}) #{ovf};\n    return (#{ct})r;"
+          elsif kind == "sub"
+            "if (b > a) #{ovf};\n    return (#{ct})(a - b);"
+          elsif wide && kind == "add"
+            "if (a > #{max} - b) #{ovf};\n    return a + b;"
+          elsif wide
+            "if (a != 0 && b > #{max} / a) #{ovf};\n    return a * b;"
+          else
+            "uint64_t r = (uint64_t)a #{op} (uint64_t)b;\n    if (r > #{max}) #{ovf};\n    return (#{ct})r;"
+          end
+        when "div"
+          check = signed ? "\n    if (a == #{min} && b == -1) #{ovf};" : ""
+          "if (b == 0) egg_panic(\"division by zero\");#{check}\n    return (#{ct})(a / b);"
+        when "mod"
+          check = signed ? "\n    if (b == -1) return 0;" : ""
+          "if (b == 0) egg_panic(\"division by zero\");#{check}\n    return (#{ct})(a % b);"
+        when "neg"
+          return "static #{ct} #{name}(#{ct} a) {\n    if (a == #{min}) #{ovf};\n    return (#{ct})-a;\n}\n"
+        end
+      "static #{ct} #{name}(#{ct} a, #{ct} b) {\n    #{body}\n}\n"
+    end
+
+    # x of integer type `from` as integer type `to`, checked: the value is
+    # carried in 64 bits (signed or not, as `from` is) and must survive the
+    # round trip through `to` (comparisons with constants would be always
+    # true for some pairs, which -Wtype-limits rejects).
+    def as_conv(from, to, code)
+      ct, _, max = INT_C[to]
+      src = from.start_with?("i") ? "s" : "u"
+      wide = src == "s" ? "int64_t" : "uint64_t"
+      name = "egg_as_#{to}_#{src}"
+      unless @int_helpers.key?(name)
+        helper("egg_panic")
+        test =
+          if src == "s" && to.start_with?("i") then "(int64_t)r != x"
+          elsif src == "s" then "x < 0 || (uint64_t)r != (uint64_t)x"
+          elsif to.start_with?("i") then "x > (uint64_t)#{max}"
+          else "(uint64_t)r != x"
+          end
+        @int_helpers[name] = "static #{ct} #{name}(#{wide} x) {\n    #{ct} r = (#{ct})x;\n" \
+                             "    if (#{test}) egg_panic(\"integer cast out of range\");\n    return r;\n}\n"
+      end
+      "#{name}((#{wide})#{code})"
+    end
+
+    # An integer literal of type t.
+    def int_lit(value, t)
+      return(value == -9_223_372_036_854_775_808 ? "INT64_MIN" : "INT64_C(#{value})") if t == "i64" || t.nil?
+      ct, min, = INT_C[t]
+      return "UINT64_C(#{value})" if t == "u64"
+      # usize is as wide as a pointer: above 32 bits, check it fits size_t
+      # (a no-op on 64-bit targets, a panic instead of truncation on others).
+      return as_conv("u64", "usize", "UINT64_C(#{value})") if t == "usize" && value > 4_294_967_295
+      # The minimum (-128) is not writable as a C literal of its type.
+      return "((#{ct})#{min})" if value == TypeChecker::INT_RANGE[t][0] && value.negative?
+      "((#{ct})#{value})"
+    end
+
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || name == "egg_str_eq"
-      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str].include?(name)
+      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -251,8 +372,10 @@ module Egg
       when "Allocator"
         @need_cap[t] = true
         "egg_allocator"
+      when *INT_C.keys then INT_C[t][0]
       else
         info = @types[t]
+        return "#{c_type(info.inner)} *" if info&.kind == :ptr
         raise "codegen: unknown type #{t}" if info.nil?
         info.c_name
       end
@@ -260,7 +383,14 @@ module Egg
 
     # Typedefs in dependency order: a struct after the types it holds by
     # value. Slices hold only pointers and come last.
+    # Structs and unions are tagged and declared up front, so a pointer
+    # field can name a struct that is defined later (or itself).
     def emit_types
+      @checker.type_order.each do |c|
+        info = @types[c]
+        @out << "typedef struct #{info.c_name} #{info.c_name};\n" if %i[struct union].include?(info.kind)
+      end
+      @out << "\n" if @checker.type_order.any? { |c| %i[struct union].include?(@types[c].kind) }
       done = {}
       @checker.type_order.each { |c| emit_type(c, done) unless @types[c].kind == :slice }
       @checker.type_order.each { |c| emit_type(c, done) if @types[c].kind == :slice }
@@ -291,7 +421,7 @@ module Egg
         mark(info.fn_line) unless info.fn_line.nil?
         @out << "/* #{canon} */\n" unless info.fn_line.nil?
         mark(info.return_line || info.line)
-        @out << "typedef struct {\n"
+        @out << "struct #{info.c_name} {\n"
         if info.fields.empty?
           @out << "    char unused;\n"
         else
@@ -300,20 +430,20 @@ module Egg
             @out << "    #{c_type(t)} f_#{name};\n"
           end
         end
-        @out << "} #{info.c_name};\n\n"
+        @out << "};\n\n"
       when :union
         # { tag, union of payloads }; tag is the member's index.
         info.fields.each { |_, t, _| emit_type(t, done) unless t == "void" }
         mark(info.line)
         payloads = info.fields.reject { |_, t, _| t == "void" }
-        @out << "typedef struct {\n    int32_t tag;\n"
+        @out << "struct #{info.c_name} {\n    int32_t tag;\n"
         unless payloads.empty?
           @out << "    union {\n"
           payloads.each { |n, t, _| @out << "        #{c_type(t)} m_#{n};\n" }
           @out << "    } u;\n"
         end
         info.fields.each { |_, _, l| mark(l) unless l == info.line }
-        @out << "} #{info.c_name};\n\n"
+        @out << "};\n\n"
       when :array
         emit_type(info.elem, done)
         @out << "typedef struct { #{c_type(info.elem)} a[#{info.len}]; } #{info.c_name};\n"
@@ -327,6 +457,13 @@ module Egg
       when :slice
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
+      when :ptr
+        # A struct or union target is declared up front; others are needed.
+        emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
+      when :fn
+        (info.fields + [info.inner]).each { |t| emit_type(t, done) unless %i[struct union].include?(@types[t]&.kind) }
+        params = info.fields.empty? ? "void" : info.fields.map { |t| c_type(t) }.join(", ")
+        @out << "typedef #{c_type(info.inner)} (*#{info.c_name})(#{params});\n"
       end
     end
 
@@ -345,6 +482,12 @@ module Egg
       "#{c_type(sig.ret)} #{sig.c_name}(#{params_text})"
     end
 
+    # extern fn: the C function, declared with the exact C types.
+    def extern_prototype(sig)
+      params = sig.params.empty? ? "void" : sig.params.map { |t, _| c_type(t) }.join(", ")
+      "#{c_type(sig.ret)} #{sig.c_name}(#{params})"
+    end
+
     def gen_func(sig)
       @sig = sig
       @line_file = file_of(sig.func.mod)
@@ -358,6 +501,7 @@ module Egg
       mark(sig.func.line)
       @out << signature(sig) << " {\n"
       @indent = 1
+      (sig.unused || []).each { |name| line("(void)v_#{name};") }
       sig.func.body.stmts.each { |s| gen_stmt(s) }
       line("return (#{c_type('!void')}){ 0 };") if sig.ret == "!void"
       @out << "}\n\n"
@@ -671,22 +815,30 @@ module Egg
     def expr(e)
       case e
       in IntLit[value:]
-        value == -9_223_372_036_854_775_808 ? "INT64_MIN" : "INT64_C(#{value})"
+        int_lit(value, e.ty)
       in BoolLit[value:]
         value ? "true" : "false"
       in StrLit[value:]
         @need_str = true
         "((egg_str){ #{c_string(value)}, #{value.bytesize} })"
+      in Var[info: { fn_ref: String => c_name }]
+        c_name
       in Var[name:]
         var_ref(name)
+      in Unary[op:, operand:, info: { neg_lit: true }]
+        int_lit(-operand.value, e.ty)
       in Unary[op:, operand:]
-        op == "-" ? "#{helper("egg_neg")}(#{expr(operand)})" : "(!#{expr(operand)})"
+        op == "-" ? "#{int_op('neg', e.ty)}(#{expr(operand)})" : "(!#{expr(operand)})"
       in Binary[op:, lhs:, rhs:]
         binary(op, lhs, rhs)
+      in Call[name:, info: { indirect: true } => info]
+        call(var_ref(name), info[:args], info[:params], [], e.ty)
       in Call[info:]
         call(info[:c_name], info[:args], info[:params], [], e.ty)
       in MethodCall[obj:, info: { cap_method: String => m }]
         cap_call(m, obj, e.args, e.ty)
+      in MethodCall[obj:, name:, info: { field_call: true } => info]
+        call("#{struct_value(obj)}.f_#{name}", info[:args], info[:params], [], e.ty)
       in MethodCall[obj:, info:]
         recv = []
         unless info[:static]
@@ -725,6 +877,12 @@ module Egg
         "((#{c_type(e.ty)})#{info[:enum_index]})"
       in ErrorLit[info:]
         info[:error_id].to_s
+      in NullLit
+        "((#{c_type(e.ty)})0)"
+      in AddrOf[expr: place]
+        "(&#{lvalue(place)})"
+      in Deref
+        lvalue(e)
       in Try[expr: inner]
         r = hoist(expr(inner), inner.ty)
         line("if (#{r}.err) return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
@@ -757,11 +915,10 @@ module Egg
     end
 
     def binary(op, lhs, rhs)
-      fn = ARITH_FN[op]
-      if fn
+      if ARITH_FN.key?(op)
         a = expr(lhs)
         b = expr(rhs)
-        return "#{helper(fn)}(#{a}, #{b})"
+        return "#{int_op(op, lhs.ty)}(#{a}, #{b})"
       end
       if op == "and" || op == "or"
         a = expr(lhs)
@@ -817,12 +974,26 @@ module Egg
                when "bool" then "#{helper('egg_print_bool')}(#{codes[0]})"
                when "str" then "#{helper('egg_print_str')}(#{codes[0]})"
                when "i64" then "#{helper('egg_print_i64')}(#{codes[0]})"
+               when "i8", "i16", "i32" then "#{helper('egg_print_i64')}((int64_t)#{codes[0]})"
+               when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}((uint64_t)#{codes[0]})"
                else
                  @enum_names[t] = true
                  "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{codes[0]}])"
                end
+             when "Allocator.create"
+               # A copy of the value in the arena.
+               t = args[0].ty
+               ptr = tmp
+               line("#{c_type(t)} *#{ptr} = (#{c_type(t)} *)#{helper('egg_alloc')}((int64_t)sizeof(#{c_type(t)}));")
+               line("*#{ptr} = #{codes[0]};")
+               ptr
              when "Allocator.concat" then "#{helper('egg_concat')}(#{codes[0]}, #{codes[1]})"
-             when "Allocator.int_str" then "#{helper('egg_int_str')}(#{codes[0]})"
+             when "Allocator.int_str"
+               if args[0].ty.start_with?("i")
+                 "#{helper('egg_int_str')}((int64_t)#{codes[0]})"
+               else
+                 "#{helper('egg_uint_str')}((uint64_t)#{codes[0]})"
+               end
              else raise "codegen: unknown capability method #{m}"
              end
       text = "((void)#{recv}, #{text})"
@@ -833,6 +1004,16 @@ module Egg
     def builtin(e, name, args)
       a = args[0]
       case name
+      when "ptrAdd" then "(#{expr(a)} + #{expr(args[1])})"
+      when "ptrCast" then "((#{c_type(e.ty)})(void *)#{expr(args[1])})"
+      when "strPtr" then "((uint8_t *)#{expr(a)}.ptr)"
+      when "intFromPtr" then "((size_t)(uintptr_t)#{expr(a)})"
+      when "ptrFromInt" then "((#{c_type(e.ty)})(uintptr_t)#{expr(args[1])})"
+      when "as"
+        x = args[1]
+        code = expr(x)
+        return code if x.ty == e.ty
+        as_conv(x.ty, e.ty, code)
       when "len"
         code = expr(a)
         len = e.info[:len]
@@ -896,6 +1077,7 @@ module Egg
     def place?(e)
       case e
       in Var[info:] then !info.nil? && info[:local] == true
+      in Deref then true
       in Field[obj:, info:] then (info.nil? || (info[:enum_index].nil? && info[:union_tag].nil?)) && place?(obj)
       in Index[obj:] then place?(obj) && obj.ty != "str" && @types[obj.ty]&.kind == :array
       else false
@@ -905,6 +1087,10 @@ module Egg
     def lvalue(e)
       case e
       in Var[name:] then var_ref(name)
+      in Deref[expr: ptr]
+        # Checked: a null pointer panics instead of crashing.
+        p = place?(ptr) ? lvalue(ptr) : hoist(expr(ptr), ptr.ty)
+        "(*(#{p} != NULL ? #{p} : (#{c_type(ptr.ty)})#{helper('egg_null_deref')}()))"
       in Field[obj:, name:] then "#{lvalue(obj)}.f_#{name}"
       in Index[obj:, index:, info:]
         "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"

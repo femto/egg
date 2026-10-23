@@ -17,8 +17,9 @@ module Egg
   # prefix: "" for the root; path: absolute path (nil for an unsaved root);
   # file: path shown in diagnostics (nil for the root); uses: UsesItem list;
   # aliases: import name -> prefix of the module it names;
-  # names: top-level names declared in the module (unqualified)
-  ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports)
+  # names: top-level names declared in the module (unqualified);
+  # allows: UsesItem list from `allow unsafe`
+  ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows)
 
   # The global name of `name` declared in module `mod`.
   def self.qualify(mod, name)
@@ -53,7 +54,7 @@ module Egg
           mod.aliases[imp.name] = target.prefix
         end
       end
-      Program.new(@funcs, @types, root.uses, root.imports, @modules)
+      Program.new(@funcs, @types, root.uses, root.imports, @modules, root.allows)
     end
 
     private
@@ -88,7 +89,7 @@ module Egg
 
     def add_module(prefix, path, file, prog)
       names = prog.funcs.map(&:name) + prog.types.map(&:name)
-      mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports)
+      mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports, prog.allows || [])
       @modules[prefix] = mod
       @by_path[path] = mod unless path.nil?
       prog.types.each do |d|
@@ -101,7 +102,7 @@ module Egg
         f.name = Egg.qualify(mod, f.name)
         f.mod = prefix
         # Methods of a type function's struct.
-        st = f.body.stmts.length == 1 && f.body.stmts[0].is_a?(Return) ? f.body.stmts[0].value : nil
+        st = !f.body.nil? && f.body.stmts.length == 1 && f.body.stmts[0].is_a?(Return) ? f.body.stmts[0].value : nil
         st.methods.each { |m| m.mod = prefix } if st.is_a?(StructTypeExpr)
         @funcs << f
       end

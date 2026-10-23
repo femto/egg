@@ -6,7 +6,8 @@ on demand. See the design doc ([English](docs/design.md) · [中文](docs/design
 for the full picture.
 
 This repository holds **eggc**, the first compiler, now partway through
-**v2** (modules and capability checking are in): written
+**v2** (modules, capabilities, integer types, pointers and `extern fn` are
+in; ownership is next): written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
 compiles), running on CRuby 3.0+, emitting portable C99.
 
@@ -86,6 +87,16 @@ v2 so far:
 - **Capability check** (E130): following the call graph across files and
   generic instances, a function that uses a capability its file does not
   declare is rejected; hover in the editor shows what each function uses
+- Integer types `i8`…`i64`, `u8`…`u64`, `usize`, all overflow-checked;
+  literals take their type from context; `@as(T, x)` converts (checked)
+- Raw pointers `*T`, `null`, `a.create(v)`; holding, passing and
+  comparing them is safe, but pointer operations (taking an address with
+  `&x` outside an `inout` argument, `p.*`, `@ptrAdd`, `@ptrCast`, ...) need
+  `allow unsafe` in the file, which does not spread to importers; `p.*` on
+  null panics
+- Function values `fn(T) R`: passed, returned, stored in fields, called
+- `extern fn toupper(c: i32) i32` (in an unsafe file) calls C; `uses io`
+  on the declaration says what the C function does
 
 From v1:
 
@@ -99,7 +110,9 @@ From v1:
   or `comptime T: type`; generic functions and type functions
   (`fn Pair(comptime T: type) type { return struct { ... } }`)
 - Errors as values: `error.X`, `try`, `catch`; `main` may return `!void`
-- Builtins: `@len`, `@sizeOf`, `@typeName`, `@splat`, `@This`, `@import`
+- Builtins: `@len`, `@sizeOf`, `@typeName`, `@splat`, `@This`, `@import`,
+  `@as`; for pointers `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`,
+  `@strPtr`
 
 Design choices worth knowing:
 
