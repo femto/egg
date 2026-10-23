@@ -27,10 +27,10 @@ The core follows Zig but stays smaller: it keeps only features that need no runt
 | Integers | `i8`…`i64`, `u8`…`u64`, `usize` | v0 (`i64` only) |
 | Other primitives | `bool`, `f32`, `f64`, `void` | v0 |
 | Composite types | `struct`, `enum`, tagged unions | v1 |
-| Pointers and memory | single-item pointers, slices, arrays | v1 |
+| Pointers and memory | slices, arrays; single-item pointers | v1; pointers v2 (behind `allow unsafe`) |
 | Control flow | `if`, `while`, `for`, `switch`, all expressions | v0 (`if`, `while` first) |
 | Errors | errors as values (like `!T`), `try` | v1 |
-| Compile time | `comptime` parameters, generics (functions returning `type`), reflection | v1 |
+| Compile time | `comptime` parameters, generics (functions returning `type`); reflection (`@typeInfo`) | v1; reflection after v1 |
 
 **Type syntax is prefix and reads left to right**, as in Go and Zig. Every modifier sits on the left of the type it modifies:
 
@@ -192,12 +192,12 @@ The C that Egg generates must be portable from day one:
 
 ## Roadmap
 
-Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting.
+Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. Next, v2 adds raw pointers and function values behind `allow unsafe`, `extern fn`, the `Allocator` and `Io` capability values, and ownership checking.
 
 | Phase | Scope | Acceptance gate |
 | --- | --- | --- |
-| v0 · Core subset | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
-| v1 · Types and comptime | `struct`, `enum`, tagged unions, slices; error values, comptime generics, reflection | Generic `Pair` and error-value examples pass their tests |
+| v0 · Core subset ✅ | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
+| v1 · Types and comptime ✅ | `struct` with methods, `enum`, tagged unions, `str`, arrays, second-class slices, `inout`; error values; comptime generics; `@sizeOf`, `@typeName` | Generic `Pair` and error-value examples pass their tests |
 | v2 · Capability checks | `alloc` and `io` capabilities; recursive check along the call graph | Programs using undeclared capabilities are rejected |
 | v3 · GC written in core | `gc` library uses only core code | `gc` declares no capabilities and passes the capability check |
 | v4 · Self-hosting | `eggc` rewritten in Egg, compiled by the previous generation | Generation 2 and 3 output is byte-identical |

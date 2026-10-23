@@ -1,0 +1,59 @@
+// Structs with methods (value and inout receivers), enums, str.
+// expect: 25
+// expect: 10
+// expect: 3
+// expect: blue
+// expect: cool
+// expect: corner
+// expect: true
+// expect: true
+// expect: 6
+
+const Color = enum { red, green, blue }
+
+const Point = struct {
+    x: i64
+    y: i64
+
+    fn origin() Point {
+        return Point{ .x = 0, .y = 0 }
+    }
+
+    fn len2(self: Point) i64 {
+        return self.x * self.x + self.y * self.y
+    }
+
+    fn move(inout self: Point, dx: i64, dy: i64) void {
+        self.x = self.x + dx
+        self.y = self.y + dy
+    }
+}
+
+const Pixel = struct {
+    at: Point
+    color: Color
+    name: str
+}
+
+fn describe(c: Color) str {
+    if (c == .red) {
+        return "warm"
+    }
+    return "cool"
+}
+
+fn main() void {
+    var p = Point.origin()
+    p.move(3, 4)
+    @print(p.len2())
+    var px = Pixel{ .at = p, .color = .blue, .name = "corner" }
+    px.at.x = 10
+    @print(px.at.x)
+    @print(p.x)
+    @print(px.color)
+    @print(describe(px.color))
+    @print(px.name)
+    @print(px.color == Color.blue)
+    @print("hi" == "hi")
+    @print(@len(px.name))
+}

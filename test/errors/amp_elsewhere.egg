@@ -1,0 +1,7 @@
+// error: E121 @4
+fn main() void {
+    var x = 1
+    const y = &x
+    x = 2
+    @print(y)
+}

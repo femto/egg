@@ -1,0 +1,11 @@
+// Indexing is checked: out of range panics instead of reading memory.
+// panic: index out of bounds
+
+fn get(xs: []i64, i: i64) i64 {
+    return xs[i]
+}
+
+fn main() void {
+    const a = [3]i64{ 1, 2, 3 }
+    @print(get(a[0..], 3))
+}

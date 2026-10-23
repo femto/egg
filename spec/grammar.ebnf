@@ -1,42 +1,82 @@
-(* Egg v0 core grammar.
+(* Egg v1 core grammar.
    Machine-readable source of truth for the parser in lib/egg/parser.rb.
    NL is a newline token. Statements end at NL or before '}'.
-   A newline may appear after a binary operator, after '(' and ',',
-   and before 'else'; nowhere else inside an expression. *)
+   Inside an expression a newline may appear only where `nl` is written:
+   after a binary operator, after '(' '[' '{' and ',', and before ')' ']'
+   '}'; a statement may also continue onto 'else'. *)
 
-program     = { NL } , { func , { NL } } , EOF ;
+nl          = { NL } ;
 
-func        = "fn" , IDENT , "(" , [ params ] , ")" , type , block ;
-params      = param , { "," , param } , [ "," ] ;
-param       = IDENT , ":" , type ;
-type        = "i64" | "bool" | "void" ;            (* void only as a return type *)
+program     = { NL } , { ( func | type_decl ) , { NL } } , EOF ;
+
+func        = "fn" , IDENT , params , type , block ;
+params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;
+param       = [ "inout" | "comptime" ] , IDENT , ":" , type ;
+
+type        = IDENT                                  (* i64 bool str void type, or a declared type *)
+            | IDENT , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")"
+                                                     (* type function instance: Pair(i64), Unit() *)
+            | "[" , nl , INT , "]" , type            (* array *)
+            | "[" , nl , "]" , type                  (* slice: parameters, arguments, for subjects *)
+            | "!" , type                             (* error union *)
+            | "@This" , "(" , ")" ;
+
+type_decl   = "const" , IDENT , "=" , ( struct_body_kw | enum_body | union_body ) ;
+struct_body_kw = "struct" , struct_body ;
+struct_body = "{" , { NL } , { ( field | func ) , [ "," ] , { NL } } , "}" ;
+field       = IDENT , ":" , type ;
+enum_body   = "enum" , "{" , { NL } , IDENT , { [ "," ] , { NL } , IDENT } , [ "," ] , { NL } , "}" ;
+union_body  = "union" , "(" , "enum" , ")" , "{" , { NL } ,
+              { func , [ "," ] , { NL } } ,          (* at least one member *)
+              IDENT , [ ":" , type ] , [ "," ] , { NL } ,
+              { ( IDENT , [ ":" , type ] | func ) , [ "," ] , { NL } } , "}" ;
 
 block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}" ;
 
-stmt        = var_decl | assign | if_stmt | while_stmt | return_stmt | expr ;
+stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
+            | "break" | "continue" | return_stmt | expr ;
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
-assign      = IDENT , "=" , expr ;
-if_stmt     = "if" , "(" , expr , ")" , block , [ "else" , ( if_stmt | block ) ] ;
+assign      = place , "=" , expr ;
+place       = IDENT , { "." , IDENT | "[" , expr , "]" } ;
+if_stmt     = "if" , "(" , expr , ")" , block , [ nl , "else" , ( if_stmt | block ) ] ;
 while_stmt  = "while" , "(" , expr , ")" , block ;
+for_stmt    = "for" , "(" , expr , ")" , "|" , IDENT , [ "," , IDENT ] , "|" , block ;
+switch_stmt = "switch" , "(" , expr , ")" , "{" , { NL } , { arm , [ "," ] , { NL } } , "}" ;
+arm         = ( "." , IDENT , { "," , "." , IDENT } | "else" ) , "=>" ,
+              [ "|" , IDENT , "|" ] , block ;
 return_stmt = "return" , [ expr ] ;
 
-expr        = or_expr ;
-or_expr     = and_expr , { "or" , and_expr } ;
-and_expr    = cmp_expr , { "and" , cmp_expr } ;
-cmp_expr    = add_expr , [ cmp_op , add_expr ] ;   (* not chainable: a < b < c is E002 *)
+expr        = or_expr , { "catch" , nl , or_expr } ;
+or_expr     = and_expr , { "or" , nl , and_expr } ;
+and_expr    = cmp_expr , { "and" , nl , cmp_expr } ;
+cmp_expr    = add_expr , [ cmp_op , nl , add_expr ] ;   (* not chainable: a < b < c is E002 *)
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
-add_expr    = mul_expr , { ( "+" | "-" ) , mul_expr } ;
-mul_expr    = unary , { ( "*" | "/" | "%" ) , unary } ;
-unary       = ( "-" | "!" ) , unary | primary ;
-primary     = INT | "true" | "false"
-            | IDENT , [ args ]                      (* variable or call *)
-            | BUILTIN , args                        (* @print(...) *)
-            | "(" , expr , ")" ;
-args        = "(" , [ expr , { "," , expr } , [ "," ] ] , ")" ;
+add_expr    = mul_expr , { ( "+" | "-" ) , nl , mul_expr } ;
+mul_expr    = unary , { ( "*" | "/" | "%" ) , nl , unary } ;
+unary       = ( "-" | "!" | "try" | "&" ) , unary | postfix ;
+postfix     = primary , { "." , IDENT , [ args ]            (* field, method call *)
+                        | "[" , nl , expr , nl , "]"        (* index *)
+                        | "[" , nl , expr , nl , ".." , nl , [ expr , nl ] , "]"    (* slice *)
+                        | struct_lit } ;                    (* after a capitalised type *)
+struct_lit  = "{" , { NL } , { "." , IDENT , "=" , expr , [ "," ] , { NL } } , "}" ;
+primary     = INT | STRING | "true" | "false"
+            | IDENT , [ args ]                      (* variable, call, type name *)
+            | BUILTIN , args                        (* @print(...) ... *)
+            | "@This" , "(" , ")"
+            | "." , IDENT                           (* enum member, typed by context *)
+            | "error" , "." , IDENT
+            | "[" , nl , ( INT | "_" ) , "]" , type ,
+              "{" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ] , "}"
+            | "[" , nl , "]" , type                 (* a slice type as a value *)
+            | "struct" , struct_body                (* only as a type function's result *)
+            | "(" , nl , expr , nl , ")" ;
+args        = "(" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ] , ")" ;
 
 (* Lexical *)
 IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)
 INT         = digit , { digit | "_" } ;            (* must fit in i64 *)
+STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \t \\ \" \0 *)
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;
-KEYWORDS    = fn return if else while var const true false and or ;
+KEYWORDS    = fn return if else while for break continue switch var const
+              true false and or struct enum union try catch error inout comptime ;

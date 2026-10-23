@@ -1,0 +1,8 @@
+// error: E123 @4
+const U = union(enum) { a: i64, b: bool }
+fn main() void {
+    const u = U{ .a = 1, .b = true }
+    switch (u) {
+        else => {}
+    }
+}

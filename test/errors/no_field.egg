@@ -1,0 +1,6 @@
+// error: E122 @5
+const P = struct { x: i64 }
+fn main() void {
+    const p = P{ .x = 1 }
+    @print(p.y)
+}

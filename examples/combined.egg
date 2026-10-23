@@ -1,0 +1,115 @@
+// Nested value types, a generic container with error values, and
+// conditions with calls that must keep short-circuit evaluation.
+// expect: 32
+// expect: big
+// expect: 13
+// expect: 8
+// expect: 20
+// expect: 1
+// expect: 0
+// expect: 2
+// expect: 200
+// expect: 0
+// expect: 0
+// expect: true
+
+const Kind = enum { small, big }
+
+const Item = struct {
+    name: str
+    size: i64
+    kind: Kind
+}
+
+const Box = struct {
+    items: [3]Item
+    grid: [2][2]i64
+}
+
+fn Stack(comptime T: type) type {
+    return struct {
+        data: [4]T
+        len: i64
+
+        fn push(inout self: @This(), v: T) !void {
+            if (self.len == 4) {
+                return error.Full
+            }
+            self.data[self.len] = v
+            self.len = self.len + 1
+        }
+
+        fn top(self: @This()) !T {
+            if (self.len == 0) {
+                return error.Empty
+            }
+            return self.data[self.len - 1]
+        }
+    }
+}
+
+fn classify(n: i64) Kind {
+    if (n > 5) {
+        return .big
+    }
+    return .small
+}
+
+fn noisy(n: i64) bool {
+    @print(n)
+    return n > 1
+}
+
+fn largest(comptime T: type, xs: []T) T {
+    var best = xs[0]
+    for (xs[1..]) |x| {
+        if (x > best) {
+            best = x
+        }
+    }
+    return best
+}
+
+fn sizes(items: []Item) i64 {
+    var t = 0
+    for (items) |it| {
+        t = t + it.size
+    }
+    return t
+}
+
+fn fill(n: i64) !Stack(i64) {
+    var s = Stack(i64){ .data = @splat(0), .len = 0 }
+    var i = 0
+    while (i < n) {
+        try s.push(i * 10)
+        i = i + 1
+    }
+    return s
+}
+
+fn main() !void {
+    var b = Box{
+        .items = [3]Item{ Item{ .name = "a", .size = 3, .kind = classify(3) }, Item{ .name = "b", .size = 9, .kind = classify(9) }, Item{ .name = "c", .size = 1, .kind = .small } },
+        .grid = [2][2]i64{ [2]i64{ 1, 2 }, [2]i64{ 3, 4 } },
+    }
+    b.grid[1][0] = 30
+    @print(b.grid[1][0] + b.grid[0][1])
+    @print(b.items[1].kind)
+    @print(sizes(b.items[0..]))
+    @print(largest(i64, [4]i64{ 4, 8, 2, 6 }[0..]))
+    const s = try fill(3)
+    @print(try s.top())
+    @print((fill(9) catch Stack(i64){ .data = @splat(7), .len = 1 }).len)
+    if (noisy(0) and noisy(5)) {
+        @print(100)
+    } else if (noisy(2) or noisy(3)) {
+        @print(200)
+    }
+    var k = 0
+    while (noisy(k)) {
+        k = k + 1
+    }
+    @print(k)
+    @print(k == 0 or noisy(42))
+}

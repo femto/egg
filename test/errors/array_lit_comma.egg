@@ -1,0 +1,5 @@
+// error: E002 @3
+fn main() void {
+    const a = [2]i64{ 1 2 }
+    @print(a[0])
+}

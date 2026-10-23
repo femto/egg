@@ -1,0 +1,8 @@
+// error: E127 @5
+const L = enum { a, b }
+fn main() void {
+    switch (L.a) {
+        else => {}
+        .a => {}
+    }
+}

@@ -1,0 +1,9 @@
+// error: E117 @7
+fn add_into(inout acc: i64, x: i64) void {
+    acc = acc + x
+}
+fn main() void {
+    var total = 1
+    add_into(&total, total)
+    @print(total)
+}

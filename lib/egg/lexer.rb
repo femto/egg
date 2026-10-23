@@ -6,10 +6,11 @@
 module Egg
   Token = Struct.new(:kind, :text, :line, :col)
 
-  KEYWORDS = %w[fn return if else while var const true false and or].freeze
+  KEYWORDS = %w[fn return if else while var const true false and or
+                struct enum union switch for break continue try catch error inout comptime].freeze
 
-  # Longest operators first so "==" wins over "=".
-  OPERATORS = %w[== != <= >= ( ) { } , : = < > + - * / % !].freeze
+  # Longest operators first so "==" wins over "=" and ".." over ".".
+  OPERATORS = %w[== != <= >= => .. ( ) { } [ ] , : = < > + - * / % ! . | &].freeze
 
   class Lexer
     def initialize(src)
@@ -36,6 +37,8 @@ module Egg
           lex_ident
         elsif c == "@"
           lex_builtin
+        elsif c == "\""
+          lex_string
         else
           lex_operator
         end
@@ -54,6 +57,41 @@ module Egg
       advance while @pos < @src.length && (digit?(@src[@pos]) || @src[@pos] == "_")
       text = @src[start...@pos].delete("_")
       @tokens << Token.new(:int, text, line, col)
+    end
+
+    # "..." on one line, with escapes \n \t \\ \" \0.
+    def lex_string
+      line = @line
+      col = @col
+      advance # opening quote
+      out = +""
+      while true
+        if @pos >= @src.length || @src[@pos] == "\n"
+          raise CompileError.new(Diagnostic.new("E001", "unterminated string literal", line, col))
+        end
+        c = @src[@pos]
+        if c == "\""
+          advance
+          break
+        end
+        if c == "\\"
+          advance
+          e = @pos < @src.length ? @src[@pos] : ""
+          if e == "n" then out << "\n"
+          elsif e == "t" then out << "\t"
+          elsif e == "\\" then out << "\\"
+          elsif e == "\"" then out << "\""
+          elsif e == "0" then out << "\0"
+          else
+            raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in string", @line, @col))
+          end
+          advance
+        else
+          out << c
+          advance
+        end
+      end
+      @tokens << Token.new(:string, out, line, col)
     end
 
     def lex_ident

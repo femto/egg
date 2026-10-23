@@ -1,0 +1,7 @@
+// error: E116 @2
+fn first_two(xs: []i64) []i64 {
+    return xs
+}
+fn main() void {
+    @print(1)
+}

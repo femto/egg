@@ -1,0 +1,8 @@
+// error: E105 @4
+// An inout slice parameter: only the slice rule can reject the assignment.
+fn zero(inout xs: []i64) void {
+    xs[0] = 0
+}
+
+fn main() void {
+}

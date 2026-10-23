@@ -1,0 +1,10 @@
+// panic: slice out of bounds
+
+fn total(xs: []i64) i64 {
+    return @len(xs)
+}
+
+fn main() void {
+    const a = [3]i64{ 1, 2, 3 }
+    @print(total(a[2..5]))
+}

@@ -1,0 +1,7 @@
+// error: E125 @6
+fn id(comptime T: type, x: T) T {
+    return x
+}
+fn main() void {
+    @print(id(5, 5))
+}

@@ -1,0 +1,6 @@
+// error: E115 @4
+const Color = enum { red, green }
+fn main() void {
+    const c = .red
+    @print(c)
+}

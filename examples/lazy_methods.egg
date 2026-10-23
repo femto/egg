@@ -1,0 +1,35 @@
+// Methods of a generic type are checked only when called: Box(Tag) is
+// fine even though Box.bigger would need `>` on a Tag.
+// expect: 7
+// expect: second
+
+const Tag = enum { first, second }
+
+fn Box(comptime T: type) type {
+    return struct {
+        a: T
+        b: T
+
+        fn bigger(self: @This()) T {
+            if (self.a > self.b) {
+                return self.a
+            }
+            return self.b
+        }
+
+        fn last(self: @This()) T {
+            return self.b
+        }
+    }
+}
+
+fn unused_helper() i64 {
+    return 1
+}
+
+fn main() void {
+    const n = Box(i64){ .a = 7, .b = 3 }
+    @print(n.bigger())
+    const t = Box(Tag){ .a = .first, .b = .second }
+    @print(t.last())
+}
