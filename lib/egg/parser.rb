@@ -2,7 +2,7 @@
 #
 # Grammar is in spec/grammar.ebnf. Statements end at a newline or '}'.
 # A newline is allowed after a binary operator, after '(' '[' '{' and ',',
-# and before 'else'; nowhere else inside an expression.
+# before ')' ']' '}', and before 'else'; nowhere else inside an expression.
 #
 # Loops are written `while true` rather than `loop do` so a CompileError
 # raised inside keeps its diagnostic under older Spinel builds.

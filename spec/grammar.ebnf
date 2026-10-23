@@ -14,8 +14,8 @@ params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;
 param       = [ "inout" | "comptime" ] , IDENT , ":" , type ;
 
 type        = IDENT                                  (* i64 bool str void type, or a declared type *)
-            | IDENT , "(" , nl , type , { "," , nl , type } , [ "," ] , nl , ")"
-                                                     (* type function instance: Pair(i64) *)
+            | IDENT , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")"
+                                                     (* type function instance: Pair(i64), Unit() *)
             | "[" , nl , INT , "]" , type            (* array *)
             | "[" , nl , "]" , type                  (* slice: parameters, arguments, for subjects *)
             | "!" , type                             (* error union *)

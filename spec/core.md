@@ -43,8 +43,8 @@ fn add(a: i64, b: i64) i64 {
 - String literals are `"..."` on one line, with escapes `\n \t \\ \" \0`.
 - `//` starts a comment that runs to the end of the line.
 - **Newlines end statements.** A newline may also appear after a binary
-  operator, after `(` `[` `{` or `,`, and before `else`. Anywhere else inside
-  an expression, a newline is a syntax error (E002).
+  operator, after `(` `[` `{` or `,`, before `)` `]` `}`, and before `else`.
+  Anywhere else inside an expression, a newline is a syntax error (E002).
 - A capitalised type name followed by `{` is a type literal: a struct
   literal (`Point{ .x = 1 }`) or a union literal (`Shape{ .circle = 2 }`).
   This is why type names start with a capital letter: `if (ok) {` stays a
@@ -52,11 +52,28 @@ fn add(a: i64, b: i64) i64 {
 
 ```egg
 // expect: 6
+// expect: 3
+fn Pair(comptime T: type) type {
+    return struct {
+        a: T
+        b: T
+    }
+}
+
+fn sum(p: Pair(
+    i64
+)) i64 {
+    return p.a + p.b
+}
+
 fn main() void {
     const total = 1 +
                   2 +
                   3
     @print(total)
+    @print(sum(
+        Pair(i64){ .a = 1, .b = 2 }
+    ))
 }
 ```
 
