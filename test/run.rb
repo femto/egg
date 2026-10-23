@@ -296,11 +296,14 @@ def check_loader(dir)
   File.write(locked, "fn f() void {\n}\n")
   File.chmod(0o000, locked)
   begin
-    r = Egg.compile_to_c("const m = @import(\"#{locked}\")\nfn main() void {\n}\n")
-    d = r.diagnostics.first
-    # Skipped where permissions do not apply (running as root).
-    unreadable = !File.readable?(locked)
-    report(!unreadable || (d && d.code == "E129" && d.message.include?("cannot read")), "an unreadable import is E129", d&.to_text("main.egg"))
+    if File.readable?(locked)
+      # Permissions do not apply (running as root): nothing to check.
+      puts "  skip  an unreadable import is E129 (the file is readable anyway)"
+    else
+      r = Egg.compile_to_c("const m = @import(\"#{locked}\")\nfn main() void {\n}\n")
+      d = r.diagnostics.first
+      report(d && d.code == "E129" && d.message.include?("cannot read"), "an unreadable import is E129", d&.to_text("main.egg"))
+    end
   ensure
     File.chmod(0o644, locked)
   end
