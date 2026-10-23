@@ -13,10 +13,10 @@ program imports:
 |------|-------|---------|-------------|
 | E001 | lexer | unexpected character | remove it |
 | E002 | parser | syntax error (also: chained comparison `a < b < c`) | follow spec/grammar.ebnf |
-| E003 | parser | integer literal does not fit in i64 | use a smaller literal |
+| E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum) | use a smaller literal or a wider type |
 | E101 | checker | undefined variable | declare it with `const` or `var` |
 | E102 | checker | undefined function, or calling a variable | define the function |
-| E103 | checker | type mismatch (also: comparing structs, arrays or unions; an array where a slice is expected) | make both sides the same type; no implicit conversions |
+| E103 | checker | type mismatch (also: comparing structs, arrays or unions; an array where a slice is expected; two integer types in one operation; negating an unsigned value; a generic or inout function used as a value) | make both sides the same type with `@as`; no implicit conversions |
 | E104 | checker | wrong number of arguments | match the function's parameter list |
 | E105 | checker | assigning to, or passing as inout, a `const`, a by-value parameter, or an element of a slice or str | declare it with `var`, or make the parameter `inout`; slice and str elements are always read-only, so copy them into a `var` array |
 | E106 | checker | duplicate definition (function, type, import, field, member, method) or shadowing | rename one of them |
@@ -28,7 +28,7 @@ program imports:
 | E112 | checker | unknown builtin (also: `@print`, removed in v2) | see core.md section 15; print with `out.print(x)` |
 | E113 | checker | a non-void value or an error is ignored | use the value; handle an error with `try` or `catch` |
 | E114 | — | reserved for the workflow profile | |
-| E115 | checker | a type cannot be inferred (`.member` with no known type, `@splat` without an array type, `const e = error.X`) | write the type: `Color.red`, `var a: [4]i64 = ...`, `!i64` |
+| E115 | checker | a type cannot be inferred (`.member` with no known type, `@splat` without an array type, `const e = error.X`, `null` without a pointer type) | write the type: `Color.red`, `var a: [4]i64 = ...`, `!i64` |
 | E116 | checker | a slice used outside a parameter, an argument or a `for` (stored, returned, a field) | pass `a[lo..hi]` directly; slices exist only as parameters |
 | E117 | checker | a variable passed as `inout` also appears in another argument of the same call | copy the other argument into a local first |
 | E118 | checker | `try` outside a function returning `!T`, or `try`/`catch` on a value that is not `!T`, or a value fallback for `!void` | return `!T`, or handle the error with `catch` |
@@ -44,15 +44,19 @@ program imports:
 | E128 | checker | a `uses` line names an unknown capability, or one twice | the capabilities are `alloc` and `io` |
 | E129 | loader, checker | an import that is not `const m = @import("file.egg")` at the top level, a file that cannot be found, or a module used as a value | import an existing `.egg` file, relative to the importing one; name something in it: `m.f(...)` |
 | E130 | capabilities | a function uses a capability (directly, or through a call) that its file does not declare | add `uses io` / `uses alloc` to that file, or move the code to a file that declares it |
+| E131 | checker | a pointer operation (`p.*`, `&x` outside an inout argument, `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`) or an `extern fn` in a file without `allow unsafe`; or `allow` with anything but `unsafe` | add `allow unsafe` at the top of the file, or keep the pointer code in a module that has it |
+| E132 | checker | an invalid `extern fn`: a name that is a C keyword, declared by the C headers the generated code includes, or starts with a generated prefix; a parameter or result that is not an integer, bool, pointer or function type; an `inout` parameter; or two declarations of one C function with different types | rename it, pass pointers instead of str, structs or slices |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 
 | Message | Cause |
 |---------|-------|
-| integer overflow | `+ - *`, unary `-`, or `/` whose result does not fit in i64 |
+| integer overflow | `+ - *`, unary `-`, or `/` whose result does not fit its integer type |
 | division by zero | `/` or `%` with a zero divisor |
 | index out of bounds | `a[i]` with `i < 0` or `i >= @len(a)` |
 | slice out of bounds | `a[lo..hi]` unless `0 <= lo <= hi <= @len(a)` |
+| integer cast out of range | `@as(T, x)` where x does not fit T |
+| null pointer dereference | `p.*` where p is `null` |
 | out of memory | an `Allocator` could not get memory from the system, or a concatenated string's length does not fit in i64 |
 
 A `main` returning `!void` that returns an error prints `error: Name` to standard error and exits with status 1.

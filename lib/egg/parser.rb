@@ -10,6 +10,8 @@
 module Egg
   class Parser
     MAX_I64 = 9_223_372_036_854_775_807
+    # The largest literal (u64); the checker checks it against its type.
+    MAX_U64 = 18_446_744_073_709_551_615
 
     def initialize(tokens)
       @tokens = tokens
@@ -21,6 +23,7 @@ module Egg
       types = []
       uses = []
       imports = []
+      allows = []
       skip_nl
       until at?(:eof)
         if kw?("const")
@@ -32,24 +35,51 @@ module Egg
           end
         elsif kw?("uses")
           parse_uses(uses)
+        elsif kw?("allow")
+          advance
+          parse_names(allows, "what to allow (unsafe)")
+          end_stmt
+        elsif kw?("extern")
+          funcs << parse_extern
         else
           funcs << parse_func(nil)
         end
         skip_nl
       end
-      Program.new(funcs, types, uses, imports, nil)
+      Program.new(funcs, types, uses, imports, nil, allows)
     end
 
     # uses alloc, io
     def parse_uses(into)
       expect_kw("uses")
+      parse_names(into, "capability name")
+      end_stmt
+    end
+
+    # name, name, ...
+    def parse_names(into, what)
       while true
-        n = expect(:ident, "capability name")
+        n = expect(:ident, what)
         into << UsesItem.new(n.text, n.line, n.col)
         break unless op?(",")
         advance
       end
+    end
+
+    # extern fn name(params) R [uses alloc, io]: a C function, no body.
+    def parse_extern
+      expect_kw("extern")
+      fn_tok = expect_kw("fn")
+      name = expect(:ident, "function name")
+      params = parse_params
+      ret = parse_type
+      ext = []
+      if kw?("uses")
+        advance
+        parse_names(ext, "capability name")
+      end
       end_stmt
+      Func.new(name.text, params, ret, nil, fn_tok.line, fn_tok.col, nil, nil, ext)
     end
 
     private
@@ -91,11 +121,21 @@ module Egg
       params
     end
 
-    # T | m.T | Name(T, ...) | [N]T | [_]T | []T | !T | @This()
+    # T | m.T | Name(T, ...) | [N]T | [_]T | []T | !T | *T | fn(T, ...) R | @This()
     def parse_type
       if op?("!")
         advance
         return ErrType.new(parse_type)
+      end
+      if op?("*")
+        advance
+        return PtrType.new(parse_type)
+      end
+      if kw?("fn")
+        advance
+        expect_op("(")
+        params = parse_comma_list(")") { parse_type }
+        return FnType.new(params, parse_type)
       end
       if op?("[")
         advance
@@ -291,11 +331,13 @@ module Egg
     end
 
     # The variable at the root of an assignable expression, or nil.
+    # ("*" for a place behind a pointer: p.* = v, p.*.x = v)
     def assign_root(e)
       case e
       in Var[name:] then name
       in Field[obj:] then assign_root(obj)
       in Index[obj:] then assign_root(obj)
+      in Deref then "*"
       else nil
       end
     end
@@ -477,11 +519,16 @@ module Egg
       parse_postfix(parse_primary)
     end
 
-    # a.b   a.b(...)   a[i]   a[lo..hi]   Type{ .f = v }
+    # a.b   a.b(...)   a.*   a[i]   a[lo..hi]   Type{ .f = v }
     def parse_postfix(e)
       while true
         if op?(".")
-          advance
+          dot = advance
+          if op?("*")
+            advance
+            e = Deref.new(e, dot.line, dot.col)
+            next
+          end
           name = expect(:ident, "field or method name")
           if op?("(")
             e = MethodCall.new(e, name.text, parse_args, name.line, name.col)
@@ -554,13 +601,19 @@ module Egg
       if at?(:int)
         advance
         # Range-check the digits before to_i: under Spinel, to_i raises on overflow.
-        unless fits_i64?(t.text)
-          raise CompileError.new(Diagnostic.new("E003", "integer literal #{t.text} does not fit in i64", t.line, t.col))
+        unless fits?(t.text, MAX_U64)
+          raise CompileError.new(Diagnostic.new("E003", "integer literal #{t.text} does not fit in any integer type (the largest is u64)", t.line, t.col))
         end
         IntLit.new(t.text.to_i, t.line, t.col)
       elsif kw?("true") || kw?("false")
         advance
         BoolLit.new(t.text == "true", t.line, t.col)
+      elsif kw?("null")
+        advance
+        NullLit.new(t.line, t.col)
+      elsif op?("*") || kw?("fn")
+        # *T, fn(T) R as a value: a type argument such as @ptrCast(*u8, p)
+        TypeExpr.new(parse_type, t.line, t.col)
       elsif at?(:string)
         advance
         StrLit.new(t.text, t.line, t.col)
@@ -723,8 +776,12 @@ module Egg
     end
 
     def fits_i64?(digits)
+      fits?(digits, MAX_I64)
+    end
+
+    def fits?(digits, max_value)
       d = digits.sub(/\A0+/, "")
-      max = MAX_I64.to_s
+      max = max_value.to_s
       d.length < max.length || (d.length == max.length && d <= max)
     end
 

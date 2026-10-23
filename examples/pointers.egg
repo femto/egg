@@ -1,0 +1,73 @@
+// Raw pointers in an `allow unsafe` file: a linked list in the arena,
+// writing through a pointer, pointer arithmetic and casts.
+// expect: 6
+// expect: 42
+// expect: 30
+// expect: 10
+// expect: 30
+// expect: 104
+// expect: 13
+// expect: false
+
+uses io, alloc
+allow unsafe
+
+const Node = struct {
+    value: i64
+    next: *Node
+}
+
+const Point = struct {
+    x: i64
+    y: i64
+
+    fn move(inout self: Point, d: i64) void {
+        self.x = self.x + d
+    }
+
+    fn sum(self: Point) i64 {
+        return self.x + self.y
+    }
+}
+
+fn push(a: Allocator, head: *Node, v: i64) *Node {
+    return a.create(Node{ .value = v, .next = head })
+}
+
+fn sum(list: *Node) i64 {
+    var total = 0
+    var p = list
+    while (p != null) {
+        total = total + p.*.value
+        p = p.*.next
+    }
+    return total
+}
+
+fn bump(p: *i64) void {
+    p.* = p.* + 1
+}
+
+fn main(out: Io, a: Allocator) void {
+    var list: *Node = null
+    list = push(a, list, 1)
+    list = push(a, list, 2)
+    list = push(a, list, 3)
+    out.print(sum(list))
+    var x = 41
+    bump(&x)
+    out.print(x)
+    var arr = [3]i64{ 10, 20, 30 }
+    const q = &arr[0]
+    out.print(@ptrAdd(q, 2).*)
+    const r: *u8 = @ptrCast(*u8, q)
+    out.print(r.*)
+    const back = @ptrFromInt(*i64, @intFromPtr(q))
+    out.print(back.* + arr[1])
+    list.*.next.*.value = 100
+    out.print(sum(list))
+    const p = a.create(Point{ .x = 1, .y = 2 })
+    p.*.move(10)
+    out.print(p.*.sum())
+    out.print(null == p)
+}

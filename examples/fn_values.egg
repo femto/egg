@@ -1,0 +1,55 @@
+// Function values: passed, returned, stored in struct fields and called.
+// expect: 8
+// expect: 16
+// expect: add
+// expect: 8
+// expect: mul
+// expect: 15
+// expect: 42
+// expect: true
+// expect: hi
+
+uses io
+
+const Op = struct {
+    name: str
+    run: fn(i64, i64) i64
+}
+
+fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn mul(a: i64, b: i64) i64 {
+    return a * b
+}
+
+fn apply(f: fn(i64, i64) i64, x: i64) i64 {
+    return f(x, x)
+}
+
+fn pick(big: bool) fn(i64, i64) i64 {
+    if (big) {
+        return mul
+    }
+    return add
+}
+
+fn shout(out: Io) void {
+    out.print("hi")
+}
+
+fn main(out: Io) void {
+    out.print(apply(add, 4))
+    out.print(apply(mul, 4))
+    const ops = [2]Op{ Op{ .name = "add", .run = add }, Op{ .name = "mul", .run = mul } }
+    for (ops) |op| {
+        out.print(op.name)
+        out.print(op.run(3, 5))
+    }
+    const f = pick(true)
+    out.print(f(6, 7))
+    out.print(f == mul)
+    const s: fn(Io) void = shout
+    s(out)
+}

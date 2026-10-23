@@ -7,22 +7,28 @@
 
 nl          = { NL } ;
 
-program     = { NL } , { ( func | type_decl | import | uses ) , { NL } } , EOF ;
+program     = { NL } , { ( func | extern_fn | type_decl | import | uses | allow ) , { NL } } , EOF ;
 uses        = "uses" , IDENT , { "," , IDENT } , NL ;          (* capabilities: alloc io *)
+allow       = "allow" , IDENT , NL ;                           (* only: allow unsafe *)
+extern_fn   = "extern" , "fn" , IDENT , params , type ,
+              [ "uses" , IDENT , { "," , IDENT } ] , NL ;      (* needs allow unsafe *)
 import      = "const" , IDENT , "=" , "@import" , "(" , STRING , ")" , NL ;
 
 func        = "fn" , IDENT , params , type , block ;
 params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;
 param       = [ "inout" | "comptime" ] , IDENT , ":" , type ;
 
-type        = name                                   (* i64 bool str void type Io Allocator, or a declared type *)
+type        = name                                   (* i8..i64 u8..u64 usize bool str void type Io Allocator, or a declared type *)
             | name , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")"
                                                      (* type function instance: Pair(i64), Unit() *)
             | "[" , nl , INT , "]" , type            (* array *)
             | "[" , nl , "]" , type                  (* slice: parameters, arguments, for subjects *)
             | "!" , type                             (* error union *)
+            | "*" , type                             (* pointer *)
+            | fn_type
             | "@This" , "(" , ")" ;
 name        = IDENT , [ "." , IDENT ] ;              (* m.Point: a type of an imported module *)
+fn_type     = "fn" , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")" , type ;
 
 type_decl   = "const" , IDENT , "=" , ( struct_body_kw | enum_body | union_body ) ;
 struct_body_kw = "struct" , struct_body ;
@@ -40,7 +46,8 @@ stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
             | "break" | "continue" | return_stmt | expr ;
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
 assign      = place , "=" , expr ;
-place       = IDENT , { "." , IDENT | "[" , expr , "]" } ;
+place       = IDENT , { "." , IDENT | "[" , expr , "]" | "." , "*" }
+            | postfix ;                              (* one with a "." "*" in it: @ptrAdd(p, 1).* = v *)
 if_stmt     = "if" , "(" , expr , ")" , block , [ nl , "else" , ( if_stmt | block ) ] ;
 while_stmt  = "while" , "(" , expr , ")" , block ;
 for_stmt    = "for" , "(" , expr , ")" , "|" , IDENT , [ "," , IDENT ] , "|" , block ;
@@ -58,11 +65,13 @@ add_expr    = mul_expr , { ( "+" | "-" ) , nl , mul_expr } ;
 mul_expr    = unary , { ( "*" | "/" | "%" ) , nl , unary } ;
 unary       = ( "-" | "!" | "try" | "&" ) , unary | postfix ;
 postfix     = primary , { "." , IDENT , [ args ]            (* field, method call *)
+                        | "." , "*"                         (* p.*: what p points to *)
                         | "[" , nl , expr , nl , "]"        (* index *)
                         | "[" , nl , expr , nl , ".." , nl , [ expr , nl ] , "]"    (* slice *)
                         | struct_lit } ;                    (* after a capitalised type: Point, m.Point, Pair(i64) *)
 struct_lit  = "{" , { NL } , { "." , IDENT , "=" , expr , [ "," ] , { NL } } , "}" ;
-primary     = INT | STRING | "true" | "false"
+primary     = INT | STRING | "true" | "false" | "null"
+            | "*" , type | fn_type                  (* a type as a value: @ptrCast( *u8, p) *)
             | IDENT , [ args ]                      (* variable, call, type name *)
             | BUILTIN , args                        (* @len(...) ... *)
             | "@This" , "(" , ")"
@@ -82,4 +91,5 @@ STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \t \\
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;
 KEYWORDS    = fn return if else while for break continue switch var const
-              true false and or struct enum union try catch error inout comptime uses ;
+              true false and or struct enum union try catch error inout comptime uses
+              allow extern null ;

@@ -82,6 +82,7 @@ module Egg
       end
 
       def build(program)
+        @unsafe = (program.allows || []).any? { |u| u.name == "unsafe" }
         @by_pos = {}
         @tokens.each_with_index { |t, i| @by_pos["#{t.line}:#{t.col}"] = i }
         globals = {}
@@ -121,7 +122,7 @@ module Egg
             mode = p.mode.nil? ? "" : "#{p.mode} "
             declare(Decl.new(:param, p.name, p.line, p.col, "#{mode}#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
           end
-          walk_block(f.body)
+          walk_block(f.body) unless f.body.nil? # extern fn
         end
         ref_type_names
       end
@@ -136,6 +137,7 @@ module Egg
 
       # The `struct { ... }` a type function returns, or nil.
       def type_fn_struct(f)
+        return nil if f.body.nil?
         stmts = f.body.stmts
         st = stmts.length == 1 && stmts[0].is_a?(Return) ? stmts[0].value : nil
         st.is_a?(StructTypeExpr) ? st : nil
@@ -165,13 +167,27 @@ module Egg
       def func_decl(f, label)
         i = @by_pos["#{f.line}:#{f.col}"]
         name_tok = @tokens[i + 1]
-        close = closing_brace(i)
+        close = f.body.nil? ? line_end(i) : closing_brace(i)
         params = f.params.map { |p| "#{p.mode.nil? ? '' : "#{p.mode} "}#{p.name}: #{Egg.type_src(p.type)}" }.join(", ")
-        # The capabilities it uses, from the capability check (rule 3).
+        head = "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}"
+        unless f.ext.nil?
+          head = "extern #{head}"
+          head += " uses #{f.ext.map(&:name).join(', ')}" unless f.ext.empty?
+        end
+        # The capabilities it uses, from the capability check (rule 3), and
+        # whether its file may use pointers.
+        notes = []
         caps = @caps&.caps_named(label)
-        uses = caps.nil? || caps.empty? ? "" : "  // uses #{caps.join(', ')}"
-        Decl.new(:fn, label, name_tok.line, name_tok.col,
-                 "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}#{uses}", close.line, close.col + 1)
+        notes << "uses #{caps.join(', ')}" unless caps.nil? || caps.empty? || !f.ext.nil?
+        notes << "allow unsafe" if @unsafe
+        detail = notes.empty? ? head : "#{head}  // #{notes.join('; ')}"
+        Decl.new(:fn, label, name_tok.line, name_tok.col, detail, close.line, close.col + 1)
+      end
+
+      # The last token on the line of token i (an extern fn ends there).
+      def line_end(i)
+        i += 1 while @tokens[i + 1].kind != :nl && @tokens[i + 1].kind != :eof
+        @tokens[i]
       end
 
       # The '}' that closes the body of the function whose 'fn' is token i.

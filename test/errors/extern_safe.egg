@@ -1,0 +1,5 @@
+// error: E131 @2
+extern fn toupper(c: i32) i32
+
+fn main() void {
+}

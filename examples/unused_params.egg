@@ -1,0 +1,10 @@
+// A parameter may go unused (main may take capabilities it does not use);
+// the C compiler must not reject the generated code for it.
+
+fn first(a: i64, b: i64) i64 {
+    return a
+}
+
+fn main(out: Io) i64 {
+    return first(1, 2) - 1
+}

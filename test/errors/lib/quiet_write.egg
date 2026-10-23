@@ -1,0 +1,8 @@
+// Declares an extern that does io, but not `uses io`.
+allow unsafe
+
+extern fn write(fd: i32, buf: *u8, n: usize) i64 uses io
+
+fn say(s: str) i64 {
+    return write(1, @strPtr(s), @as(usize, @len(s)))
+}

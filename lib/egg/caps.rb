@@ -1,8 +1,9 @@
 # Capability check (design rule 1 and 2).
 #
 # A function uses a capability directly when it calls a method of a
-# capability value (`out.print(x)` uses io, `a.concat(s, t)` uses alloc),
-# and indirectly when it calls a function that uses it. The type checker
+# capability value (`out.print(x)` uses io, `a.concat(s, t)` uses alloc)
+# or is an `extern fn ... uses io`, and indirectly when it calls a
+# function that uses it, or takes a function as a value. The type checker
 # records both per function (Sig#direct, Sig#calls); this pass closes them
 # over the call graph and rejects every function whose capabilities are
 # not all declared by its module's `uses` line (E130).
@@ -24,7 +25,7 @@ module Egg
     end
 
     def check
-      sigs = @checker.concrete
+      sigs = @checker.concrete + @checker.externs
       sigs.each { |s| @caps[s.c_name] = s.direct.keys.sort }
       changed = true
       while changed
@@ -54,7 +55,7 @@ module Egg
     # The capabilities of a plain function or method, by its name as
     # written ("f", "Point.len"); nil if it was not checked.
     def caps_named(name)
-      sig = @checker.concrete.find { |s| s.tenv.empty? && (s.owner.nil? ? s.name : "#{s.owner}.#{s.name}") == name }
+      sig = (@checker.concrete + @checker.externs).find { |s| s.tenv.empty? && (s.owner.nil? ? s.name : "#{s.owner}.#{s.name}") == name }
       sig.nil? ? nil : caps_of(sig)
     end
 

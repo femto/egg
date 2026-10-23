@@ -1,0 +1,5 @@
+// error: E115 @4
+allow unsafe
+fn main() void {
+    const p = null
+}

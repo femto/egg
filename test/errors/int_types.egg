@@ -1,0 +1,13 @@
+// error: E003 @8
+// error: E103 @9
+// error: E103 @11
+// error: E103 @12
+uses io
+
+fn main(out: Io) void {
+    const a: u8 = 256
+    const b: u32 = -1
+    const c: i64 = 5
+    out.print(@as(u8, 1) + c)
+    out.print(@as(bool, c))
+}

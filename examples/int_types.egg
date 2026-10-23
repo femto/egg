@@ -1,0 +1,47 @@
+// Integer types: literals take their type from context, arithmetic stays
+// in one type, and @as converts (checked).
+// expect: 255
+// expect: -128
+// expect: true
+// expect: 18446744073709551615
+// expect: 18446744073709551615
+// expect: 21
+// expect: 25
+// expect: 200000
+// expect: 254
+// expect: -2
+// expect: 200000
+// expect: 2147483647
+// expect: true
+
+uses io, alloc
+
+const Color = enum { red, blue }
+
+fn mix(a: u8, b: u8) u8 {
+    return a * 2 + b
+}
+
+fn main(out: Io, al: Allocator) void {
+    const x: u8 = 200
+    out.print(x + 55)
+    const y: i8 = -128
+    out.print(y)
+    out.print(-(y + 1) == 127)
+    const big: u64 = 18446744073709551615
+    out.print(big)
+    out.print(al.int_str(big))
+    const n: usize = 7
+    out.print(n * 3)
+    out.print(mix(10, 5))
+    const w = @as(i64, x) * 1000
+    out.print(w)
+    out.print(@as(u8, 255 - 1))
+    const s: i16 = -300
+    out.print(@as(i32, s) / 7 % 5)
+    out.print(@as(u64, w))
+    const z: u32 = 4294967295
+    out.print(z / 2)
+    const c = Color.blue
+    out.print(.blue == c)
+}

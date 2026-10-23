@@ -1,0 +1,13 @@
+// extern fn: calling C through a module that allows unsafe; this file
+// does not need to.
+// expect: 65
+// expect: 90
+
+uses io
+
+const cchar = @import("lib/cchar.egg")
+
+fn main(out: Io) void {
+    out.print(cchar.upper(97))
+    out.print(cchar.upper(@as(u8, "z"[0])))
+}
