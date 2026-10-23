@@ -1006,10 +1006,14 @@ extern fn write(fd: i32, buf: *u8, n: usize) i64 uses io
 declares a C function, called by its own name. It has no body. Its
 parameters and result are integers, `bool`, pointers or function types
 (the result may be `void`), so the C types are exact; anything else, an
-`inout` parameter, a C keyword, a name the C headers the generated code
-includes already declare (`puts`, `malloc`, ...), or a name starting with
-a prefix the generated code uses (`egg_`, `fn_`, ...) is E132. So is
-declaring the same C function twice with different types.
+`inout` parameter, a C keyword, `main` (the generated entry point), a
+name the C headers the generated code includes already declare
+(functions such as `puts` and `malloc`, macros such as `NULL` and
+`INT8_MAX`, types such as `size_t` and `int8_t`), a name C reserves
+(`_X`, `__x`), or a name starting with a prefix the generated code uses
+(`egg_`, `fn_`, ...) is E132. So is declaring the same C function twice
+with different types. Declaring it twice with the same types is fine;
+each declaration's `uses` is checked against its own file.
 
 C can do anything, so the declaration says which capabilities the
 function uses after `uses`, and calling it uses them (E130 if its file

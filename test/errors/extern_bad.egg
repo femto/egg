@@ -1,14 +1,20 @@
-// error: E132 @7
-// error: E132 @8
-// error: E132 @9
 // error: E132 @10
-// error: E128 @11
+// error: E132 @11
+// error: E132 @12
+// error: E132 @13
+// error: E128 @14
+// error: E132 @15
+// error: E132 @16
+// error: E132 @17
 allow unsafe
 extern fn puts(s: *u8) i32
 extern fn egg_x() void
 extern fn takes(s: str) void
 extern fn byref(inout x: i64) void
 extern fn f1(x: i64) void uses net
+extern fn NULL() void
+extern fn int8_t() void
+extern fn PRId64() void
 
 fn main() void {
 }

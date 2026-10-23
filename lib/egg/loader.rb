@@ -54,7 +54,7 @@ module Egg
           mod.aliases[imp.name] = target.prefix
         end
       end
-      Program.new(@funcs, @types, root.uses, root.imports, @modules)
+      Program.new(@funcs, @types, root.uses, root.imports, @modules, root.allows)
     end
 
     private

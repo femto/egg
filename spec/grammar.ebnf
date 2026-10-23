@@ -47,7 +47,8 @@ stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
 assign      = place , "=" , expr ;
 place       = IDENT , { "." , IDENT | "[" , expr , "]" | "." , "*" }
-            | postfix ;                              (* one with a "." "*" in it: @ptrAdd(p, 1).* = v *)
+            | postfix , "." , "*" , { "." , IDENT | "[" , expr , "]" | "." , "*" } ;
+                                                     (* behind a pointer: @ptrAdd(p, 1).* = v *)
 if_stmt     = "if" , "(" , expr , ")" , block , [ nl , "else" , ( if_stmt | block ) ] ;
 while_stmt  = "while" , "(" , expr , ")" , block ;
 for_stmt    = "for" , "(" , expr , ")" , "|" , IDENT , [ "," , IDENT ] , "|" , block ;
@@ -86,7 +87,7 @@ args        = "(" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ]
 
 (* Lexical *)
 IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)
-INT         = digit , { digit | "_" } ;            (* must fit in i64 *)
+INT         = digit , { digit | "_" } ;            (* at most u64's maximum; must fit its type *)
 STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \t \\ \" \0 *)
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;

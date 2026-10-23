@@ -89,9 +89,11 @@ v2 so far:
   declare is rejected; hover in the editor shows what each function uses
 - Integer types `i8`…`i64`, `u8`…`u64`, `usize`, all overflow-checked;
   literals take their type from context; `@as(T, x)` converts (checked)
-- Raw pointers `*T`, `null`, `a.create(v)`; using them (`&x`, `p.*`,
-  `@ptrAdd`, `@ptrCast`, ...) needs `allow unsafe` in the file, which does
-  not spread to importers; `p.*` on null panics
+- Raw pointers `*T`, `null`, `a.create(v)`; holding, passing and
+  comparing them is safe, but pointer operations (taking an address with
+  `&x` outside an `inout` argument, `p.*`, `@ptrAdd`, `@ptrCast`, ...) need
+  `allow unsafe` in the file, which does not spread to importers; `p.*` on
+  null panics
 - Function values `fn(T) R`: passed, returned, stored in fields, called
 - `extern fn toupper(c: i32) i32` (in an unsafe file) calls C; `uses io`
   on the declaration says what the C function does

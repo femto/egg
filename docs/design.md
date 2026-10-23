@@ -27,7 +27,7 @@ The core follows Zig but stays smaller: it keeps only features that need no runt
 | Integers | `i8`…`i64`, `u8`…`u64`, `usize` | v0 (`i64` only); all widths v2 |
 | Other primitives | `bool`, `f32`, `f64`, `void` | v0 |
 | Composite types | `struct`, `enum`, tagged unions | v1 |
-| Pointers and memory | slices, arrays; single-item pointers | v1; raw pointers v2 (using them needs `allow unsafe`) |
+| Pointers and memory | slices, arrays; single-item pointers | v1; raw pointers v2 (holding them is safe; pointer operations such as `p.*` need `allow unsafe`) |
 | Control flow | `if`, `while`, `for`, `switch`, all expressions | v0 (`if`, `while` first) |
 | Errors | errors as values (like `!T`), `try` | v1 |
 | Compile time | `comptime` parameters, generics (functions returning `type`); reflection (`@typeInfo`) | v1; reflection after v1 |

@@ -13,6 +13,7 @@
 // expect: 200000
 // expect: 2147483647
 // expect: true
+// expect: 5000000001
 
 uses io, alloc
 
@@ -44,4 +45,6 @@ fn main(out: Io, al: Allocator) void {
     out.print(z / 2)
     const c = Color.blue
     out.print(.blue == c)
+    const size: usize = 5000000000
+    out.print(size + 1)
 }

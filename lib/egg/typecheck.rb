@@ -46,8 +46,8 @@ module Egg
     # Io and Allocator are capability values: opaque, and only `main`
     # receives them (from the runtime); everything else is passed them.
     INT_TYPES = %w[i8 i16 i32 i64 u8 u16 u32 u64 usize].freeze
-    # Literal ranges; usize is checked as u64 here and against the
-    # target's real width (SIZE_MAX) at run time.
+    # Literal ranges; usize is checked as u64 here, and a usize literal
+    # above 32 bits against the target's real width (SIZE_MAX) at run time.
     INT_RANGE = {
       "i8" => [-128, 127], "i16" => [-32_768, 32_767],
       "i32" => [-2_147_483_648, 2_147_483_647],
@@ -92,6 +92,17 @@ module Egg
       memcpy memmove strcpy strncpy strcat strncat memcmp strcmp strcoll strncmp strxfrm memchr strchr strcspn strpbrk
       strrchr strspn strstr strtok memset strerror strlen
       imaxabs imaxdiv strtoimax strtoumax wcstoimax wcstoumax
+      NULL EOF BUFSIZ FILENAME_MAX FOPEN_MAX L_tmpnam SEEK_CUR SEEK_END SEEK_SET TMP_MAX _IOFBF _IOLBF _IONBF
+      EXIT_FAILURE EXIT_SUCCESS RAND_MAX MB_CUR_MAX SIZE_MAX PTRDIFF_MIN PTRDIFF_MAX SIG_ATOMIC_MIN SIG_ATOMIC_MAX
+      WCHAR_MIN WCHAR_MAX WINT_MIN WINT_MAX FILE fpos_t size_t div_t ldiv_t lldiv_t imaxdiv_t wchar_t
+      __bool_true_false_are_defined
+    ].freeze
+    # Families of names those headers also define: int8_t, INT8_MAX,
+    # INT64_C, PRId64, ...; and C's reserved _X and __x names.
+    C_RESERVED_PATTERNS = [
+      /\Au?int(_least|_fast)?\d+_t\z/, /\Au?int(ptr|max)_t\z/,
+      /\AU?INT(_LEAST|_FAST)?\d+_(MIN|MAX|C)\z/, /\AU?INT(PTR|MAX)_(MIN|MAX|C)\z/,
+      /\A(PRI|SCN)[a-zA-Z0-9_]+\z/, /\A_[A-Z_]/
     ].freeze
     # Prefixes of generated C names.
     C_PREFIXES = %w[egg_ fn_ ty_ v_ f_ m_ _t].freeze
@@ -116,7 +127,7 @@ module Egg
       @this = nil
       @current = nil
       @loop_depth = 0
-      @externs = []        # Sigs of extern fns, in order
+      @externs = []        # Sigs of extern fns, every declaration, in order
       @extern_c = {}       # C name -> Sig, to catch clashing declarations
       @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], [], program.allows || []) }
       @mod = @modules[""]
@@ -192,8 +203,8 @@ module Egg
       f = sig.func
       return unless require_unsafe("extern fn", f.line, f.col)
       c = sig.c_name
-      if C_RESERVED.include?(c) || C_PREFIXES.any? { |p| c.start_with?(p) }
-        err("E132", "an extern fn cannot be named '#{c}': it is a C keyword, a function of the C headers eggc includes, or a prefix eggc uses", f.line, f.col)
+      if C_RESERVED.include?(c) || C_RESERVED_PATTERNS.any? { |r| c.match?(r) } || C_PREFIXES.any? { |p| c.start_with?(p) }
+        err("E132", "an extern fn cannot be named '#{c}': it is a C keyword, a name the C headers eggc includes declare, reserved in C, or uses a prefix of generated names", f.line, f.col)
         return
       end
       if f.params.any? { |p| !p.mode.nil? }
@@ -219,7 +230,9 @@ module Egg
         return
       end
       @extern_c[c] ||= sig
-      @externs << sig if other.nil?
+      # Every declaration is kept: each is checked against its own file's
+      # capabilities, even when another file declares the same C function.
+      @externs << sig
       @c_names[c] = true
     end
 

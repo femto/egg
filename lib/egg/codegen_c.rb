@@ -62,6 +62,8 @@ module Egg
     HELPERS = {
       "egg_panic" => <<~C,
         static void egg_panic(const char *msg) {
+            /* abort() need not flush stdio: keep what the program printed. */
+            fflush(stdout);
             fprintf(stderr, "egg panic: %s\\n", msg);
             abort();
         }
@@ -246,7 +248,8 @@ module Egg
         out << "static const char *const egg_error_names[] = { #{names.join(', ')} };\n"
       end
       out << "\n"
-      @checker.externs.each { |sig| out << extern_prototype(sig) << ";\n" }
+      # One prototype per C function, however many files declare it.
+      @checker.externs.uniq(&:c_name).each { |sig| out << extern_prototype(sig) << ";\n" }
       @checker.concrete.each { |sig| out << signature(sig) << ";\n" }
       out << "\n" << body
       out
@@ -330,6 +333,9 @@ module Egg
       return(value == -9_223_372_036_854_775_808 ? "INT64_MIN" : "INT64_C(#{value})") if t == "i64" || t.nil?
       ct, min, = INT_C[t]
       return "UINT64_C(#{value})" if t == "u64"
+      # usize is as wide as a pointer: above 32 bits, check it fits size_t
+      # (a no-op on 64-bit targets, a panic instead of truncation on others).
+      return as_conv("u64", "usize", "UINT64_C(#{value})") if t == "usize" && value > 4_294_967_295
       # The minimum (-128) is not writable as a C literal of its type.
       return "((#{ct})#{min})" if value == TypeChecker::INT_RANGE[t][0] && value.negative?
       "((#{ct})#{value})"

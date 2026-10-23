@@ -67,8 +67,11 @@ def check_program(name, src, dir, path = nil, debug: false)
   panic = comment_values(src, "panic").first
   fails = comment_values(src, "fails").first
   if panic
-    ok = !status.success? && err.include?("egg panic: #{panic}")
-    report(ok, name, "expected panic '#{panic}', got status #{status.exitstatus}, stderr: #{err}")
+    # Output printed before the panic must survive it.
+    want = comment_values(src, "expect")
+    got = out.lines.map(&:chomp)
+    ok = !status.success? && err.include?("egg panic: #{panic}") && got == want
+    report(ok, name, "expected panic '#{panic}' after #{want.inspect}\ngot status #{status.exitstatus}, #{got.inspect}, stderr: #{err}")
   elsif fails
     # main returned an error: exit status 1 and "error: Name" on stderr.
     want = comment_values(src, "expect")
@@ -319,6 +322,35 @@ def check_loader(dir)
   report(r.diagnostics.empty? && !r.c_source.include?("#line"), "debug without a path builds without #line marks")
 end
 
+# An extern fn's symbol covers its whole declaration, over several lines.
+def check_lsp_extern
+  doc = { "uri" => "file:///t/e.egg" }
+  src = <<~EGG
+    allow unsafe
+
+    extern fn write(
+        fd: i32,
+        buf: *u8,
+        n: usize
+    ) i64 uses io
+
+    fn main() void {
+    }
+  EGG
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/documentSymbol", "params" => { "textDocument" => doc } },
+    { "id" => 3, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, _, status, err = lsp_session(req)
+  sym = (replies.dig(2, "result") || []).find { |x| x["name"] == "write" }
+  stop = sym && sym["range"]["end"]
+  report(stop == { "line" => 6, "character" => 13 }, "lsp extern fn symbol spans its declaration", sym.inspect)
+  report(status.success? && err.empty?, "lsp extern session ends cleanly", err)
+end
+
 def check_lsp
   uri = "file:///t/a.egg"
   src = <<~EGG
@@ -397,6 +429,7 @@ Dir.mktmpdir do |dir|
   check_lsp_generics
   check_lsp_v1
   check_lsp_modules
+  check_lsp_extern
 
   puts "spec/core.md"
   spec = File.read(File.join(ROOT, "spec", "core.md"))

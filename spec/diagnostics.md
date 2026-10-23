@@ -34,7 +34,7 @@ program imports:
 | E118 | checker | `try` outside a function returning `!T`, or `try`/`catch` on a value that is not `!T`, or a value fallback for `!void` | return `!T`, or handle the error with `catch` |
 | E119 | checker | a struct contains itself by value | hold an index into an array instead |
 | E120 | checker | `struct { ... }` outside a type function, or a type function whose body is not `return struct { ... }` | declare the type with `const Name = struct { ... }` |
-| E121 | checker | `&` outside an inout argument, or an inout argument without `&` | write `f(&x)` exactly where the parameter is `inout` |
+| E121 | checker | `&` outside an inout argument (in a file without `allow unsafe`, where it would take an address), or an inout argument without `&` | write `f(&x)` exactly where the parameter is `inout` |
 | E122 | checker | no such field, method or member (also: reading a union's member without `switch`) | check the name; use `switch` for unions |
 | E123 | checker | a struct or union literal with a missing, unknown or repeated field | name every field once; a union literal names one member |
 | E124 | checker | an array literal with the wrong number of elements, or a zero-length array | match the length in `[N]T` |
@@ -44,8 +44,8 @@ program imports:
 | E128 | checker | a `uses` line names an unknown capability, or one twice | the capabilities are `alloc` and `io` |
 | E129 | loader, checker | an import that is not `const m = @import("file.egg")` at the top level, a file that cannot be found, or a module used as a value | import an existing `.egg` file, relative to the importing one; name something in it: `m.f(...)` |
 | E130 | capabilities | a function uses a capability (directly, or through a call) that its file does not declare | add `uses io` / `uses alloc` to that file, or move the code to a file that declares it |
-| E131 | checker | a pointer operation (`p.*`, `&x` outside an inout argument, `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`) or an `extern fn` in a file without `allow unsafe`; or `allow` with anything but `unsafe` | add `allow unsafe` at the top of the file, or keep the pointer code in a module that has it |
-| E132 | checker | an invalid `extern fn`: a name that is a C keyword, declared by the C headers the generated code includes, or starts with a generated prefix; a parameter or result that is not an integer, bool, pointer or function type; an `inout` parameter; or two declarations of one C function with different types | rename it, pass pointers instead of str, structs or slices |
+| E131 | checker | a pointer operation (`p.*`, `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`) or an `extern fn` in a file without `allow unsafe`; or `allow` with anything but `unsafe`. (`&x` outside an inout argument in such a file stays E121.) | add `allow unsafe` at the top of the file, or keep the pointer code in a module that has it |
+| E132 | checker | an invalid `extern fn`: a name that is a C keyword, `main`, declared by the C headers the generated code includes (functions, macros, types), reserved in C (`_X`, `__x`), or starts with a generated prefix; a parameter that is not an integer, bool, pointer or function type, or a result that is none of those and not `void`; an `inout` parameter; or two declarations of one C function with different types | rename it, pass pointers instead of str, structs or slices |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 

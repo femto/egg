@@ -60,8 +60,10 @@ fn main(out: Io, a: Allocator) void {
     var arr = [3]i64{ 10, 20, 30 }
     const q = &arr[0]
     out.print(@ptrAdd(q, 2).*)
+    // Through a *u8 and back: which byte r points to depends on the
+    // machine's byte order, so only read it as the i64 it is.
     const r: *u8 = @ptrCast(*u8, q)
-    out.print(r.*)
+    out.print(@ptrCast(*i64, r).*)
     const back = @ptrFromInt(*i64, @intFromPtr(q))
     out.print(back.* + arr[1])
     list.*.next.*.value = 100

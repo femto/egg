@@ -167,7 +167,7 @@ module Egg
       def func_decl(f, label)
         i = @by_pos["#{f.line}:#{f.col}"]
         name_tok = @tokens[i + 1]
-        close = f.body.nil? ? line_end(i) : closing_brace(i)
+        close = f.body.nil? ? extern_end(i) : closing_brace(i)
         params = f.params.map { |p| "#{p.mode.nil? ? '' : "#{p.mode} "}#{p.name}: #{Egg.type_src(p.type)}" }.join(", ")
         head = "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}"
         unless f.ext.nil?
@@ -181,11 +181,21 @@ module Egg
         notes << "uses #{caps.join(', ')}" unless caps.nil? || caps.empty? || !f.ext.nil?
         notes << "allow unsafe" if @unsafe
         detail = notes.empty? ? head : "#{head}  // #{notes.join('; ')}"
-        Decl.new(:fn, label, name_tok.line, name_tok.col, detail, close.line, close.col + 1)
+        Decl.new(:fn, label, name_tok.line, name_tok.col, detail, close.line, close.col + close.text.length)
       end
 
-      # The last token on the line of token i (an extern fn ends there).
-      def line_end(i)
+      # The last token of the extern fn whose 'fn' is token i: its
+      # parameters may span lines, and it ends with the line their ')' is on.
+      def extern_end(i)
+        i += 1 until @tokens[i].kind == :op && @tokens[i].text == "("
+        depth = 0
+        loop do
+          t = @tokens[i]
+          depth += 1 if t.kind == :op && t.text == "("
+          depth -= 1 if t.kind == :op && t.text == ")"
+          break if depth.zero? || t.kind == :eof
+          i += 1
+        end
         i += 1 while @tokens[i + 1].kind != :nl && @tokens[i + 1].kind != :eof
         @tokens[i]
       end
