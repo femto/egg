@@ -1,0 +1,15 @@
+// error: E002 @9
+fn Pair(comptime T: type, comptime U: type) type {
+    return struct {
+        a: T
+        b: U
+    }
+}
+
+fn first(p: Pair(i64 bool)) i64 {
+    return p.a
+}
+
+fn main() void {
+    @print(first(Pair(i64, bool){ .a = 7, .b = true }))
+}

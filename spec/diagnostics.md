@@ -17,7 +17,7 @@ per line:
 | E102 | checker | undefined function, or calling a variable | define the function |
 | E103 | checker | type mismatch (also: comparing structs, arrays or unions; an array where a slice is expected) | make both sides the same type; no implicit conversions |
 | E104 | checker | wrong number of arguments | match the function's parameter list |
-| E105 | checker | assigning to, or passing as inout, a `const`, a by-value parameter, or an element of a slice or str | declare it with `var`, or make the parameter `inout` |
+| E105 | checker | assigning to, or passing as inout, a `const`, a by-value parameter, or an element of a slice or str | declare it with `var`, or make the parameter `inout`; slice and str elements are always read-only, so copy them into a `var` array |
 | E106 | checker | duplicate definition (function, type, field, member, method) or shadowing | rename one of them |
 | E107 | checker | non-void function can reach its end without returning | add a `return` on every path |
 | E108 | checker | unknown type, `void` or `type` where a value type is needed, `[_]T` outside a literal | use a value type |

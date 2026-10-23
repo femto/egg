@@ -78,6 +78,7 @@ module Egg
       end
       if op?("[")
         advance
+        skip_nl
         if op?("]")
           advance
           return SliceType.new(parse_type)
@@ -106,15 +107,7 @@ module Egg
       name = expect(:ident, "type")
       if op?("(")
         advance
-        args = []
-        skip_nl
-        until op?(")")
-          args << parse_type
-          skip_nl
-          advance if op?(",")
-          skip_nl
-        end
-        expect_op(")")
+        args = parse_comma_list(")") { parse_type }
         return GenericType.new(name.text, args)
       end
       name.text
@@ -603,14 +596,23 @@ module Egg
     # { e, e, e }
     def parse_list_items
       expect_op("{")
+      parse_comma_list("}") { parse_expr }
+    end
+
+    # Items separated by commas, with an optional trailing comma, up to and
+    # including `close`; the opening token is already consumed. Newlines
+    # may follow the opening token and each comma, and precede `close`.
+    def parse_comma_list(close)
       items = []
       skip_nl
-      until op?("}")
-        items << parse_expr
-        advance if op?(",")
+      until op?(close)
+        items << yield
+        skip_nl
+        break unless op?(",")
+        advance
         skip_nl
       end
-      expect_op("}")
+      expect_op(close)
       items
     end
 

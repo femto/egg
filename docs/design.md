@@ -27,10 +27,10 @@ The core follows Zig but stays smaller: it keeps only features that need no runt
 | Integers | `i8`…`i64`, `u8`…`u64`, `usize` | v0 (`i64` only) |
 | Other primitives | `bool`, `f32`, `f64`, `void` | v0 |
 | Composite types | `struct`, `enum`, tagged unions | v1 |
-| Pointers and memory | single-item pointers, slices, arrays | v1 |
+| Pointers and memory | slices, arrays; single-item pointers | v1; pointers v2 (behind `allow unsafe`) |
 | Control flow | `if`, `while`, `for`, `switch`, all expressions | v0 (`if`, `while` first) |
 | Errors | errors as values (like `!T`), `try` | v1 |
-| Compile time | `comptime` parameters, generics (functions returning `type`), reflection | v1 |
+| Compile time | `comptime` parameters, generics (functions returning `type`); reflection (`@typeInfo`) | v1; reflection after v1 |
 
 **Type syntax is prefix and reads left to right**, as in Go and Zig. Every modifier sits on the left of the type it modifies:
 

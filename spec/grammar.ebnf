@@ -1,8 +1,11 @@
 (* Egg v1 core grammar.
    Machine-readable source of truth for the parser in lib/egg/parser.rb.
    NL is a newline token. Statements end at NL or before '}'.
-   A newline may appear after a binary operator, after '(' '[' '{' and ',',
-   and before 'else'; nowhere else inside an expression. *)
+   Inside an expression a newline may appear only where `nl` is written:
+   after a binary operator, after '(' '[' '{' and ',', and before ')' ']'
+   '}'; a statement may also continue onto 'else'. *)
+
+nl          = { NL } ;
 
 program     = { NL } , { ( func | type_decl ) , { NL } } , EOF ;
 
@@ -11,9 +14,10 @@ params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;
 param       = [ "inout" | "comptime" ] , IDENT , ":" , type ;
 
 type        = IDENT                                  (* i64 bool str void type, or a declared type *)
-            | IDENT , "(" , type , { "," , type } , ")"   (* type function instance: Pair(i64) *)
-            | "[" , INT , "]" , type                 (* array *)
-            | "[" , "]" , type                       (* slice: parameters only *)
+            | IDENT , "(" , nl , type , { "," , nl , type } , [ "," ] , nl , ")"
+                                                     (* type function instance: Pair(i64) *)
+            | "[" , nl , INT , "]" , type            (* array *)
+            | "[" , nl , "]" , type                  (* slice: parameters, arguments, for subjects *)
             | "!" , type                             (* error union *)
             | "@This" , "(" , ")" ;
 
@@ -23,6 +27,8 @@ struct_body = "{" , { NL } , { ( field | func ) , [ "," ] , { NL } } , "}" ;
 field       = IDENT , ":" , type ;
 enum_body   = "enum" , "{" , { NL } , IDENT , { [ "," ] , { NL } , IDENT } , [ "," ] , { NL } , "}" ;
 union_body  = "union" , "(" , "enum" , ")" , "{" , { NL } ,
+              { func , [ "," ] , { NL } } ,          (* at least one member *)
+              IDENT , [ ":" , type ] , [ "," ] , { NL } ,
               { ( IDENT , [ ":" , type ] | func ) , [ "," ] , { NL } } , "}" ;
 
 block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}" ;
@@ -32,7 +38,7 @@ stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
 assign      = place , "=" , expr ;
 place       = IDENT , { "." , IDENT | "[" , expr , "]" } ;
-if_stmt     = "if" , "(" , expr , ")" , block , [ "else" , ( if_stmt | block ) ] ;
+if_stmt     = "if" , "(" , expr , ")" , block , [ nl , "else" , ( if_stmt | block ) ] ;
 while_stmt  = "while" , "(" , expr , ")" , block ;
 for_stmt    = "for" , "(" , expr , ")" , "|" , IDENT , [ "," , IDENT ] , "|" , block ;
 switch_stmt = "switch" , "(" , expr , ")" , "{" , { NL } , { arm , [ "," ] , { NL } } , "}" ;
@@ -40,17 +46,17 @@ arm         = ( "." , IDENT , { "," , "." , IDENT } | "else" ) , "=>" ,
               [ "|" , IDENT , "|" ] , block ;
 return_stmt = "return" , [ expr ] ;
 
-expr        = or_expr , { "catch" , or_expr } ;
-or_expr     = and_expr , { "or" , and_expr } ;
-and_expr    = cmp_expr , { "and" , cmp_expr } ;
-cmp_expr    = add_expr , [ cmp_op , add_expr ] ;   (* not chainable: a < b < c is E002 *)
+expr        = or_expr , { "catch" , nl , or_expr } ;
+or_expr     = and_expr , { "or" , nl , and_expr } ;
+and_expr    = cmp_expr , { "and" , nl , cmp_expr } ;
+cmp_expr    = add_expr , [ cmp_op , nl , add_expr ] ;   (* not chainable: a < b < c is E002 *)
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
-add_expr    = mul_expr , { ( "+" | "-" ) , mul_expr } ;
-mul_expr    = unary , { ( "*" | "/" | "%" ) , unary } ;
+add_expr    = mul_expr , { ( "+" | "-" ) , nl , mul_expr } ;
+mul_expr    = unary , { ( "*" | "/" | "%" ) , nl , unary } ;
 unary       = ( "-" | "!" | "try" | "&" ) , unary | postfix ;
 postfix     = primary , { "." , IDENT , [ args ]            (* field, method call *)
-                        | "[" , expr , "]"                  (* index *)
-                        | "[" , expr , ".." , [ expr ] , "]"    (* slice *)
+                        | "[" , nl , expr , nl , "]"        (* index *)
+                        | "[" , nl , expr , nl , ".." , nl , [ expr , nl ] , "]"    (* slice *)
                         | struct_lit } ;                    (* after a capitalised type *)
 struct_lit  = "{" , { NL } , { "." , IDENT , "=" , expr , [ "," ] , { NL } } , "}" ;
 primary     = INT | STRING | "true" | "false"
@@ -59,11 +65,12 @@ primary     = INT | STRING | "true" | "false"
             | "@This" , "(" , ")"
             | "." , IDENT                           (* enum member, typed by context *)
             | "error" , "." , IDENT
-            | "[" , ( INT | "_" ) , "]" , type , "{" , [ expr , { "," , expr } , [ "," ] ] , "}"
-            | "[" , "]" , type                      (* a slice type as a value *)
+            | "[" , nl , ( INT | "_" ) , "]" , type ,
+              "{" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ] , "}"
+            | "[" , nl , "]" , type                 (* a slice type as a value *)
             | "struct" , struct_body                (* only as a type function's result *)
-            | "(" , expr , ")" ;
-args        = "(" , [ expr , { "," , expr } , [ "," ] ] , ")" ;
+            | "(" , nl , expr , nl , ")" ;
+args        = "(" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ] , ")" ;
 
 (* Lexical *)
 IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)

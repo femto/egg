@@ -12,7 +12,8 @@ require "json"
 
 module Egg
   module LSP
-    # A declared name: a function, method, type, parameter or local.
+    # A declared name. kind: :fn, :method, :struct, :enum, :union, :param
+    # or :local.
     Decl = Struct.new(:kind, :name, :line, :col, :detail, :end_line, :end_col)
     # A use (or the declaration itself) of a name at line:col.
     Ref = Struct.new(:line, :col, :length, :decl)
@@ -65,23 +66,20 @@ module Egg
         globals = {}
         @types = {}
         @methods = {}
+        @type_fns = {}
+        program.funcs.each { |f| @type_fns[f.name] = true unless type_fn_struct(f).nil? }
         bodies = []
         # Types: `const Name = struct/enum {`; the decl sits on its name.
         (program.types || []).each do |td|
           i = @by_pos["#{td.line}:#{td.col}"]
           name_tok = @tokens[i - 2]
           close = closing_brace(i)
-          decl = Decl.new(:type, td.name, name_tok.line, name_tok.col,
+          decl = Decl.new(td.kind, td.name, name_tok.line, name_tok.col,
                           "const #{td.name} = #{td.kind}", close.line, close.col + 1)
           @funcs << [decl, name_tok.line, name_tok.col]
           @types[td.name] ||= decl
           ref(decl.line, decl.col, decl)
-          td.methods.each do |m|
-            mdecl = func_decl(m, "#{td.name}.#{m.name}")
-            @funcs << [mdecl, m.line, m.col]
-            @methods["#{td.name}.#{m.name}"] ||= mdecl
-            bodies << [m, mdecl, false]
-          end
+          td.methods.each { |m| add_method(td.name, m, bodies) }
         end
         program.funcs.each do |f|
           decl = func_decl(f, f.name)
@@ -89,18 +87,57 @@ module Egg
           first = !globals.key?(f.name) # E106; the first definition wins
           globals[f.name] = decl if first
           bodies << [f, decl, first]
+          # A type function's methods, under the generic name: Pair.swap.
+          st = type_fn_struct(f)
+          st.methods.each { |m| add_method(f.name, m, bodies) } unless st.nil?
         end
         @funcs.sort_by! { |_, l, c| [l, c] }
         @globals = globals
         bodies.each do |f, decl, first|
-          ref(decl.line, decl.col, decl) if first || f.owner
+          ref(decl.line, decl.col, decl) if first
           @scopes = [{}]
           f.params.each do |p|
             mode = p.mode.nil? ? "" : "#{p.mode} "
             declare(Decl.new(:param, p.name, p.line, p.col, "#{mode}#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
           end
           walk_block(f.body)
-          walk_type_fn(f.body)
+        end
+        ref_type_names
+      end
+
+      def add_method(owner, m, bodies)
+        mdecl = func_decl(m, "#{owner}.#{m.name}")
+        mdecl.kind = :method
+        @funcs << [mdecl, m.line, m.col]
+        @methods["#{owner}.#{m.name}"] ||= mdecl
+        bodies << [m, mdecl, true]
+      end
+
+      # The `struct { ... }` a type function returns, or nil.
+      def type_fn_struct(f)
+        stmts = f.body.stmts
+        st = stmts.length == 1 && stmts[0].is_a?(Return) ? stmts[0].value : nil
+        st.is_a?(StructTypeExpr) ? st : nil
+      end
+
+      # Type names written in annotations (parameters, results, fields,
+      # typed locals, generic arguments) carry no positions in the AST, so
+      # find them as tokens: a declared type, or a type function before '('.
+      # Type names are capitalised, so no local can share one.
+      def ref_type_names
+        seen = {}
+        @refs.each { |r| seen["#{r.line}:#{r.col}"] = true }
+        @tokens.each_with_index do |t, i|
+          next unless t.kind == :ident && !seen["#{t.line}:#{t.col}"]
+          prev = i.zero? ? nil : @tokens[i - 1]
+          next if !prev.nil? && prev.kind == :op && prev.text == "."
+          decl = @types[t.text]
+          if decl.nil?
+            fn = @globals[t.text]
+            nxt = @tokens[i + 1]
+            decl = fn if !fn.nil? && @type_fns[t.text] && nxt.kind == :op && nxt.text == "("
+          end
+          ref(t.line, t.col, decl, t.text.length) unless decl.nil?
         end
       end
 
@@ -111,21 +148,6 @@ module Egg
         params = f.params.map { |p| "#{p.mode.nil? ? '' : "#{p.mode} "}#{p.name}: #{Egg.type_src(p.type)}" }.join(", ")
         Decl.new(:fn, label, name_tok.line, name_tok.col,
                  "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}", close.line, close.col + 1)
-      end
-
-      # Methods inside `return struct { ... }` of a type function.
-      def walk_type_fn(body)
-        st = body.stmts.length == 1 && body.stmts[0].is_a?(Return) ? body.stmts[0].value : nil
-        return unless st.is_a?(StructTypeExpr)
-        st.methods.each do |m|
-          saved = @scopes
-          @scopes = [{}]
-          m.params.each do |p|
-            declare(Decl.new(:param, p.name, p.line, p.col, "#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
-          end
-          walk_block(m.body)
-          @scopes = saved
-        end
       end
 
       # The '}' that closes the body of the function whose 'fn' is token i.
@@ -166,8 +188,11 @@ module Egg
         in For[iter:, var:, index_var:, body:, line:, col:]
           walk_expr(iter)
           @scopes << {}
-          declare(Decl.new(:local, var, line, col, "#{var}  (loop item)", nil, nil)) unless var == "_"
-          declare(Decl.new(:local, index_var, line, col, "#{index_var}: i64  (loop index)", nil, nil)) unless index_var.nil?
+          item_tok, index_tok = binding_tokens(line, col)
+          declare(Decl.new(:local, var, item_tok.line, item_tok.col, "#{var}  (loop item)", nil, nil)) unless var == "_"
+          unless index_var.nil? || index_var == "_"
+            declare(Decl.new(:local, index_var, index_tok.line, index_tok.col, "#{index_var}: i64  (loop index)", nil, nil))
+          end
           walk_block(body)
           @scopes.pop
         in Break | Continue then nil
@@ -175,8 +200,9 @@ module Egg
           walk_expr(subject)
           arms.each do |arm|
             @scopes << {}
-            unless arm.capture.nil?
-              declare(Decl.new(:local, arm.capture, arm.line, arm.col, "#{arm.capture}  (payload)", nil, nil))
+            unless arm.capture.nil? || arm.capture == "_"
+              tok = binding_tokens(arm.line, arm.col)[0]
+              declare(Decl.new(:local, arm.capture, tok.line, tok.col, "#{arm.capture}  (payload)", nil, nil))
             end
             walk_block(arm.body)
             @scopes.pop
@@ -223,15 +249,19 @@ module Egg
         in MethodCall[obj:, name:, args:, line:, col:]
           walk_expr(obj)
           owner = obj.info.nil? ? nil : (obj.info[:type] || obj.ty)
+          # An instance such as Pair(i64) finds its methods under Pair.
+          owner = owner.sub(/\(.*\z/m, "") if owner.is_a?(String)
           decl = owner.nil? ? nil : @methods["#{owner}.#{name}"]
           ref(line, col, decl, name.length) unless decl.nil?
           args.each { |a| walk_expr(a) }
         in StructLit[type:, fields:, line:, col:]
-          # The literal sits on its '{'; the type name is the token before.
-          decl = type.is_a?(String) ? @types[type] : nil
+          # The literal sits on its '{'; the type name is the token before,
+          # or for Pair(i64){ ... } the token before the matching '('.
+          name = type.is_a?(String) ? type : (type.is_a?(GenericType) ? type.name : nil)
+          decl = name.nil? ? nil : (@types[name] || (@type_fns[name] ? @globals[name] : nil))
           i = @by_pos["#{line}:#{col}"]
-          name_tok = decl.nil? || i.nil? ? nil : @tokens[i - 1]
-          ref(name_tok.line, name_tok.col, decl, type.length) if !name_tok.nil? && name_tok.text == type
+          name_tok = decl.nil? || i.nil? ? nil : @tokens[literal_head(i)]
+          ref(name_tok.line, name_tok.col, decl, name.length) if !name_tok.nil? && name_tok.text == name
           fields.each { |f| walk_expr(f[1]) }
         in ArrayLit[items:]
           items.each { |i| walk_expr(i) }
@@ -256,6 +286,34 @@ module Egg
         else
           raise "lsp: unhandled expression #{expr.class}"
         end
+      end
+
+      # The names between the first pair of '|' after line:col: the item (or
+      # payload) and the optional index of `for (xs) |x, i|` / `=> |p|`.
+      def binding_tokens(line, col)
+        i = @by_pos["#{line}:#{col}"]
+        i += 1 until @tokens[i].kind == :op && @tokens[i].text == "|"
+        first = @tokens[i + 1]
+        comma = @tokens[i + 2]
+        second = comma.kind == :op && comma.text == "," ? @tokens[i + 3] : nil
+        [first, second]
+      end
+
+      # Index of the type name before the '{' at token i, skipping back over
+      # a parenthesised argument list.
+      def literal_head(i)
+        j = i - 1
+        t = @tokens[j]
+        return j unless t.kind == :op && t.text == ")"
+        depth = 0
+        while j > 0
+          t = @tokens[j]
+          depth += 1 if t.kind == :op && t.text == ")"
+          depth -= 1 if t.kind == :op && t.text == "("
+          return j - 1 if depth.zero?
+          j -= 1
+        end
+        j
       end
 
       def declare(decl)
@@ -290,7 +348,8 @@ module Egg
 
     # JSON-RPC over stdio, one file at a time (v0 programs are one file).
     class Server
-      SYMBOL_FUNCTION = 12
+      # LSP SymbolKind values.
+      SYMBOL_KINDS = { fn: 12, method: 6, struct: 23, union: 23, enum: 10 }.freeze
 
       def initialize(input = $stdin, output = $stdout)
         @in = input
@@ -406,7 +465,7 @@ module Egg
         {
           "name" => decl.name,
           "detail" => decl.detail,
-          "kind" => SYMBOL_FUNCTION,
+          "kind" => SYMBOL_KINDS.fetch(decl.kind, 12),
           "range" => range(line, col, decl.end_line, decl.end_col),
           "selectionRange" => name_range(decl)
         }

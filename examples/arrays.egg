@@ -1,4 +1,5 @@
-// Arrays, slices (second-class: parameters only), inout, for, break.
+// Arrays, slices (second-class: parameters, arguments and for subjects only),
+// inout, for, break.
 // expect: 23
 // expect: 11
 // expect: 1
@@ -10,6 +11,8 @@
 // expect: ana
 // expect: egg
 // expect: flow
+// expect: 3
+// expect: 2
 
 fn sum(xs: []i64) i64 {
     var total = 0
@@ -85,4 +88,8 @@ fn main() void {
     for (words) |w| {
         @print(w)
     }
+    @print(@len(a[1..]))
+    const grid: [
+        2]i64 = @splat(1)
+    @print(@len(grid))
 }

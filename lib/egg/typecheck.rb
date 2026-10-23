@@ -554,6 +554,8 @@ module Egg
         if arm.names.nil?
           err("E127", "switch has more than one else", arm.line, arm.col) if has_else
           err("E127", "else must be the last arm of a switch", arm.line, arm.col) unless arm.equal?(arms.last)
+          # else covers several members, so there is no single payload.
+          err("E127", "an else arm has no payload to capture", arm.line, arm.col) unless arm.capture.nil?
           has_else = true
         elsif ok
           arm.names.each do |n|
@@ -580,7 +582,8 @@ module Egg
         end
         @scopes << {}
         unless arm.capture.nil? || arm.capture == "_"
-          declare(arm.capture, VarInfo.new(payload || "error", false, false, false, arm.line, arm.col, false, false))
+          # An else capture is already an error; do not also call it unused.
+          declare(arm.capture, VarInfo.new(payload || "error", false, arm.names.nil?, false, arm.line, arm.col, false, false))
         end
         check_block(arm.body)
         close_scope(@scopes.pop)
@@ -1231,7 +1234,7 @@ module Egg
         end
         "void"
       when "len"
-        t = check_expr(a)
+        t = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
         if t != "error" && t != "str" && !%i[array slice].include?(@types[t]&.kind)
           err("E103", "'@len' needs an array, a slice or a str, found #{t}", line, col)
         end

@@ -73,7 +73,8 @@ The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
 - Types: `i64`, `bool`, `str`, `void`; structs with methods; enums;
   tagged unions `union(enum)`; arrays `[N]T`; slices `[]T`; error unions `!T`
-- `const` / `var`, assignment to variables, fields and elements; `if`,
+- `const` / `var`, assignment to mutable variables, fields and array
+  elements (slice and str elements are read-only); `if`,
   `while`, `for (xs) |x, i|`, `break`, `continue`, exhaustive `switch` with
   payload capture
 - Parameters by value, `inout` (passed as `&x`, with exclusivity checked),

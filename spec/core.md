@@ -45,8 +45,10 @@ fn add(a: i64, b: i64) i64 {
 - **Newlines end statements.** A newline may also appear after a binary
   operator, after `(` `[` `{` or `,`, and before `else`. Anywhere else inside
   an expression, a newline is a syntax error (E002).
-- A name that starts with a capital letter followed by `{` is a struct
-  literal (`Point{ .x = 1 }`), so type names start with a capital letter.
+- A capitalised type name followed by `{` is a type literal: a struct
+  literal (`Point{ .x = 1 }`) or a union literal (`Shape{ .circle = 2 }`).
+  This is why type names start with a capital letter: `if (ok) {` stays a
+  block.
 
 ```egg
 // expect: 6
@@ -74,8 +76,9 @@ fn main() void {
 | `!T` | a T or an error | section 13 |
 | `type` | a type, at compile time only | `comptime` parameters; section 14 |
 
-Every type except slices is a **value type**: assignment, passing and
-returning copy the value. There are **no implicit conversions**. Every
+Every type that has runtime values, except slices, is a **value type**:
+assignment, passing and returning copy the value (`void` and `type` have
+no runtime values). There are **no implicit conversions**. Every
 operator and every assignment, argument and return requires exactly the
 expected type (E103), with two exceptions: a `T` fits where `!T` is
 expected, and `error.X` fits any `!T`. Integers are not booleans: `if (1)`
@@ -321,7 +324,7 @@ const Point = struct {
   `p` is mutable.
 - A function inside a struct is a method if its first parameter has the
   struct's type: `p.len2()` passes `p` by value; `p.move(1)` passes it as
-  `inout`, so `p` must be a `var`. Any function inside the struct can be
+  `inout`, so `p` must be a `var` or an `inout` parameter. Any function inside the struct can be
   called as `Point.origin()` or `Point.len2(p)`.
 - A struct cannot contain itself by value (E119).
 - Field types may be anything except `void`, `type` and slices (E116).
