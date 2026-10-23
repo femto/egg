@@ -264,20 +264,48 @@ end
 def check_lsp_modules
   good = File.join(ROOT, "examples", "modules.egg")
   bad = File.join(ROOT, "test", "errors", "cap_in_module.egg")
+  undeclared = File.join(ROOT, "test", "errors", "cap_undeclared.egg")
   open_doc = ->(path) { { "method" => "textDocument/didOpen", "params" => { "textDocument" => { "uri" => "file://#{path}", "text" => File.read(path) } } } }
   req = [
     { "id" => 1, "method" => "initialize", "params" => {} },
     open_doc.(good),
     open_doc.(bad),
+    open_doc.(undeclared),
+    { "id" => 3, "method" => "textDocument/hover", "params" => { "textDocument" => { "uri" => "file://#{undeclared}" }, "position" => { "line" => 2, "character" => 4 } } },
     { "id" => 2, "method" => "shutdown" },
     { "method" => "exit" }
   ]
-  _, diags, status, err = lsp_session(req)
+  replies, diags, status, err = lsp_session(req)
   report(diags[0] == [], "lsp resolves imports next to the file", diags[0].inspect)
+  hover = replies.dig(3, "result", "contents", "value").to_s.lines[1].to_s.strip
+  report(hover == "fn main(out: Io) void  // uses io", "lsp hover shows capabilities despite E130", hover.inspect)
   d = diags[1]&.first
   ok = d && d["code"] == "E130" && d["range"]["start"] == { "line" => 0, "character" => 0 } && d["message"].include?("lib/quiet_print.egg:3:9: ")
   report(ok, "lsp shows an error in an imported file at the top", diags[1].inspect)
   report(status.success? && err.empty?, "lsp modules session ends cleanly", err)
+end
+
+# Imports by absolute path, unreadable imports, and debug without a path.
+def check_loader(dir)
+  lib = File.join(dir, "loader_lib.egg")
+  File.write(lib, "fn f() void {\n    const x =\n}\n")
+  r = Egg.compile_to_c("const m = @import(\"#{lib}\")\nfn main() void {\n}\n", File.join(dir, "sub", "main.egg"))
+  d = r.diagnostics.first
+  report(d && d.code == "E002" && d.file == lib, "an absolute import keeps its path in diagnostics", d&.to_text("main.egg"))
+  locked = File.join(dir, "locked.egg")
+  File.write(locked, "fn f() void {\n}\n")
+  File.chmod(0o000, locked)
+  begin
+    r = Egg.compile_to_c("const m = @import(\"#{locked}\")\nfn main() void {\n}\n")
+    d = r.diagnostics.first
+    # Skipped where permissions do not apply (running as root).
+    unreadable = !File.readable?(locked)
+    report(!unreadable || (d && d.code == "E129" && d.message.include?("cannot read")), "an unreadable import is E129", d&.to_text("main.egg"))
+  ensure
+    File.chmod(0o644, locked)
+  end
+  r = Egg.compile_to_c("fn main() void {\n}\n", nil, debug: true)
+  report(r.diagnostics.empty? && !r.c_source.include?("#line"), "debug without a path builds without #line marks")
 end
 
 def check_lsp
@@ -349,6 +377,9 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "test", "errors", "*.egg")].sort.each do |path|
     check_errors(File.basename(path), File.read(path), path)
   end
+
+  puts "loader"
+  check_loader(dir)
 
   puts "lsp"
   check_lsp

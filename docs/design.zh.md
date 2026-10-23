@@ -69,7 +69,7 @@ fn hash(bytes: []const u8) u64 {
 }
 ```
 
-声明需要的能力：
+声明需要的能力（这是规划中的写法：v2 目前只有 `out.print`、`a.concat` 和 `a.int_str`，文件读写和 `free` 之后才加）：
 
 ```
 uses alloc, io

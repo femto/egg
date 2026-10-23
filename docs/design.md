@@ -80,7 +80,7 @@ fn hash(bytes: []const u8) u64 {
 }
 ```
 
-Declaring what it needs:
+Declaring what it needs (the planned form: v2 so far has only `out.print`, `a.concat` and `a.int_str`; file IO and `free` come later):
 
 ```
 uses alloc, io

@@ -1,0 +1,13 @@
+// error: E119 @lib/bad_types.egg:2
+// error: E106 @lib/bad_types.egg:13
+// error: E106 @lib/bad_types.egg:18
+// error: E120 @lib/bad_types.egg:20
+// Errors in an imported module's declarations are reported in its file.
+const t = @import("lib/bad_types.egg")
+
+fn main() void {
+    const b: t.Bad(i64) = t.Bad(i64){ .v = 1 }
+    const p = t.P{ .x = 1 }
+    if (p.get() == b.v) {
+    }
+}

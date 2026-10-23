@@ -53,6 +53,6 @@ Runtime panics (the program aborts with `egg panic: <message>`):
 | division by zero | `/` or `%` with a zero divisor |
 | index out of bounds | `a[i]` with `i < 0` or `i >= @len(a)` |
 | slice out of bounds | `a[lo..hi]` unless `0 <= lo <= hi <= @len(a)` |
-| out of memory | an `Allocator` could not get memory from the system |
+| out of memory | an `Allocator` could not get memory from the system, or a concatenated string's length does not fit in i64 |
 
 A `main` returning `!void` that returns an error prints `error: Name` to standard error and exits with status 1.

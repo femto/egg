@@ -70,8 +70,13 @@ module Egg
         fail_at(mod, imp, "E129", "cannot find \"#{imp.path}\" (looked for #{abs})")
       end
       file = display_path(mod, imp.path)
+      src = begin
+        File.read(abs)
+      rescue SystemCallError => e
+        fail_at(mod, imp, "E129", "cannot read \"#{imp.path}\": #{e.message}")
+      end
       prog = begin
-        Parser.new(Lexer.new(File.read(abs)).tokenize).parse_program
+        Parser.new(Lexer.new(src).tokenize).parse_program
       rescue CompileError => e
         e.diagnostic.file = file
         raise e
@@ -116,8 +121,10 @@ module Egg
     end
 
     # The imported file's path as reached from the root file's path, so a
-    # diagnostic in it points at the right file from the user's shell.
+    # diagnostic in it points at the right file from the user's shell. An
+    # absolute import path is kept as it is.
     def display_path(mod, rel)
+      return Egg.normalize_path(rel) if rel.start_with?("/")
       from = mod.file || @display
       dir = from.nil? ? "" : File.dirname(from)
       Egg.normalize_path(dir == "." || dir.empty? ? rel : "#{dir}/#{rel}")

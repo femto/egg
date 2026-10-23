@@ -33,11 +33,11 @@ module Egg
   end
 
   # With debug, the C carries #line directives pointing at the .egg files
-  # (for debug builds).
+  # (for debug builds); it needs the path, and is ignored without one.
   def self.compile_to_c(src, path = nil, debug: false)
     r = check(src, path)
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
-    CompileResult.new(CodegenC.new(r.program, r.checker, debug ? File.expand_path(path) : nil).generate, [])
+    CompileResult.new(CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil).generate, [])
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end

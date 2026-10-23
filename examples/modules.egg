@@ -9,12 +9,19 @@
 // expect: 3
 // expect: 7
 // expect: true
+// expect: 6
 
 uses io
 
 const shapes = @import("lib/shapes.egg")
 const report = @import("lib/report.egg")
 const ring = @import("lib/ring.egg")
+
+// A root type holding an imported one.
+const Framed = struct {
+    inner: shapes.Rect
+    pad: i64
+}
 
 fn main(out: Io) void {
     report.show(out, shapes.Rect.square(3))
@@ -27,4 +34,6 @@ fn main(out: Io) void {
     const xs = [3]i64{ 4, 7, 5 }
     out.print(shapes.biggest(i64, xs[0..]))
     out.print(r.kind() == shapes.Kind.rect)
+    const f = Framed{ .inner = r, .pad = 1 }
+    out.print(f.inner.area() * f.pad)
 }

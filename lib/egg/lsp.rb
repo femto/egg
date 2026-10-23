@@ -34,7 +34,9 @@ module Egg
         program = Parser.new(@tokens).parse_program
         begin
           result = Egg.check(src, path, program)
-          @caps = result.caps if result.diagnostics.empty?
+          # Shown even with errors (E130 is when they matter most); after
+          # a type error no function has any.
+          @caps = result.caps
           @diagnostics = in_this_file(result.diagnostics)
         rescue CompileError => e
           # A missing import or a syntax error in an imported file.

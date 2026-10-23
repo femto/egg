@@ -64,11 +64,13 @@
       }
     },
     "use-capability": {
-      "match": "\\b(uses)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*)*)",
-      "captures": {
-        "1": { "name": "keyword.control.import.egg" },
-        "2": { "name": "entity.name.namespace.egg" }
-      }
+      "begin": "\\b(uses)\\b",
+      "beginCaptures": { "1": { "name": "keyword.control.import.egg" } },
+      "end": "$|(?=//)",
+      "patterns": [
+        { "name": "entity.name.namespace.egg", "match": "[A-Za-z_][A-Za-z0-9_]*" },
+        { "name": "punctuation.separator.comma.egg", "match": "," }
+      ]
     },
     "keywords": {
       "patterns": [

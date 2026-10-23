@@ -5,8 +5,10 @@
 # The full list lives in spec/diagnostics.md.
 
 module Egg
-  # file: the imported file the error is in, as a path relative to the
-  # root file's directory; nil means the root file itself.
+  # file: the imported file the error is in, as the root file's path as
+  # given (its directory) joined with the import path, so it is relative
+  # to the same directory the root path is (an absolute import stays
+  # absolute); nil means the root file itself.
   class Diagnostic
     attr_reader :code, :message, :line, :col
     attr_accessor :file

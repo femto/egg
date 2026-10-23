@@ -270,7 +270,16 @@ module Egg
       info = @types[canon]
       return if info.nil? || info.kind == :prim || done[canon]
       done[canon] = true
-      @line_file = file_of(info.mod)
+      # Marks name the declaring module's file; emitting a field's type
+      # (maybe from another module) first must not change that. Arrays,
+      # error unions and slices have no module and keep the enclosing one.
+      saved = @line_file
+      @line_file = file_of(info.mod) unless info.mod.nil?
+      emit_type_body(canon, info, done)
+      @line_file = saved
+    end
+
+    def emit_type_body(canon, info, done)
       case info.kind
       when :enum
         mark(info.line)

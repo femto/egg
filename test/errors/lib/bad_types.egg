@@ -1,0 +1,23 @@
+// Errors in declarations of an imported module.
+const Node = struct {
+    next: Node
+}
+
+const P = struct {
+    x: i64
+
+    fn get(self: P) i64 {
+        return self.x
+    }
+
+    fn get(self: P) i64 {
+        return 0
+    }
+}
+
+const E = enum { a, a }
+
+fn Bad(comptime T: type) type {
+    const x = 1
+    return struct { v: T }
+}

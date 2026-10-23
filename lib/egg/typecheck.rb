@@ -283,6 +283,13 @@ module Egg
       return @types[d.name] if @types.key?(d.name)
       info = register(d.name, d.kind, d.line, d.col)
       info.mod = d.mod || ""
+      # A type is registered on first use, maybe from another module; its
+      # own errors belong to its file.
+      in_module(d.mod) { register_members(d, info) }
+      info
+    end
+
+    def register_members(d, info)
       if d.kind == :enum
         names = d.members.map(&:name)
         dup = names.find { |n| names.count(n) > 1 }
@@ -302,7 +309,6 @@ module Egg
           add_method(d.name, m, {}, d.name)
         end
       end
-      info
     end
 
     # Methods of plain types are checked eagerly; methods of a generic
@@ -440,7 +446,7 @@ module Egg
       end
       body = f.body.stmts
       unless body.length == 1 && body[0].is_a?(Return) && body[0].value.is_a?(StructTypeExpr)
-        err("E120", "a type function's body must be `return struct { ... }`", f.line, f.col)
+        in_module(f.mod) { err("E120", "a type function's body must be `return struct { ... }`", f.line, f.col) }
         return "error"
       end
       st = Egg.deep_copy(body[0].value)
@@ -451,9 +457,11 @@ module Egg
       info.fn_line = f.line
       info.return_line = body[0].line
       with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) }
-      st.methods.each do |m|
-        m.owner = canon
-        add_method(canon, m, tenv, canon, false)
+      in_module(f.mod) do
+        st.methods.each do |m|
+          m.owner = canon
+          add_method(canon, m, tenv, canon, false)
+        end
       end
       canon
     end
@@ -471,7 +479,7 @@ module Egg
       if state[canon] == :visiting
         cycle = path.drop_while { |c| c != canon } + [canon]
         first = @types[cycle[0]]
-        err("E119", "#{cycle.join(' -> ')}: a struct cannot contain itself by value", first.line || 1, first.col || 1)
+        in_module(first.mod) { err("E119", "#{cycle.join(' -> ')}: a struct cannot contain itself by value", first.line || 1, first.col || 1) }
         return
       end
       state[canon] = :visiting
