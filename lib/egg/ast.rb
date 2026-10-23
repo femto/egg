@@ -13,9 +13,12 @@
 module Egg
   # funcs: top-level functions (including generic and type-returning ones)
   # types: TypeDecl for `const Name = struct/enum { ... }`
-  Program  = Struct.new(:funcs, :types)
+  # uses: UsesItem list from `uses alloc, io`; imports: ImportDecl list
+  # modules: filled by the Loader for the merged program (prefix -> ModuleInfo)
+  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules)
   # owner: the struct a method belongs to (nil for free functions)
-  Func     = Struct.new(:name, :params, :ret, :body, :line, :col, :owner)
+  # mod: prefix of the module it is declared in ("" for the root file)
+  Func     = Struct.new(:name, :params, :ret, :body, :line, :col, :owner, :mod)
   # mode: nil (by value), "inout", or "comptime"
   Param    = Struct.new(:name, :type, :line, :col, :mode)
   Block    = Struct.new(:stmts)
@@ -31,8 +34,13 @@ module Egg
   # const Name = struct { ... } / enum { ... } / union(enum) { ... }
   # members: FieldDecl list (a union member with no payload has type nil);
   # methods: Func list (struct and union)
-  TypeDecl  = Struct.new(:name, :kind, :members, :methods, :line, :col)
+  TypeDecl  = Struct.new(:name, :kind, :members, :methods, :line, :col, :mod)
   FieldDecl = Struct.new(:name, :type, :line, :col)
+  # uses alloc, io: one entry per capability named
+  UsesItem   = Struct.new(:name, :line, :col)
+  # const name = @import("path.egg")
+  ImportDecl = Struct.new(:name, :path, :line, :col)
+
   # `struct { ... }` as an expression: the body of a type-returning function
   StructTypeExpr = Struct.new(:members, :methods, :line, :col, :ty, :info)
 

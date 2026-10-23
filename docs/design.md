@@ -68,7 +68,7 @@ fn main() i64 {
 
 ## Capability system
 
-A module declares its capabilities at the top; the compiler infers what each function actually uses and checks it recursively. Only public APIs must state their capabilities. A module that declares none is pure core code.
+A module (a file) declares its capabilities at the top with `uses`; the compiler infers what each function actually uses and checks it recursively along the call graph. A capability is used through a value (`Io`, `Allocator`) that only `main` receives from the runtime and that is passed down explicitly, so code without the value cannot reach the capability, and code in a module without the declaration cannot use the value. A module that declares none is pure core code.
 
 Core only, no capabilities:
 
@@ -83,10 +83,9 @@ fn hash(bytes: []const u8) u64 {
 Declaring what it needs:
 
 ```
-use cap.alloc
-use cap.io
+uses alloc, io
 
-fn read_config(a: Allocator, path: []const u8) !Config {
+fn read_config(io: Io, a: Allocator, path: []const u8) !Config {
     const text = try io.read_file(a, path)
     defer a.free(text)
     return parse(text)
@@ -97,16 +96,16 @@ First capabilities:
 
 | Capability | Provides | Planned |
 | --- | --- | --- |
-| `alloc` | heap allocation, allocator passed explicitly | v2 |
-| `io` | files and standard streams, one implementation per OS | v2 |
+| `alloc` | heap allocation, allocator passed explicitly | v2 (first a program-lifetime arena; freeing with ownership checking) |
+| `io` | files and standard streams, one implementation per OS | v2 (first standard output; files later) |
 | `gc` | GC-managed objects, implemented in core code | v3 |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:
 
-1. A function may not use a capability its module did not declare.
-2. The compiler infers each function's capability set along the call graph, including indirect calls.
-3. A public function's capability set appears in its signature, or tooling generates it into the docs.
+1. A function may not use a capability its module did not declare (E130).
+2. The compiler infers each function's capability set along the call graph, including indirect calls, calls into other modules and generic instances: a module without `uses io` cannot print even inside a generic function instantiated with `Io`.
+3. Capability sets are not written in signatures; tooling shows them (the language server's hover does).
 4. Values crossing a capability boundary follow boundary rules; for example, a GC object passed to a non-GC module must be pinned or copied.
 
 The exact boundary rules are not settled; see Open questions.
@@ -132,10 +131,11 @@ Pipeline:
 
 1. Lexing (`lexer.rb`)
 2. Recursive-descent parsing into an AST (`parser.rb`)
-3. Type checking (`typecheck.rb`)
-4. Capability checking, from v2 (`caps.rb`)
-5. C code generation (`codegen_c.rb`)
-6. Invoking the C compiler to produce an executable
+3. Loading imported modules and merging them into one program (`loader.rb`, from v2)
+4. Type checking (`typecheck.rb`)
+5. Capability checking, from v2 (`caps.rb`)
+6. C code generation (`codegen_c.rb`)
+7. Invoking the C compiler to produce an executable
 
 Layout:
 
@@ -146,6 +146,7 @@ egg/
 │   ├── lexer.rb
 │   ├── ast.rb
 │   ├── parser.rb
+│   ├── loader.rb
 │   ├── typecheck.rb
 │   ├── caps.rb
 │   └── codegen_c.rb
@@ -192,21 +193,21 @@ The C that Egg generates must be portable from day one:
 
 ## Roadmap
 
-Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. Next, v2 adds raw pointers and function values behind `allow unsafe`, `extern fn`, the `Allocator` and `Io` capability values, and ownership checking.
+Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. v2 is under way: its first step, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done; still to come are raw pointers and function values behind `allow unsafe`, `extern fn`, and ownership checking.
 
 | Phase | Scope | Acceptance gate |
 | --- | --- | --- |
 | v0 · Core subset ✅ | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
 | v1 · Types and comptime ✅ | `struct` with methods, `enum`, tagged unions, `str`, arrays, second-class slices, `inout`; error values; comptime generics; `@sizeOf`, `@typeName` | Generic `Pair` and error-value examples pass their tests |
-| v2 · Capability checks | `alloc` and `io` capabilities; recursive check along the call graph | Programs using undeclared capabilities are rejected |
+| v2 · Capability checks (capability check ✅) | modules; `alloc` and `io` capabilities; recursive check along the call graph | Programs using undeclared capabilities are rejected |
 | v3 · GC written in core | `gc` library uses only core code | `gc` declares no capabilities and passes the capability check |
 | v4 · Self-hosting | `eggc` rewritten in Egg, compiled by the previous generation | Generation 2 and 3 output is byte-identical |
 
 ## Open questions
 
 - [ ] Semicolons at the end of statements? The examples omit them; weigh against parser simplicity.
-- [ ] Syntax for capabilities in signatures: `fn f() !void with io`, or only module-level declarations with generated docs?
-- [ ] Granularity: is `io` one capability, or split into `fs`, `net` and `stdio`?
+- [x] Syntax for capabilities in signatures: `fn f() !void with io`, or only module-level declarations with generated docs? Decided in v2: module-level `uses alloc, io`, with capability values passed explicitly; signatures carry no capability list, and tooling shows each function's set.
+- [ ] Granularity: is `io` one capability, or split into `fs`, `net` and `stdio`? v2 starts with one `io` (standard output only); revisit when files arrive.
 - [ ] Rules for GC objects crossing a capability boundary: pin, copy or forbid?
 - [ ] Conservative scanning or a shadow stack with precise scanning for the GC? The latter allows a moving GC but costs something on every call.
 - [ ] Exceptions via `setjmp`/`longjmp` or a check after every call? The latter fits a shadow stack more simply.

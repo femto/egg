@@ -1,0 +1,10 @@
+// Prints, so it declares io. Imports shapes.egg too: both importers see
+// the same types.
+uses io
+
+const shapes = @import("shapes.egg")
+
+fn show(out: Io, r: shapes.Rect) void {
+    out.print(r.kind())
+    out.print(r.area())
+}

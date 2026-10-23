@@ -1,0 +1,5 @@
+// error: E002 @lib/broken.egg:3
+const broken = @import("lib/broken.egg")
+
+fn main() void {
+}

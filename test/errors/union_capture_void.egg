@@ -1,10 +1,12 @@
-// error: E127 @6
+// error: E127 @8
+uses io
+
 const U = union(enum) { a: i64, b }
-fn main() void {
+fn main(out: Io) void {
     const u = U.b
     switch (u) {
         .b => |x| {
-            @print(x)
+            out.print(x)
         }
         .a => {}
     }

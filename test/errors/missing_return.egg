@@ -1,7 +1,9 @@
-// error: E107 @2
+// error: E107 @4
+uses io
+
 fn sign(n: i64) i64 {
     if (n < 0) { return -1 }
 }
-fn main() void {
-    @print(sign(3))
+fn main(out: Io) void {
+    out.print(sign(3))
 }

@@ -1,0 +1,30 @@
+// Modules: qualified functions, types, enums, generics and static
+// methods across files; a shared import and an import cycle.
+// expect: square
+// expect: 9
+// expect: rect
+// expect: 6
+// expect: 10
+// expect: 1
+// expect: 3
+// expect: 7
+// expect: true
+
+uses io
+
+const shapes = @import("lib/shapes.egg")
+const report = @import("lib/report.egg")
+const ring = @import("lib/ring.egg")
+
+fn main(out: Io) void {
+    report.show(out, shapes.Rect.square(3))
+    const r = shapes.Rect{ .w = 2, .h = 3 }
+    report.show(out, r)
+    out.print(shapes.perimeter(r))
+    out.print(ring.unit().area())
+    const b: shapes.Box(i64) = shapes.Box(i64){ .item = 3, .count = 1 }
+    out.print(b.item * b.count)
+    const xs = [3]i64{ 4, 7, 5 }
+    out.print(shapes.biggest(i64, xs[0..]))
+    out.print(r.kind() == shapes.Kind.rect)
+}

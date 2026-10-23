@@ -5,11 +5,14 @@ GC, exceptions, IO and allocation are capability modules a program declares
 on demand. See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
-This repository holds **eggc**, the first compiler, now at **v1**: written
+This repository holds **eggc**, the first compiler, now partway through
+**v2** (modules and capability checking are in): written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
 compiles), running on CRuby 3.0+, emitting portable C99.
 
 ```
+uses io
+
 const Shape = union(enum) {
     circle: i64
     rect: Size
@@ -34,9 +37,9 @@ fn total(shapes: []Shape) i64 {
     return sum
 }
 
-fn main() void {
+fn main(out: Io) void {
     const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
-    @print(total(shapes[0..]))   // 24
+    out.print(total(shapes[0..]))   // 24
 }
 ```
 
@@ -67,9 +70,24 @@ The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
 rebuild to switch back.
 
-## What v1 supports
+## What eggc supports
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
+
+v2 so far:
+
+- Modules: `const m = @import("m.egg")`, then `m.f()`, `m.Point`,
+  `m.Pair(i64)`; each file loaded once, cycles allowed; diagnostics name
+  the file
+- Capabilities: a file declares `uses alloc, io`; `main` receives the
+  capability values (`fn main(out: Io, a: Allocator)`) and passes them
+  down; `out.print(x)` replaces `@print`; `a.concat(s, t)` and
+  `a.int_str(n)` build strings in a program-lifetime arena
+- **Capability check** (E130): following the call graph across files and
+  generic instances, a function that uses a capability its file does not
+  declare is rejected; hover in the editor shows what each function uses
+
+From v1:
 
 - Types: `i64`, `bool`, `str`, `void`; structs with methods; enums;
   tagged unions `union(enum)`; arrays `[N]T`; slices `[]T`; error unions `!T`
@@ -81,7 +99,7 @@ The full definition, with tested examples, is [spec/core.md](spec/core.md).
   or `comptime T: type`; generic functions and type functions
   (`fn Pair(comptime T: type) type { return struct { ... } }`)
 - Errors as values: `error.X`, `try`, `catch`; `main` may return `!void`
-- Builtins: `@print`, `@len`, `@sizeOf`, `@typeName`, `@splat`, `@This`
+- Builtins: `@len`, `@sizeOf`, `@typeName`, `@splat`, `@This`, `@import`
 
 Design choices worth knowing:
 
@@ -107,13 +125,16 @@ editors/vscode/        VS Code syntax highlighting (install the .vsix)
 lib/egg/lexer.rb       source -> tokens (newlines are significant)
 lib/egg/parser.rb      tokens -> AST (recursive descent)
 lib/egg/ast.rb         AST as Structs
+lib/egg/loader.rb      the root file and its imports, merged into one program
 lib/egg/typecheck.rb   types and Zig-style strictness checks
+lib/egg/caps.rb        capability check along the call graph
 lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
-lib/egg/lsp.rb         language server (a tool: uses the json stdlib, not Spinel)
+lib/egg/lsp.rb         language server (a tool: uses the json and uri stdlib, not Spinel)
 spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
 examples/              programs with `// expect:` / `// panic:` / `// fails:` lines
+                       (examples/lib/: modules they import)
 test/errors/           programs that must fail with `// error: CODE @LINE`
 test/run.rb            test runner, no gems
 ```

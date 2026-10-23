@@ -1,0 +1,7 @@
+// error: E130 @6
+// io is declared, alloc is not.
+uses io
+
+fn main(out: Io, a: Allocator) void {
+    out.print(a.int_str(5))
+}

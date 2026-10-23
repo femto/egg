@@ -1,6 +1,8 @@
-// error: E103 @5
+// error: E103 @7
+uses io
+
 const P = struct { x: i64 }
-fn main() void {
+fn main(out: Io) void {
     const p = P{ .x = 1 }
-    @print(p == p)
+    out.print(p == p)
 }

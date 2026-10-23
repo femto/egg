@@ -19,21 +19,41 @@
 #   - shadowing an outer name            (E106)
 # Slices are second-class (E116): they exist only as parameters, so a
 # borrowed view can never outlive what it points into.
+#
+# Modules: the Loader has renamed every imported top-level name to
+# "m.name"; `@mod` is the module whose code is being checked, and
+# `qualify` turns a name as written there ("Point", "m.Point") into the
+# global one. The checker also records, per function, the capabilities it
+# uses directly and the functions it calls, for the capability check
+# (caps.rb).
 
 module Egg
   VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
   # params: [[type, mode]] (comptime parameters removed); ret: type
-  Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked)
+  # direct: capability -> [line, col, what] for its first direct use
+  # calls: [[Sig, line, col]] for every call in the body
+  Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls)
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
-  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line)
+  # mod: prefix of the module that declares the type (for #line marks)
+  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod)
 
   class TypeChecker
-    PRIMS = %w[i64 bool str void].freeze
+    # Io and Allocator are capability values: opaque, and only `main`
+    # receives them (from the runtime); everything else is passed them.
+    PRIMS = %w[i64 bool str void Io Allocator].freeze
+    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc" }.freeze
+    CAPABILITIES = %w[alloc io].freeze
+    # Methods of capability values: name -> [parameter types, result]
+    # ("printable" accepts i64, bool, str and enums).
+    CAP_METHODS = {
+      "Io" => { "print" => [["printable"], "void"] },
+      "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["i64"], "str"] }
+    }.freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
-    BUILTINS = %w[print len sizeOf typeName splat].freeze
+    BUILTINS = %w[len sizeOf typeName splat].freeze
 
-    attr_reader :diagnostics, :types, :type_order, :concrete, :error_names, :main_sig
+    attr_reader :diagnostics, :types, :type_order, :concrete, :error_names, :main_sig, :modules
 
     def initialize(program)
       @program = program
@@ -53,6 +73,8 @@ module Egg
       @this = nil
       @current = nil
       @loop_depth = 0
+      @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], []) }
+      @mod = @modules[""]
       PRIMS.each { |p| @types[p] = TInfo.new(p, :prim) }
     end
 
@@ -76,24 +98,29 @@ module Egg
     # ---- top level ----------------------------------------------------
 
     def collect
+      @modules.each_value { |m| in_module(m.prefix) { check_uses(m) } }
       @program.types.each do |d|
-        if @decls.key?(d.name) || PRIMS.include?(d.name)
-          err("E106", "type '#{d.name}' is defined more than once", d.line, d.col)
-          next
+        in_module(d.mod) do
+          if @decls.key?(d.name) || PRIMS.include?(base_name(d.name))
+            err("E106", "type '#{d.name}' is defined more than once", d.line, d.col)
+            next
+          end
+          @decls[d.name] = d
         end
-        @decls[d.name] = d
       end
       @program.funcs.each do |f|
-        if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name)
-          err("E106", "function '#{f.name}' is defined more than once", f.line, f.col)
-          next
-        end
-        if f.ret == "type"
-          @type_fns[f.name] = f
-        elsif f.params.any? { |p| p.mode == "comptime" }
-          @generic_fns[f.name] = f
-        else
-          @sigs[f.name] = Sig.new(f.name, nil, nil, f, c_name("fn_#{f.name}"), {}, nil, nil, false)
+        in_module(f.mod) do
+          if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name)
+            err("E106", "function '#{f.name}' is defined more than once", f.line, f.col)
+            next
+          end
+          if f.ret == "type"
+            @type_fns[f.name] = f
+          elsif f.params.any? { |p| p.mode == "comptime" }
+            @generic_fns[f.name] = f
+          else
+            @sigs[f.name] = new_sig(f.name, f, c_name("fn_#{f.name}"), {}, nil, nil)
+          end
         end
       end
       # Types first (so signatures can refer to them), then signatures.
@@ -106,19 +133,87 @@ module Egg
       end
     end
 
+    # `uses alloc, io`: known capabilities, each named once.
+    def check_uses(m)
+      seen = {}
+      m.uses.each do |u|
+        if !CAPABILITIES.include?(u.name)
+          err("E128", "unknown capability '#{u.name}' (capabilities: #{CAPABILITIES.join(', ')})", u.line, u.col)
+        elsif seen[u.name]
+          err("E128", "capability '#{u.name}' is declared twice", u.line, u.col)
+        end
+        seen[u.name] = true
+      end
+    end
+
+    # Methods are keyed apart from functions, which may be named "m.f".
+    def method_key(owner, name)
+      "#{owner}::#{name}"
+    end
+
+    def new_sig(name, func, c_name, tenv, this, owner)
+      Sig.new(name, nil, nil, func, c_name, tenv, this, owner, false, {}, [])
+    end
+
+    # "m.Point" -> "Point"
+    def base_name(name)
+      i = name.rindex(".")
+      i.nil? ? name : name[(i + 1)..]
+    end
+
+    def in_module(prefix)
+      saved = @mod
+      @mod = @modules[prefix || ""]
+      yield
+    ensure
+      @mod = saved
+    end
+
+    # A name as written in the current module -> its global name: "Point"
+    # declared here -> "m.Point"; "u.Point" with `const u = @import(...)`
+    # -> that module's "Point". Anything else is returned unchanged (a
+    # primitive, a local, or an unknown name the caller reports).
+    def qualify(name)
+      dot = name.index(".")
+      if dot.nil?
+        return @mod.names.include?(name) ? Egg.qualify(@mod, name) : name
+      end
+      prefix = @mod.aliases[name[0...dot]]
+      return name if prefix.nil?
+      target = @modules[prefix]
+      rest = name[(dot + 1)..]
+      target.names.include?(rest) ? Egg.qualify(target, rest) : name
+    end
+
+    # The module an expression names (`m` with `const m = @import(...)`),
+    # or nil.
+    def module_ref(e)
+      return nil unless e.is_a?(Var) && lookup(e.name).nil?
+      prefix = @mod.aliases[e.name]
+      prefix.nil? ? nil : @modules[prefix]
+    end
+
     def enqueue(sig)
       return if sig.checked
       sig.checked = true
       @queue << sig
     end
 
+    # main returns void, i64 or !void, and takes only capability values
+    # (each at most once), which the runtime creates.
     def check_main
       sig = @sigs["main"]
       if sig.nil?
         err("E109", "program has no 'main' function", 1, 1)
-      elsif !sig.params.empty? || !%w[void i64 !void].include?(sig.ret)
+      else
         f = sig.func
-        err("E109", "'main' must take no parameters and return void, i64 or !void", f.line, f.col)
+        types = sig.params.map(&:first)
+        bad = sig.params.any? { |t, mode| !CAP_TYPES.key?(t) || !mode.nil? } || types.uniq.length != types.length
+        if bad
+          err("E109", "'main' takes only capability values, each at most once, such as (out: Io, a: Allocator)", f.line, f.col)
+        elsif !%w[void i64 !void].include?(sig.ret)
+          err("E109", "'main' must return void, i64 or !void", f.line, f.col)
+        end
       end
       @main_sig = sig
     end
@@ -126,7 +221,7 @@ module Egg
     # Resolve parameter and return types of a signature (in its type env).
     def build_sig(sig)
       f = sig.func
-      with_env(sig.tenv, sig.this) do
+      with_env(sig.tenv, sig.this, f.mod) do
         sig.params = []
         f.params.each do |p|
           next if p.mode == "comptime"
@@ -149,13 +244,14 @@ module Egg
 
     # ---- types --------------------------------------------------------
 
-    def with_env(tenv, this)
-      saved = [@tenv, @this]
+    def with_env(tenv, this, mod)
+      saved = [@tenv, @this, @mod]
       @tenv = tenv
       @this = this
+      @mod = @modules[mod || ""]
       yield
     ensure
-      @tenv, @this = saved
+      @tenv, @this, @mod = saved
     end
 
     def register(canon, kind, line, col)
@@ -186,6 +282,7 @@ module Egg
     def register_decl(d)
       return @types[d.name] if @types.key?(d.name)
       info = register(d.name, d.kind, d.line, d.col)
+      info.mod = d.mod || ""
       if d.kind == :enum
         names = d.members.map(&:name)
         dup = names.find { |n| names.count(n) > 1 }
@@ -193,13 +290,13 @@ module Egg
         info.members = names
         info.member_lines = d.members.map(&:line)
       elsif d.kind == :union
-        with_env({}, d.name) { info.fields = resolve_fields(d.members, true) }
+        with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members, true) }
         d.methods.each do |m|
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
         end
       else
-        with_env({}, d.name) { info.fields = resolve_fields(d.members) }
+        with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members) }
         d.methods.each do |m|
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
@@ -212,12 +309,12 @@ module Egg
     # instance only when called (lazy, as in Zig), so Stack(T) can have a
     # method that needs `>` on T and still be used with a T that has none.
     def add_method(owner, m, tenv, this, eager = true)
-      key = "#{owner}.#{m.name}"
+      key = method_key(owner, m.name)
       if @sigs.key?(key) || @types[owner]&.fields&.any? { |f, _| f == m.name }
         err("E106", "'#{m.name}' is defined more than once in #{owner}", m.line, m.col)
         return
       end
-      sig = Sig.new(m.name, nil, nil, m, c_name("fn_#{owner}__#{m.name}"), tenv, this, owner, false)
+      sig = new_sig(m.name, m, c_name("fn_#{owner}__#{m.name}"), tenv, this, owner)
       @sigs[key] = sig
       build_sig(sig)
       enqueue(sig) if eager
@@ -255,12 +352,13 @@ module Egg
       when String
         return @tenv[t] if @tenv.key?(t)
         return t if PRIMS.include?(t) || t == "type"
-        decl = @decls[t]
+        q = qualify(t)
+        decl = @decls[q]
         return register_decl(decl).canon unless decl.nil?
-        if @type_fns.key?(t)
+        if @type_fns.key?(q)
           err("E108", "'#{t}' is a type function; write #{t}(...) with its arguments", line, col)
         else
-          err("E108", "unknown type '#{t}'", line, col)
+          err("E108", "unknown type '#{t}'#{module_hint(t)}", line, col)
         end
         "error"
       when ArrayType
@@ -302,7 +400,7 @@ module Egg
       when GenericType
         args = t.args.map { |a| resolve_type(a, line, col) }
         return "error" if args.include?("error")
-        instantiate_type_fn(t.name, args, line, col)
+        instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when ThisType
         return @this unless @this.nil?
         err("E108", "@This() is only valid inside a struct", line, col)
@@ -327,10 +425,11 @@ module Egg
 
     # Pair(i64): run the type function at compile time. Its body must be
     # `return struct { ... }`; T is substituted by deep-copying the struct.
-    def instantiate_type_fn(name, args, line, col)
+    # name: global name; written: as in the source, for messages
+    def instantiate_type_fn(name, args, line, col, written = name)
       f = @type_fns[name]
       if f.nil?
-        err("E108", "'#{name}' is not a type function", line, col)
+        err("E108", "'#{written}' is not a type function#{module_hint(written)}", line, col)
         return "error"
       end
       canon = "#{name}(#{args.join(', ')})"
@@ -348,9 +447,10 @@ module Egg
       tenv = {}
       f.params.each_with_index { |p, i| tenv[p.name] = args[i] }
       info = register(canon, :struct, st.line, st.col)
+      info.mod = f.mod || ""
       info.fn_line = f.line
       info.return_line = body[0].line
-      with_env(tenv, canon) { info.fields = resolve_fields(st.members) }
+      with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) }
       st.methods.each do |m|
         m.owner = canon
         add_method(canon, m, tenv, canon, false)
@@ -394,7 +494,7 @@ module Egg
     def check_body(sig)
       f = sig.func
       @concrete << sig
-      with_env(sig.tenv, sig.this) do
+      with_env(sig.tenv, sig.this, f.mod) do
         @current = sig
         @scopes = [{}]
         @loop_depth = 0
@@ -677,8 +777,11 @@ module Egg
           e.info[:type] = t
           return "type"
         end
-        if @sigs.key?(name) || @generic_fns.key?(name)
+        q = qualify(name)
+        if @sigs.key?(q) || @generic_fns.key?(q)
           err("E103", "'#{name}' is a function; call it with (...)", line, col)
+        elsif @mod.aliases.key?(name)
+          err("E129", "'#{name}' is a module; name something in it, such as #{name}.f(...)", line, col)
         else
           err("E101", "undefined variable '#{name}'", line, col)
         end
@@ -704,6 +807,25 @@ module Egg
       in Builtin[name:, args:, line:, col:]
         check_builtin(e, name, args, expected, line, col)
       in Field[obj:, name:, line:, col:]
+        unless module_ref(obj).nil?
+          # m.Point / m.Color: a type of another module
+          obj.info = {}
+          obj.ty = "module"
+          t = type_named("#{obj.name}.#{name}")
+          if t.nil?
+            q = qualify("#{obj.name}.#{name}")
+            if @sigs.key?(q) || @generic_fns.key?(q)
+              err("E103", "'#{obj.name}.#{name}' is a function; call it with (...)", line, col)
+            elsif @type_fns.key?(q)
+              err("E108", "'#{obj.name}.#{name}' is a type function; write #{obj.name}.#{name}(...) with its arguments", line, col)
+            else
+              err("E122", "module '#{obj.name}' declares no '#{name}'", line, col)
+            end
+            return "error"
+          end
+          e.info[:type] = t
+          return "type"
+        end
         t = check_expr(obj)
         if t == "type"
           enum_t = obj.info[:type]
@@ -817,9 +939,17 @@ module Egg
     def type_named(name)
       return @tenv[name] if @tenv.key?(name)
       return name if PRIMS.include?(name)
-      d = @decls[name]
+      d = @decls[qualify(name)]
       return register_decl(d).canon unless d.nil?
       nil
+    end
+
+    # "; there is no import named 'u'" for "u.Point" without the import.
+    def module_hint(name)
+      dot = name.index(".")
+      return "" if dot.nil?
+      m = name[0...dot]
+      @mod.aliases.key?(m) ? "; module '#{m}' declares no '#{name[(dot + 1)..]}'" : "; there is no import named '#{m}'"
     end
 
     def field_type(t, name, line, col)
@@ -835,7 +965,7 @@ module Egg
       end
       f = info.fields.find { |n, _| n == name }
       if f.nil?
-        hint = @sigs.key?("#{t}.#{name}") ? "; '#{name}' is a method, call it with (...)" : ""
+        hint = @sigs.key?(method_key(t, name)) ? "; '#{name}' is a method, call it with (...)" : ""
         err("E122", "#{t} has no field '#{name}'#{hint}", line, col)
         return "error"
       end
@@ -888,12 +1018,14 @@ module Egg
 
     # ---- calls --------------------------------------------------------
 
-    def check_call(e, name, args, line, col)
-      if lookup(name)
+    # name: as written ("f", or "m.f" for a call into module m)
+    def check_call(e, written, args, line, col)
+      if lookup(written)
         args.each { |a| check_expr(a) }
-        err("E102", "'#{name}' is a variable, not a function", line, col)
+        err("E102", "'#{written}' is a variable, not a function", line, col)
         return "error"
       end
+      name = qualify(written)
       if @type_fns.key?(name)
         types = args.map { |a| type_arg(a) }
         return "error" if types.include?("error")
@@ -909,20 +1041,31 @@ module Egg
         e.info[:c_name] = sig.c_name
         e.info[:args] = runtime_args
         e.info[:params] = sig.params
-        check_args(sig, runtime_args, name, line, col)
+        record_call(sig, line, col)
+        check_args(sig, runtime_args, written, line, col)
         return sig.ret
       end
       sig = @sigs[name]
       if sig.nil?
         args.each { |a| check_expr(a) }
-        err("E102", "undefined function '#{name}'", line, col)
+        if written.include?(".") && @mod.aliases.key?(written[0...written.index(".")])
+          err("E102", "undefined function '#{written}'#{module_hint(written)}", line, col)
+        else
+          err("E102", "undefined function '#{written}'", line, col)
+        end
         return "error"
       end
       e.info[:c_name] = sig.c_name
       e.info[:args] = args
       e.info[:params] = sig.params
-      check_args(sig, args, name, line, col)
+      record_call(sig, line, col)
+      check_args(sig, args, written, line, col)
       sig.ret
+    end
+
+    # A call edge for the capability check.
+    def record_call(sig, line, col)
+      @current.calls << [sig, line, col] unless @current.nil?
     end
 
     # A comptime argument: must name a type.
@@ -957,7 +1100,7 @@ module Egg
       sig = @sigs[key]
       return sig unless sig.nil?
       copy = Egg.deep_copy(f)
-      sig = Sig.new(f.name, nil, nil, copy, c_name("fn_#{key}"), tenv, nil, nil, false)
+      sig = new_sig(f.name, copy, c_name("fn_#{key}"), tenv, nil, nil)
       @sigs[key] = sig
       build_sig(sig)
       enqueue(sig)
@@ -965,16 +1108,25 @@ module Egg
     end
 
     def check_method_call(e, obj, name, args, line, col)
+      unless module_ref(obj).nil?
+        # m.f(...): a function of another module
+        obj.info = {}
+        obj.ty = "module"
+        e.info[:static] = true
+        return check_call(e, "#{obj.name}.#{name}", args, line, col)
+      end
       t = check_expr(obj)
       return check_all_error(args) if t == "error"
+      return check_cap_method(e, obj, t, name, args, line, col) if CAP_METHODS.key?(t)
       if t == "type"
         owner = obj.info[:type]
-        sig = @sigs["#{owner}.#{name}"]
+        sig = @sigs[method_key(owner, name)]
         if sig.nil?
           err("E122", "#{owner} has no function '#{name}'", line, col)
           return check_all_error(args)
         end
         enqueue(sig)
+        record_call(sig, line, col)
         e.info[:c_name] = sig.c_name
         e.info[:static] = true
         e.info[:args] = args
@@ -982,7 +1134,7 @@ module Egg
         check_args(sig, args, "#{owner}.#{name}", line, col)
         return sig.ret
       end
-      sig = @sigs["#{t}.#{name}"]
+      sig = @sigs[method_key(t, name)]
       if sig.nil?
         hint = (@types[t]&.fields || []).any? { |n, _| n == name } ? "; '#{name}' is a field" : ""
         err("E122", "#{t} has no method '#{name}'#{hint}", line, col)
@@ -998,6 +1150,7 @@ module Egg
         mark_root_used(obj)
       end
       enqueue(sig)
+      record_call(sig, line, col)
       e.info[:c_name] = sig.c_name
       e.info[:self_inout] = self_mode == "inout"
       e.info[:args] = args
@@ -1005,6 +1158,37 @@ module Egg
       rest = Sig.new(sig.name, sig.params.drop(1), sig.ret)
       check_args(rest, args, name, line, col, [obj])
       sig.ret
+    end
+
+    # out.print(x), a.concat(s, t): a direct use of a capability.
+    def check_cap_method(e, obj, t, name, args, line, col)
+      m = CAP_METHODS[t][name]
+      if m.nil?
+        err("E122", "#{t} has no method '#{name}' (methods: #{CAP_METHODS[t].keys.join(', ')})", line, col)
+        return check_all_error(args)
+      end
+      cap = CAP_TYPES[t]
+      @current.direct[cap] ||= [line, col, "#{t}.#{name}"]
+      params, ret = m
+      if params.length != args.length
+        err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
+        return check_all_error(args)
+      end
+      params.each_with_index do |pt, i|
+        a = args[i]
+        if pt == "printable"
+          at = check_expr(a)
+          if at == "void"
+            err("E103", "'#{name}' cannot print a void value", a.line, a.col)
+          elsif at != "error" && !(%w[i64 bool str].include?(at) || @types[at]&.kind == :enum)
+            err("E103", "'#{name}' prints i64, bool, str and enums, not #{at}", a.line, a.col)
+          end
+        else
+          expect_type(pt, check_expr(a, pt), a)
+        end
+      end
+      e.info[:cap_method] = "#{t}.#{name}"
+      ret
     end
 
     def check_all_error(args)
@@ -1215,8 +1399,16 @@ module Egg
     # ---- builtins -----------------------------------------------------
 
     def check_builtin(e, name, args, expected, line, col)
+      if name == "print"
+        err("E112", "@print was removed: printing needs the io capability; write `uses io`, take `out: Io` in main and call out.print(x)", line, col)
+        return check_all_error(args)
+      end
+      if name == "import"
+        err("E129", "@import is only allowed as a top-level `const name = @import(\"file.egg\")`", line, col)
+        return check_all_error(args)
+      end
       unless BUILTINS.include?(name)
-        err("E112", "unknown builtin '@#{name}' (builtins: #{BUILTINS.map { |b| "@#{b}" }.join(', ')})", line, col)
+        err("E112", "unknown builtin '@#{name}' (builtins: #{BUILTINS.map { |b| "@#{b}" }.join(', ')}, and @This, @import)", line, col)
         return check_all_error(args)
       end
       if args.length != 1
@@ -1225,14 +1417,6 @@ module Egg
       end
       a = args[0]
       case name
-      when "print"
-        t = check_expr(a)
-        if t == "void"
-          err("E103", "'@print' cannot print a void value", line, col)
-        elsif t != "error" && !(%w[i64 bool str].include?(t) || @types[t]&.kind == :enum)
-          err("E103", "'@print' prints i64, bool, str and enums, not #{t}", line, col)
-        end
-        "void"
       when "len"
         t = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
         if t != "error" && t != "str" && !%i[array slice].include?(@types[t]&.kind)
@@ -1307,7 +1491,8 @@ module Egg
     end
 
     def declare(name, info)
-      if lookup(name) || @sigs.key?(name) || @generic_fns.key?(name) || @type_fns.key?(name) || @decls.key?(name)
+      q = qualify(name)
+      if lookup(name) || @sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q) || @mod.aliases.key?(name)
         err("E106", "'#{name}' shadows an existing declaration", info.line, info.col)
       end
       @scopes.last[name] = info
@@ -1324,7 +1509,7 @@ module Egg
     end
 
     def err(code, msg, line, col)
-      @diagnostics << Diagnostic.new(code, msg, line, col)
+      @diagnostics << Diagnostic.new(code, msg, line, col, @mod&.file)
     end
   end
 end

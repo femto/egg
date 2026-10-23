@@ -1,0 +1,11 @@
+// Declares no capabilities, but calls a module that prints.
+const loud = @import("loud.egg")
+
+fn pass(out: Io) void {
+    loud.say(out)
+}
+
+fn twice(out: Io) void {
+    pass(out)
+    pass(out)
+}

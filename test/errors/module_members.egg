@@ -1,0 +1,11 @@
+// error: E102 @7
+// error: E108 @8
+// error: E122 @9
+// error: E129 @10
+const loud = @import("lib/loud.egg")
+fn main() void {
+    loud.whisper()
+    const x: loud.Quiet = 1
+    const y = loud.Nothing
+    const z = loud
+}

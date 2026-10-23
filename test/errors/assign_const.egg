@@ -1,6 +1,8 @@
-// error: E105 @4
-fn main() void {
+// error: E105 @6
+uses io
+
+fn main(out: Io) void {
     const x = 1
     x = 2
-    @print(x)
+    out.print(x)
 }

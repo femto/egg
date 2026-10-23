@@ -1,5 +1,7 @@
-// error: E120 @3
-fn main() void {
+// error: E120 @5
+uses io
+
+fn main(out: Io) void {
     const T = struct { x: i64 }
-    @print(1)
+    out.print(1)
 }

@@ -1,8 +1,10 @@
-// error: E119 @2
+// error: E119 @4
+uses io
+
 const Node = struct {
     value: i64
     next: Node
 }
-fn main() void {
-    @print(1)
+fn main(out: Io) void {
+    out.print(1)
 }

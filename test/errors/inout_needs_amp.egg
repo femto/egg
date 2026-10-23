@@ -1,9 +1,11 @@
-// error: E121 @7
+// error: E121 @9
+uses io
+
 fn inc(inout n: i64) void {
     n = n + 1
 }
-fn main() void {
+fn main(out: Io) void {
     var x = 1
     inc(x)
-    @print(x)
+    out.print(x)
 }

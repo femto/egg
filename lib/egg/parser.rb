@@ -19,16 +19,37 @@ module Egg
     def parse_program
       funcs = []
       types = []
+      uses = []
+      imports = []
       skip_nl
       until at?(:eof)
         if kw?("const")
-          types << parse_type_decl
+          d = parse_type_decl
+          if d.is_a?(ImportDecl)
+            imports << d
+          else
+            types << d
+          end
+        elsif kw?("uses")
+          parse_uses(uses)
         else
           funcs << parse_func(nil)
         end
         skip_nl
       end
-      Program.new(funcs, types)
+      Program.new(funcs, types, uses, imports, nil)
+    end
+
+    # uses alloc, io
+    def parse_uses(into)
+      expect_kw("uses")
+      while true
+        n = expect(:ident, "capability name")
+        into << UsesItem.new(n.text, n.line, n.col)
+        break unless op?(",")
+        advance
+      end
+      end_stmt
     end
 
     private
@@ -70,7 +91,7 @@ module Egg
       params
     end
 
-    # T | Name(T, ...) | [N]T | [_]T | []T | !T | @This()
+    # T | m.T | Name(T, ...) | [N]T | [_]T | []T | !T | @This()
     def parse_type
       if op?("!")
         advance
@@ -104,22 +125,35 @@ module Egg
         expect_op(")")
         return ThisType.new(t.line, t.col)
       end
-      name = expect(:ident, "type")
+      name = expect(:ident, "type").text
+      # m.Point: a type of an imported module
+      if op?(".")
+        advance
+        name = "#{name}.#{expect(:ident, "type name after '.'").text}"
+      end
       if op?("(")
         advance
         args = parse_comma_list(")") { parse_type }
-        return GenericType.new(name.text, args)
+        return GenericType.new(name, args)
       end
-      name.text
+      name
     end
 
     # const Name = struct { field: T, fn method(...) R { ... } }
     # const Name = enum { a, b, c }
+    # const name = @import("file.egg")
     def parse_type_decl
       expect_kw("const")
       name = expect(:ident, "type name")
       expect_op("=")
-      if kw?("struct")
+      if at?(:builtin) && cur.text == "import"
+        advance
+        expect_op("(")
+        path = expect(:string, "a file path such as \"util.egg\"")
+        expect_op(")")
+        end_stmt
+        ImportDecl.new(name.text, path.text, name.line, name.col)
+      elsif kw?("struct")
         t = advance
         members, methods = parse_struct_body(name.text)
         TypeDecl.new(name.text, :struct, members, methods, t.line, t.col)
@@ -165,7 +199,7 @@ module Egg
         error_here("an enum needs at least one member") if members.empty?
         TypeDecl.new(name.text, :enum, members, [], t.line, t.col)
       else
-        error_here("expected 'struct', 'enum' or 'union(enum)' (a top-level const declares a type)")
+        error_here("expected 'struct', 'enum', 'union(enum)' or '@import' (a top-level const declares a type or a module)")
       end
     end
 
@@ -481,22 +515,21 @@ module Egg
     end
 
     # Struct literal syntax needs a capitalised type name (Point{ ... },
-    # Pair(i64){ ... }, @This(){ ... }), so that `if (ok) {` stays a block.
+    # Pair(i64){ ... }, m.Point{ ... }, @This(){ ... }), so that
+    # `if (ok) {` stays a block.
     def struct_type_head?(e)
       case e
       in Var[name:] then upper?(name)
       in Call[name:] then upper?(name)
+      in Field[obj: Var, name:] then upper?(name)
+      in MethodCall[obj: Var, name:] then upper?(name)
       in TypeExpr[type: ThisType] then true
       else false
       end
     end
 
     def type_of_head(e)
-      case e
-      in Var[name:] then name
-      in Call[name:, args:] then GenericType.new(name, args.map { |a| type_of_expr(a) })
-      in TypeExpr[type:] then type
-      end
+      type_of_expr(e)
     end
 
     # A type written in a value position (an argument of Pair(...)).
@@ -504,6 +537,8 @@ module Egg
       case e
       in Var[name:] then name
       in Call[name:, args:] then GenericType.new(name, args.map { |a| type_of_expr(a) })
+      in Field[obj: Var[name: m], name:] then "#{m}.#{name}"
+      in MethodCall[obj: Var[name: m], name:, args:] then GenericType.new("#{m}.#{name}", args.map { |a| type_of_expr(a) })
       in TypeExpr[type:] then type
       else error_at(e, "expected a type")
       end

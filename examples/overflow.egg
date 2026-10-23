@@ -1,7 +1,9 @@
 // Checked arithmetic: signed overflow panics instead of being undefined.
 // panic: integer overflow
 
-fn main() void {
+uses io
+
+fn main(out: Io) void {
     const big = 9223372036854775807
-    @print(big + 1)
+    out.print(big + 1)
 }

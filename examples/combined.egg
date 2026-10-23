@@ -13,6 +13,8 @@
 // expect: 0
 // expect: true
 
+uses io
+
 const Kind = enum { small, big }
 
 const Item = struct {
@@ -55,8 +57,8 @@ fn classify(n: i64) Kind {
     return .small
 }
 
-fn noisy(n: i64) bool {
-    @print(n)
+fn noisy(out: Io, n: i64) bool {
+    out.print(n)
     return n > 1
 }
 
@@ -88,28 +90,28 @@ fn fill(n: i64) !Stack(i64) {
     return s
 }
 
-fn main() !void {
+fn main(out: Io) !void {
     var b = Box{
         .items = [3]Item{ Item{ .name = "a", .size = 3, .kind = classify(3) }, Item{ .name = "b", .size = 9, .kind = classify(9) }, Item{ .name = "c", .size = 1, .kind = .small } },
         .grid = [2][2]i64{ [2]i64{ 1, 2 }, [2]i64{ 3, 4 } },
     }
     b.grid[1][0] = 30
-    @print(b.grid[1][0] + b.grid[0][1])
-    @print(b.items[1].kind)
-    @print(sizes(b.items[0..]))
-    @print(largest(i64, [4]i64{ 4, 8, 2, 6 }[0..]))
+    out.print(b.grid[1][0] + b.grid[0][1])
+    out.print(b.items[1].kind)
+    out.print(sizes(b.items[0..]))
+    out.print(largest(i64, [4]i64{ 4, 8, 2, 6 }[0..]))
     const s = try fill(3)
-    @print(try s.top())
-    @print((fill(9) catch Stack(i64){ .data = @splat(7), .len = 1 }).len)
-    if (noisy(0) and noisy(5)) {
-        @print(100)
-    } else if (noisy(2) or noisy(3)) {
-        @print(200)
+    out.print(try s.top())
+    out.print((fill(9) catch Stack(i64){ .data = @splat(7), .len = 1 }).len)
+    if (noisy(out, 0) and noisy(out, 5)) {
+        out.print(100)
+    } else if (noisy(out, 2) or noisy(out, 3)) {
+        out.print(200)
     }
     var k = 0
-    while (noisy(k)) {
+    while (noisy(out, k)) {
         k = k + 1
     }
-    @print(k)
-    @print(k == 0 or noisy(42))
+    out.print(k)
+    out.print(k == 0 or noisy(out, 42))
 }

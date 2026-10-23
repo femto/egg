@@ -3,6 +3,8 @@
 // expect: 7
 // expect: second
 
+uses io
+
 const Tag = enum { first, second }
 
 fn Box(comptime T: type) type {
@@ -27,9 +29,9 @@ fn unused_helper() i64 {
     return 1
 }
 
-fn main() void {
+fn main(out: Io) void {
     const n = Box(i64){ .a = 7, .b = 3 }
-    @print(n.bigger())
+    out.print(n.bigger())
     const t = Box(Tag){ .a = .first, .b = .second }
-    @print(t.last())
+    out.print(t.last())
 }

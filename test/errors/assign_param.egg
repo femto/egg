@@ -1,8 +1,10 @@
-// error: E105 @3
+// error: E105 @5
+uses io
+
 fn inc(n: i64) i64 {
     n = n + 1
     return n
 }
-fn main() void {
-    @print(inc(1))
+fn main(out: Io) void {
+    out.print(inc(1))
 }

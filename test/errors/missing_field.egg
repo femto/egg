@@ -1,6 +1,8 @@
-// error: E123 @4
+// error: E123 @6
+uses io
+
 const P = struct { x: i64, y: i64 }
-fn main() void {
+fn main(out: Io) void {
     const p = P{ .x = 1 }
-    @print(p.x)
+    out.print(p.x)
 }

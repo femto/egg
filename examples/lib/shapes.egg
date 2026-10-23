@@ -1,0 +1,45 @@
+// Pure geometry: declares no capabilities.
+const ring = @import("ring.egg")
+
+const Kind = enum { square, rect }
+
+const Rect = struct {
+    w: i64
+    h: i64
+
+    fn square(n: i64) Rect {
+        return Rect{ .w = n, .h = n }
+    }
+
+    fn area(self: Rect) i64 {
+        return self.w * self.h
+    }
+
+    fn kind(self: Rect) Kind {
+        if (self.w == self.h) {
+            return .square
+        }
+        return .rect
+    }
+}
+
+fn Box(comptime T: type) type {
+    return struct {
+        item: T
+        count: i64
+    }
+}
+
+fn biggest(comptime T: type, xs: []T) T {
+    var best = xs[0]
+    for (xs) |x| {
+        if (x > best) {
+            best = x
+        }
+    }
+    return best
+}
+
+fn perimeter(r: Rect) i64 {
+    return ring.double(r.w + r.h)
+}

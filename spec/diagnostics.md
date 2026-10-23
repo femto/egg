@@ -1,8 +1,9 @@
-# Egg diagnostics (v1)
+# Egg diagnostics (v2)
 
 Every diagnostic has a stable code. Tools and AI agents should match on the
 code, not the message text. `eggc check FILE --json` prints one JSON object
-per line:
+per line. `file` is the file the error is in, which may be one the
+program imports:
 
 ```json
 {"file":"a.egg","line":4,"col":11,"code":"E110","message":"local variable 'unused' is never used"}
@@ -18,13 +19,13 @@ per line:
 | E103 | checker | type mismatch (also: comparing structs, arrays or unions; an array where a slice is expected) | make both sides the same type; no implicit conversions |
 | E104 | checker | wrong number of arguments | match the function's parameter list |
 | E105 | checker | assigning to, or passing as inout, a `const`, a by-value parameter, or an element of a slice or str | declare it with `var`, or make the parameter `inout`; slice and str elements are always read-only, so copy them into a `var` array |
-| E106 | checker | duplicate definition (function, type, field, member, method) or shadowing | rename one of them |
+| E106 | checker | duplicate definition (function, type, import, field, member, method) or shadowing | rename one of them |
 | E107 | checker | non-void function can reach its end without returning | add a `return` on every path |
 | E108 | checker | unknown type, `void` or `type` where a value type is needed, `[_]T` outside a literal | use a value type |
-| E109 | checker | missing or invalid `main` | `fn main() void`, `fn main() i64` or `fn main() !void` |
+| E109 | checker | missing or invalid `main` (returns something else, or takes a parameter that is not a capability value, or one twice) | `fn main(out: Io) void`, `fn main() i64` or `fn main(out: Io, a: Allocator) !void` |
 | E110 | checker | local variable is never used | remove it |
 | E111 | checker | `var` is never changed (assigned, or passed as inout) | declare it with `const` |
-| E112 | checker | unknown builtin | see core.md section 15 |
+| E112 | checker | unknown builtin (also: `@print`, removed in v2) | see core.md section 15; print with `out.print(x)` |
 | E113 | checker | a non-void value or an error is ignored | use the value; handle an error with `try` or `catch` |
 | E114 | — | reserved for the workflow profile | |
 | E115 | checker | a type cannot be inferred (`.member` with no known type, `@splat` without an array type, `const e = error.X`) | write the type: `Color.red`, `var a: [4]i64 = ...`, `!i64` |
@@ -40,6 +41,9 @@ per line:
 | E125 | checker | a comptime argument that is not a type, or a type stored in a variable | pass a type such as `i64` |
 | E126 | checker | `break` or `continue` outside a loop | move it into a loop |
 | E127 | checker | a `switch` that is not over an enum or union, misses members, repeats one, has an unreachable or misplaced `else`, or captures a payload that is not there | handle each member once, or end with `else` |
+| E128 | checker | a `uses` line names an unknown capability, or one twice | the capabilities are `alloc` and `io` |
+| E129 | loader, checker | an import that is not `const m = @import("file.egg")` at the top level, a file that cannot be found, or a module used as a value | import an existing `.egg` file, relative to the importing one; name something in it: `m.f(...)` |
+| E130 | capabilities | a function uses a capability (directly, or through a call) that its file does not declare | add `uses io` / `uses alloc` to that file, or move the code to a file that declares it |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 
@@ -49,5 +53,6 @@ Runtime panics (the program aborts with `egg panic: <message>`):
 | division by zero | `/` or `%` with a zero divisor |
 | index out of bounds | `a[i]` with `i < 0` or `i >= @len(a)` |
 | slice out of bounds | `a[lo..hi]` unless `0 <= lo <= hi <= @len(a)` |
+| out of memory | an `Allocator` could not get memory from the system |
 
 A `main` returning `!void` that returns an error prints `error: Name` to standard error and exits with status 1.

@@ -1,4 +1,6 @@
-// error: E127 @4
+// error: E127 @6
+uses io
+
 const Light = enum { red, green }
 fn f(l: Light) i64 {
     switch (l) {
@@ -8,6 +10,6 @@ fn f(l: Light) i64 {
     }
     return 0
 }
-fn main() void {
-    @print(f(.red))
+fn main(out: Io) void {
+    out.print(f(.red))
 }

@@ -4,11 +4,12 @@
 # diagnostics. Everything comes from the real lexer, parser and checker,
 # so the editor sees exactly what the compiler sees.
 #
-# This file is a tool, not part of the compiler: it uses the json stdlib
+# This file is a tool, not part of the compiler: it uses the json and uri stdlib
 # and is loaded only by `eggc lsp`, so the compiler stays in the Spinel
 # subset.
 
 require "json"
+require "uri"
 
 module Egg
   module LSP
@@ -20,16 +21,25 @@ module Egg
 
     # Everything the server knows about one version of one file.
     # Lines and columns are 1-based, as in the compiler.
+    # path: the file on disk, so its imports can be found (nil if unknown).
     class Index
       attr_reader :diagnostics, :funcs
 
-      def initialize(src)
+      def initialize(src, path = nil)
         @refs = []
         @funcs = []
         @tokens = nil
+        @caps = nil
         @tokens = Lexer.new(src).tokenize
         program = Parser.new(@tokens).parse_program
-        @diagnostics = TypeChecker.new(program).check
+        begin
+          result = Egg.check(src, path, program)
+          @caps = result.caps if result.diagnostics.empty?
+          @diagnostics = in_this_file(result.diagnostics)
+        rescue CompileError => e
+          # A missing import or a syntax error in an imported file.
+          @diagnostics = in_this_file([e.diagnostic])
+        end
         build(program)
         @parsed = true
       rescue CompileError => e
@@ -59,6 +69,15 @@ module Egg
       end
 
       private
+
+      # An error in an imported file is shown at the top of this one,
+      # prefixed with where it is.
+      def in_this_file(diags)
+        diags.map do |d|
+          next d if d.file.nil?
+          Diagnostic.new(d.code, "#{d.file}:#{d.line}:#{d.col}: #{d.message}", 1, 1)
+        end
+      end
 
       def build(program)
         @by_pos = {}
@@ -146,8 +165,11 @@ module Egg
         name_tok = @tokens[i + 1]
         close = closing_brace(i)
         params = f.params.map { |p| "#{p.mode.nil? ? '' : "#{p.mode} "}#{p.name}: #{Egg.type_src(p.type)}" }.join(", ")
+        # The capabilities it uses, from the capability check (rule 3).
+        caps = @caps&.caps_named(label)
+        uses = caps.nil? || caps.empty? ? "" : "  // uses #{caps.join(', ')}"
         Decl.new(:fn, label, name_tok.line, name_tok.col,
-                 "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}", close.line, close.col + 1)
+                 "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}#{uses}", close.line, close.col + 1)
       end
 
       # The '}' that closes the body of the function whose 'fn' is token i.
@@ -437,7 +459,7 @@ module Egg
       end
 
       def update(uri, text)
-        index = Index.new(text)
+        index = Index.new(text, path_of(uri))
         @docs[uri] = index
         @good[uri] = index if index.parsed?
         diags = index.diagnostics.map do |d|
@@ -450,6 +472,14 @@ module Egg
           }
         end
         notify("textDocument/publishDiagnostics", { "uri" => uri, "diagnostics" => diags })
+      end
+
+      # file:///a/b%20c.egg -> /a/b c.egg; nil for other schemes.
+      def path_of(uri)
+        u = URI.parse(uri)
+        u.scheme == "file" ? URI.decode_www_form_component(u.path.gsub("+", "%2B")) : nil
+      rescue URI::Error
+        nil
       end
 
       # While a file has a syntax error, navigation uses its last version

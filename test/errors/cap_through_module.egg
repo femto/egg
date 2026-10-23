@@ -1,0 +1,10 @@
+// error: E130 @lib/relay.egg:5
+// relay.pass is reported where io enters relay.egg; relay.twice only
+// calls pass, so it is not reported again.
+uses io
+
+const relay = @import("lib/relay.egg")
+
+fn main(out: Io) void {
+    relay.twice(out)
+}

@@ -1,5 +1,7 @@
-// error: E111 @3
-fn main() void {
+// error: E111 @5
+uses io
+
+fn main(out: Io) void {
     var x = 1
-    @print(x)
+    out.print(x)
 }

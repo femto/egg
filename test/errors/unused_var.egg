@@ -1,6 +1,8 @@
-// error: E110 @4
-fn main() void {
+// error: E110 @6
+uses io
+
+fn main(out: Io) void {
     const used = 1
     const unused = 2
-    @print(used)
+    out.print(used)
 }

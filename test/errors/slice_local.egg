@@ -1,6 +1,8 @@
-// error: E116 @4
-fn main() void {
+// error: E116 @6
+uses io
+
+fn main(out: Io) void {
     const a = [3]i64{ 1, 2, 3 }
     const s = a[0..2]
-    @print(@len(s))
+    out.print(@len(s))
 }

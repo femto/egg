@@ -1,4 +1,6 @@
-// error: E001 @3
-fn main() void {
-    @print(1 $ 2)
+// error: E001 @5
+uses io
+
+fn main(out: Io) void {
+    out.print(1 $ 2)
 }

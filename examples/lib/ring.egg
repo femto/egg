@@ -1,0 +1,10 @@
+// Imports shapes.egg back: imports may form cycles.
+const shapes = @import("shapes.egg")
+
+fn double(n: i64) i64 {
+    return n * 2
+}
+
+fn unit() shapes.Rect {
+    return shapes.Rect.square(1)
+}

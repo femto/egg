@@ -1,0 +1,5 @@
+// error: E129 @3
+fn main() void {
+    const m = @import("lib/loud.egg")
+    const n = m
+}

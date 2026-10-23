@@ -1,7 +1,9 @@
-// error: E103 @6
+// error: E103 @8
+uses io
+
 fn sum(xs: []i64) i64 {
     return @len(xs)
 }
-fn main() void {
-    @print(sum([2]i64{ 1, 2 }))
+fn main(out: Io) void {
+    out.print(sum([2]i64{ 1, 2 }))
 }

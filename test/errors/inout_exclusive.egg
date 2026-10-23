@@ -1,9 +1,11 @@
-// error: E117 @7
+// error: E117 @9
+uses io
+
 fn add_into(inout acc: i64, x: i64) void {
     acc = acc + x
 }
-fn main() void {
+fn main(out: Io) void {
     var total = 1
     add_into(&total, total)
-    @print(total)
+    out.print(total)
 }

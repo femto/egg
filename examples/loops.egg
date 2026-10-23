@@ -4,6 +4,8 @@
 // expect: true
 // expect: 3
 
+uses io
+
 fn sum_to(n: i64) i64 {
     var total = 0
     var i = 1
@@ -41,9 +43,9 @@ fn classify(n: i64) i64 {
     }
 }
 
-fn main() void {
-    @print(sum_to(100))
-    @print(fib_iter(10))
-    @print(is_even(42) and !is_even(7))
-    @print(classify(9))
+fn main(out: Io) void {
+    out.print(sum_to(100))
+    out.print(fib_iter(10))
+    out.print(is_even(42) and !is_even(7))
+    out.print(classify(9))
 }
