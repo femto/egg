@@ -1,0 +1,32 @@
+// Misusing buffers and the allocator's buffer methods.
+uses alloc, io
+
+const Buf = struct { x: i64 }
+
+fn sum(xs: []i64, n: i64) i64 {
+    return n
+}
+
+fn keep(b: Buf(i64), n: i64) void {
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b = a.alloc(3, 0)
+    a.free(7)
+    a.resize(b, 4, 0)
+    keep(b, @len(b))
+    const c: Buf = 1
+    const d = a.alloc(2, true)
+    const e = a.alloc(2, 0)
+    out.print(sum(e[0..], 1) + d[0])
+    out.print(e == e)
+    a.free(e)
+}
+
+// error: E106 @4
+// error: E103 @15
+// error: E121 @16
+// error: E117 @17
+// error: E108 @18
+// error: E103 @21
+// error: E103 @22

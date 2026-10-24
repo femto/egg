@@ -30,9 +30,15 @@
 # of the generated C.
 #
 # Capability values (Io, Allocator) carry no data: the capability is in
-# the type, which the checker tracks. The Allocator is one arena for the
-# whole program: memory is never freed, so nothing can be used after it
-# is freed. Freeing comes with ownership checking.
+# the type, which the checker tracks. What a.concat, a.int_str and
+# a.create allocate is never freed, so a str or a pointer from them is
+# always valid. A Buf(T) is { T *ptr; int64_t len; } from malloc, and
+# a.free(b) frees it; the ownership check (own.rb) has made sure that
+# happens exactly once and that nothing uses it after.
+#
+# `defer` and `errdefer` emit nothing where they stand: their expression is
+# emitted again at every way out of the block (its end, return, break,
+# continue, and the error return of a `try`), innermost first.
 
 module Egg
   class CodegenC
@@ -57,7 +63,8 @@ module Egg
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
-                      egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str].freeze
+                      egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
+                      egg_buf_resize].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -171,13 +178,23 @@ module Egg
       "egg_print_u64" => <<~C,
         static void egg_print_u64(uint64_t x) { printf("%" PRIu64 "\\n", x); }
       C
-      "egg_uint_str" => <<~C
+      "egg_uint_str" => <<~C,
         static egg_str egg_uint_str(uint64_t x) {
             char buf[24];
             int n = snprintf(buf, sizeof buf, "%" PRIu64, x);
             char *p = egg_alloc(n);
             memcpy(p, buf, (size_t)n);
             return (egg_str){ p, n };
+        }
+      C
+      # p (NULL for a new buffer) resized to n elements of size bytes.
+      "egg_buf_resize" => <<~C
+        static void *egg_buf_resize(void *p, int64_t n, size_t size) {
+            if (n < 0) egg_panic("negative buffer length");
+            if ((uint64_t)n > SIZE_MAX / size) egg_panic("out of memory");
+            void *q = realloc(p, n > 0 ? (size_t)n * size : 1);
+            if (q == NULL) egg_panic("out of memory");
+            return q;
         }
       C
     }.freeze
@@ -216,6 +233,8 @@ module Egg
       @need_str = false
       @tmp = 0
       @sig = nil
+      @defers = []      # per open block: its Defer statements so far
+      @loop_marks = []  # per open loop: how many blocks were open outside it
     end
 
     def generate
@@ -457,6 +476,9 @@ module Egg
       when :slice
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
+      when :buf
+        emit_type(info.elem, done)
+        @out << "typedef struct { #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
       when :ptr
         # A struct or union target is declared up front; others are needed.
         emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
@@ -502,7 +524,10 @@ module Egg
       @out << signature(sig) << " {\n"
       @indent = 1
       (sig.unused || []).each { |name| line("(void)v_#{name};") }
+      @defers = [[]]
+      @loop_marks = []
       sig.func.body.stmts.each { |s| gen_stmt(s) }
+      emit_defers(0, false) unless ends_block?(sig.func.body.stmts)
       line("return (#{c_type('!void')}){ 0 };") if sig.ret == "!void"
       @out << "}\n\n"
       nil
@@ -535,11 +560,52 @@ module Egg
 
     def gen_block(block)
       @locals << {}
+      @defers << []
       @indent += 1
       block.stmts.each { |s| gen_stmt(s) }
+      emit_defers(@defers.length - 1, false) unless ends_block?(block.stmts)
       @indent -= 1
+      @defers.pop
       @locals.pop
       nil
+    end
+
+    # Does the block end by jumping away (so its end is never reached)?
+    def ends_block?(stmts)
+      [Return, Break, Continue].any? { |k| stmts.last.is_a?(k) }
+    end
+
+    def defers?
+      @defers.any? { |f| !f.empty? }
+    end
+
+    # Emit the deferred expressions of the blocks from the innermost one
+    # down to index `down`, last deferred first. error: whether errdefers
+    # run (true, false, or a C condition tested at run time).
+    def emit_defers(down, error)
+      emitted = false
+      i = @defers.length - 1
+      while i >= down
+        @defers[i].reverse_each do |d|
+          next if d.err && error == false
+          mark(d.line)
+          code, pre = capture { expr(d.expr) }
+          if d.err && error != true
+            line("if (#{error}) {")
+            @indent += 1
+            emit_raw(pre.gsub(/^/, "    "))
+            line("#{code};") unless code.empty?
+            @indent -= 1
+            line("}")
+          else
+            emit_raw(pre)
+            line("#{code};") unless code.empty?
+          end
+          emitted = true
+        end
+        i -= 1
+      end
+      emitted
     end
 
     def line(text)
@@ -612,6 +678,7 @@ module Egg
       in If
         gen_if(stmt)
       in While[cond:, body:]
+        @loop_marks << @defers.length
         c, pre = capture { cond(cond) }
         if pre.empty?
           line("while (#{c}) {")
@@ -625,16 +692,21 @@ module Egg
         end
         gen_block(body)
         line("}")
+        @loop_marks.pop
       in For
         gen_for(stmt)
       in Switch
         gen_switch(stmt)
       in Break
+        mark(stmt.line) if emit_defers(@loop_marks.last, false)
         line("break;")
       in Continue
+        mark(stmt.line) if emit_defers(@loop_marks.last, false)
         line("continue;")
       in Return[value:]
-        gen_return(value)
+        gen_return(value, stmt.line)
+      in Defer
+        @defers.last << stmt
       in ExprStmt[expr: e]
         code = expr(e)
         line("#{code};") unless code.empty?
@@ -643,12 +715,20 @@ module Egg
       end
     end
 
-    def gen_return(value)
+    def gen_return(value, src_line)
       ret = @sig.ret
       if value.nil?
+        mark(src_line) if emit_defers(0, false)
         line(ret == "!void" ? "return (#{c_type(ret)}){ 0 };" : "return;")
-      else
+      elsif !defers?
         line("return #{coerce(expr(value), value.ty, ret)};")
+      else
+        # The value first, then the defers, which may change what it came from.
+        r = hoist(coerce(expr(value), value.ty, ret), ret)
+        error = false
+        error = value.is_a?(ErrorLit) ? true : (value.ty.start_with?("!") ? "#{r}.err" : false) if ret.start_with?("!")
+        mark(src_line) if emit_defers(0, error)
+        line("return #{r};")
       end
     end
 
@@ -719,6 +799,7 @@ module Egg
         item = "#{ptr}[#{idx}]"
       end
       line("for (int64_t #{idx} = 0; #{idx} < #{len}; #{idx}++) {")
+      @loop_marks << @defers.length
       @locals << {}
       @indent += 1
       unless stmt.var == "_"
@@ -732,6 +813,7 @@ module Egg
       @indent -= 1
       gen_block(stmt.body)
       @locals.pop
+      @loop_marks.pop
       line("}")
     end
 
@@ -885,7 +967,16 @@ module Egg
         lvalue(e)
       in Try[expr: inner]
         r = hoist(expr(inner), inner.ty)
-        line("if (#{r}.err) return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
+        if defers?
+          line("if (#{r}.err) {")
+          @indent += 1
+          emit_defers(0, true)
+          line("return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
+          @indent -= 1
+          line("}")
+        else
+          line("if (#{r}.err) return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
+        end
         e.ty == "void" ? "" : "#{r}.value"
       in Catch[expr: inner, fallback:]
         r = hoist(expr(inner), inner.ty)
@@ -987,6 +1078,31 @@ module Egg
                line("#{c_type(t)} *#{ptr} = (#{c_type(t)} *)#{helper('egg_alloc')}((int64_t)sizeof(#{c_type(t)}));")
                line("*#{ptr} = #{codes[0]};")
                ptr
+             when "Allocator.alloc"
+               # n copies of v in a new buffer
+               elem = @types[ret].elem
+               b = tmp
+               line("#{c_type(ret)} #{b};")
+               line("#{b}.len = #{codes[0]};")
+               line("#{b}.ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(NULL, #{b}.len, sizeof(#{c_type(elem)}));")
+               v = hoist(codes[1], elem)
+               i = tmp
+               line("for (int64_t #{i} = 0; #{i} < #{b}.len; #{i}++) #{b}.ptr[#{i}] = #{v};")
+               b
+             when "Allocator.free" then "free(#{codes[0]}.ptr)"
+             when "Allocator.resize"
+               # new elements, if it grows, are copies of v
+               buf = args[0].ty
+               elem = @types[buf].elem
+               p = tmp
+               line("#{c_type(buf)} *#{p} = #{codes[0]};")
+               n = hoist(codes[1], "i64")
+               v = hoist(codes[2], elem)
+               line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{n}, sizeof(#{c_type(elem)}));")
+               i = tmp
+               line("for (int64_t #{i} = #{p}->len; #{i} < #{n}; #{i}++) #{p}->ptr[#{i}] = #{v};")
+               line("#{p}->len = #{n};")
+               "((void)0)"
              when "Allocator.concat" then "#{helper('egg_concat')}(#{codes[0]}, #{codes[1]})"
              when "Allocator.int_str"
                if args[0].ty.start_with?("i")
@@ -1049,7 +1165,7 @@ module Egg
         s = place?(obj) ? base : base
         return "((int64_t)(unsigned char)#{s}.ptr[#{helper('egg_index')}(#{i}, #{s}.len)])"
       end
-      if @types[t].kind == :slice
+      if %i[slice buf].include?(@types[t].kind)
         return "#{base}.ptr[#{helper('egg_index')}(#{i}, #{base}.len)]"
       end
       "#{base}.a[#{helper('egg_index')}(#{i}, INT64_C(#{len}))]"
@@ -1061,12 +1177,12 @@ module Egg
       base = place?(obj) ? lvalue(obj) : hoist(expr(obj), t)
       lo = hoist(expr(e.lo), "i64")
       info = @types[t]
-      len = if t == "str" || info.kind == :slice then "#{base}.len" else "INT64_C(#{info.len})" end
+      len = if t == "str" || %i[slice buf].include?(info.kind) then "#{base}.len" else "INT64_C(#{info.len})" end
       hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64")
       line("#{helper('egg_slice_check')}(#{lo}, #{hi}, #{len});")
       if t == "str"
         "((egg_str){ #{base}.ptr + #{lo}, #{hi} - #{lo} })"
-      elsif info.kind == :slice
+      elsif %i[slice buf].include?(info.kind)
         "((#{c_type(e.ty)}){ #{base}.ptr + #{lo}, #{hi} - #{lo} })"
       else
         "((#{c_type(e.ty)}){ #{base}.a + #{lo}, #{hi} - #{lo} })"
@@ -1093,7 +1209,12 @@ module Egg
         "(*(#{p} != NULL ? #{p} : (#{c_type(ptr.ty)})#{helper('egg_null_deref')}()))"
       in Field[obj:, name:] then "#{lvalue(obj)}.f_#{name}"
       in Index[obj:, index:, info:]
-        "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
+        if @types[obj.ty]&.kind == :buf
+          b = lvalue(obj)
+          "#{b}.ptr[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
+        else
+          "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
+        end
       else raise "codegen: not a place: #{e.class}"
       end
     end

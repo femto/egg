@@ -272,6 +272,8 @@ module Egg
           walk_expr(value) unless value.nil?
         in ExprStmt[expr:]
           walk_expr(expr)
+        in Defer[expr:]
+          walk_expr(expr)
         else
           raise "lsp: unhandled statement #{stmt.class}"
         end
