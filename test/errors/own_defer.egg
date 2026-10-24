@@ -1,0 +1,32 @@
+// defer runs at every way out of its block, so it cannot free a buffer
+// that was already moved (E136), and an inout buffer must own one again
+// when the function returns (E135).
+uses alloc, io
+
+fn give(a: Allocator) Buf(i64) {
+    const b = a.alloc(2, 0)
+    defer a.free(b)
+    return b
+}
+
+fn swap_out(a: Allocator, inout b: Buf(i64)) void {
+    a.free(b)
+}
+
+fn refill(a: Allocator, inout b: Buf(i64)) void {
+    a.free(b)
+    b = a.alloc(1, 0)
+}
+
+fn main(out: Io, a: Allocator) void {
+    const g = give(a)
+    defer a.free(g)
+    var b = a.alloc(1, 0)
+    defer a.free(b)
+    swap_out(a, &b)
+    refill(a, &b)
+    out.print(@len(b))
+}
+
+// error: E136 @9
+// error: E135 @12

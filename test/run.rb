@@ -322,6 +322,34 @@ def check_loader(dir)
   report(r.diagnostics.empty? && !r.c_source.include?("#line"), "debug without a path builds without #line marks")
 end
 
+# Pointer expressions (p.*, null), also inside a defer, are indexed
+# without crashing the server.
+def check_lsp_pointers
+  doc = { "uri" => "file:///t/p.egg" }
+  src = <<~EGG
+    uses io
+    allow unsafe
+
+    fn main(out: Io) void {
+        var x = 1
+        const p = &x
+        defer out.print(p.* + 1)
+        out.print(p == null)
+        x = 2
+    }
+  EGG
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/documentSymbol", "params" => { "textDocument" => doc } },
+    { "id" => 3, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, _, status, err = lsp_session(req)
+  names = (replies.dig(2, "result") || []).map { |x| x["name"] }
+  report(names.include?("main") && status.success? && err.empty?, "lsp indexes p.* and null inside defer", "#{names.inspect}\n#{err}")
+end
+
 # An extern fn's symbol covers its whole declaration, over several lines.
 def check_lsp_extern
   doc = { "uri" => "file:///t/e.egg" }
@@ -430,6 +458,7 @@ Dir.mktmpdir do |dir|
   check_lsp_v1
   check_lsp_modules
   check_lsp_extern
+  check_lsp_pointers
 
   puts "spec/core.md"
   spec = File.read(File.join(ROOT, "spec", "core.md"))

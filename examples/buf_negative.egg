@@ -1,0 +1,12 @@
+// A buffer cannot have a negative length.
+// expect: 1
+// panic: negative buffer length
+
+uses alloc, io
+
+fn main(out: Io, a: Allocator) void {
+    out.print(1)
+    const n = 0 - 2
+    const b = a.alloc(n, 0)
+    a.free(b)
+}

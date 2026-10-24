@@ -1,0 +1,13 @@
+// Even in an unsafe file, a buffer's address cannot be taken: a pointer
+// to it would be a second owner (E133).
+// error: E133 @9
+uses alloc, io
+allow unsafe
+
+fn main(out: Io, a: Allocator) void {
+    var b = a.alloc(3, 1)
+    const p = &b
+    out.print(p == null)
+    a.resize(&b, 1, 0)
+    a.free(b)
+}

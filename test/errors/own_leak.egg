@@ -1,0 +1,37 @@
+// Every buffer must be freed, returned or passed on before its owner
+// goes away (E135).
+uses alloc, io
+
+fn ignore(b: Buf(i64)) i64 {
+    return 1
+}
+
+fn parse(n: i64) !i64 {
+    if (n < 0) {
+        return error.Negative
+    }
+    return n
+}
+
+fn early(a: Allocator, n: i64) !i64 {
+    const b = a.alloc(n, 0)
+    const m = try parse(n)
+    a.free(b)
+    return m
+}
+
+fn main(out: Io, a: Allocator) !void {
+    const b = a.alloc(3, 0)
+    out.print(@len(b))
+    var c = a.alloc(1, 0)
+    c = a.alloc(2, 0)
+    a.free(c)
+    out.print(ignore(a.alloc(1, 0)))
+    out.print(try early(a, 2))
+}
+
+// error: E135 @6
+// error: E135 @18
+// error: E135 @27
+// error: E135 @30
+// error: E135 @24

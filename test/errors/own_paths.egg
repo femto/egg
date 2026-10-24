@@ -1,0 +1,40 @@
+// Where paths join they must agree on who owns a buffer, and every
+// iteration of a loop must leave it as the loop found it (E134).
+uses alloc, io
+
+fn maybe_free(a: Allocator, b: Buf(i64), yes: bool) void {
+    if (yes) {
+        a.free(b)
+    }
+}
+
+fn each(a: Allocator, n: i64) void {
+    const b = a.alloc(n, 0)
+    var i = 0
+    while (i < n) {
+        a.free(b)
+        i = i + 1
+    }
+}
+
+fn first(a: Allocator, xs: []i64) void {
+    for (xs) |x| {
+        const b = a.alloc(x, 0)
+        if (x > 2) {
+            break
+        }
+        a.free(b)
+    }
+}
+
+fn main(out: Io, a: Allocator) void {
+    maybe_free(a, a.alloc(1, 0), true)
+    each(a, 2)
+    const xs = [3]i64{ 1, 2, 3 }
+    first(a, xs[0..])
+    out.print(1)
+}
+
+// error: E134 @6
+// error: E134 @14
+// error: E135 @24

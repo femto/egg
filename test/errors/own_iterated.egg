@@ -1,0 +1,30 @@
+// A for loop holds on to the buffer it iterates over (E137).
+uses alloc, io
+
+fn grow(a: Allocator, inout b: Buf(i64)) void {
+    const n = @len(b)
+    a.resize(&b, n + 1, 0)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b = a.alloc(3, 1)
+    for (b) |x, i| {
+        b[i] = x + 1
+        grow(a, &b)
+        if (x > 5) {
+            a.free(b)
+            b = a.alloc(1, 0)
+        }
+    }
+    for (b[0..2]) |x| {
+        out.print(x)
+        const n = @len(b)
+        a.resize(&b, n, 0)
+    }
+    a.free(b)
+}
+
+// error: E137 @13
+// error: E137 @15
+// error: E137 @16
+// error: E137 @22

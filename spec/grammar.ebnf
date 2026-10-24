@@ -20,7 +20,7 @@ param       = [ "inout" | "comptime" ] , IDENT , ":" , type ;
 
 type        = name                                   (* i8..i64 u8..u64 usize bool str void type Io Allocator, or a declared type *)
             | name , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")"
-                                                     (* type function instance: Pair(i64), Unit() *)
+                                                     (* type function instance: Pair(i64), Unit(); also Buf(T) *)
             | "[" , nl , INT , "]" , type            (* array *)
             | "[" , nl , "]" , type                  (* slice: parameters, arguments, for subjects *)
             | "!" , type                             (* error union *)
@@ -43,7 +43,8 @@ union_body  = "union" , "(" , "enum" , ")" , "{" , { NL } ,
 block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}" ;
 
 stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
-            | "break" | "continue" | return_stmt | expr ;
+            | "break" | "continue" | return_stmt | defer_stmt | expr ;
+defer_stmt  = ( "defer" | "errdefer" ) , expr ;          (* a void expression without try *)
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
 assign      = place , "=" , expr ;
 place       = IDENT , { "." , IDENT | "[" , expr , "]" | "." , "*" }
@@ -93,4 +94,4 @@ BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;
 KEYWORDS    = fn return if else while for break continue switch var const
               true false and or struct enum union try catch error inout comptime uses
-              allow extern null ;
+              allow extern null defer errdefer ;
