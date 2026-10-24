@@ -281,7 +281,7 @@ module Egg
 
       def walk_expr(expr)
         case expr
-        in IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | StructTypeExpr then nil
+        in IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | StructTypeExpr | NullLit then nil
         in Var[name:, line:, col:]
           decl = @types[name]
           if !decl.nil? && lookup_local(name).nil?
@@ -317,6 +317,8 @@ module Egg
           fields.each { |f| walk_expr(f[1]) }
         in ArrayLit[items:]
           items.each { |i| walk_expr(i) }
+        in Deref[expr: inner]
+          walk_expr(inner)
         in AddrOf[expr: inner]
           walk_expr(inner)
         in Try[expr: inner]

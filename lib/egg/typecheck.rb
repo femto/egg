@@ -175,9 +175,10 @@ module Egg
       end
       @program.funcs.each do |f|
         in_module(f.mod) do
-          if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name) ||
-             (f.ret == "type" && base_name(f.name) == "Buf")
-            err("E106", "function '#{f.name}' is defined more than once#{base_name(f.name) == 'Buf' && f.ret == 'type' ? ' (Buf is built in)' : ''}", f.line, f.col)
+          # Buf(...) always means the built-in type, so no function may take the name.
+          builtin = base_name(f.name) == "Buf"
+          if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name) || builtin
+            err("E106", "function '#{f.name}' is defined more than once#{builtin ? ' (Buf is built in)' : ''}", f.line, f.col)
             next
           end
           if !f.ext.nil?

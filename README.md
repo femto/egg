@@ -5,7 +5,7 @@ GC, exceptions, IO and allocation are capability modules a program declares
 on demand. See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
-This repository holds **eggc**, the first compiler, now partway through
+This repository holds **eggc**, the first compiler, now at the end of
 **v2** (modules, capabilities, integer types, pointers, `extern fn` and
 owned buffers): written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)

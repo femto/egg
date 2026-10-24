@@ -52,7 +52,7 @@ fn add(a: i64, b: i64) i64 {
 - Source is UTF-8. Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `fn return if else while for break continue switch var const
   true false and or struct enum union try catch error inout comptime uses
-  allow extern null`.
+  allow extern null defer errdefer`.
 - Integer literals are decimal digits, optionally separated by `_`
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
   context (section 7); it must fit that type (E003). `-5` is unary minus

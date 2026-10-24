@@ -3,6 +3,10 @@ uses alloc, io
 
 const Buf = struct { x: i64 }
 
+fn Buf(n: i64) i64 {
+    return n
+}
+
 fn sum(xs: []i64, n: i64) i64 {
     return n
 }
@@ -24,9 +28,10 @@ fn main(out: Io, a: Allocator) void {
 }
 
 // error: E106 @4
-// error: E103 @15
-// error: E121 @16
-// error: E117 @17
-// error: E108 @18
-// error: E103 @21
-// error: E103 @22
+// error: E106 @6
+// error: E103 @19
+// error: E121 @20
+// error: E117 @21
+// error: E108 @22
+// error: E103 @25
+// error: E103 @26
