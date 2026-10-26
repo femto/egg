@@ -55,22 +55,6 @@ bin/eggc lsp                         # language server for editors (stdin/stdout
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ```
 
-### Native eggc
-
-Spinel compiled eggc v0 to a native binary (about 30 s; it then starts in
-~5 ms instead of ~350 ms and needs no Ruby). **The v1 compiler does not
-build under Spinel yet**: Spinel currently emits C that fails to compile for
-it, so use CRuby for v1. With v0 sources:
-
-```bash
-mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
-EGGC=build/bin/eggc ruby test/run.rb # run the LSP tests against it
-```
-
-The VS Code extension prefers `build/bin/eggc` while it is newer than every
-compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
-rebuild to switch back.
-
 ## Performance
 
 Every integer operation and every index in Egg is checked: overflow and out
@@ -92,6 +76,22 @@ eggc does not yet remove bounds checks from inner loops.
 ruby bench/run.rb          # Egg, C, Rust, Go, Zig
 ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
 ```
+
+## Native eggc
+
+Spinel compiled eggc v0 to a native binary (about 30 s; it then starts in
+~5 ms instead of ~350 ms and needs no Ruby). **The v1 compiler does not
+build under Spinel yet**: Spinel currently emits C that fails to compile for
+it, so use CRuby for v1. With v0 sources:
+
+```bash
+mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
+EGGC=build/bin/eggc ruby test/run.rb # run the LSP tests against it
+```
+
+The VS Code extension prefers `build/bin/eggc` while it is newer than every
+compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
+rebuild to switch back.
 
 ## What eggc supports
 
