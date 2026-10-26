@@ -123,7 +123,10 @@ v2:
 - Function values `fn(T) R`: passed, returned, stored in fields, called
 - `extern fn toupper(c: i32) i32` (in an unsafe file) calls C; `uses io`
   on the declaration says what the C function does; `link "sqlite3"`
-  (also in an unsafe file) links a C library (`-l`/`-L` on the command line too)
+  (also in an unsafe file) links a C library (`-l`/`-L` on the command line too);
+  `a.cstr(s)` and `a.str_from_c(p)` (which reads through a pointer, so
+  needs `allow unsafe`) convert C strings. See
+  [examples/ffi](examples/ffi) for libm and a SQLite blog
 - Owned buffers `Buf(T)`: `a.alloc(n, v)`, `a.free(b)`, `a.resize(&b, n, v)`;
   indexed, sliced and iterated like arrays. The **ownership check**
   follows every path: no use after a move or free (E136), no leak (E135),

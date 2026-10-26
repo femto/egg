@@ -1,0 +1,8 @@
+// Reading a C string goes through a pointer: it needs allow unsafe.
+// error: E131 @7
+uses io, alloc
+
+fn main(out: Io, a: Allocator) void {
+    const p = a.cstr("hi")       // making the pointer is fine
+    out.print(a.str_from_c(p))
+}

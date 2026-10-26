@@ -1,0 +1,114 @@
+// A toy blog on SQLite: posts, tags (many-to-many) and comments, with a
+// few joins. All SQL text is bound with ?, never pasted in. This file
+// needs no `allow unsafe`: the pointers stay in sqlite3.egg.
+// expect: Posts (with comment + tag counts):
+// expect:   [1] Egg learns to call C  (2 comments, 3 tags)
+// expect:   [2] Tasting o'tea  (1 comments, 2 tags)
+// expect:   [3] Checked arithmetic is cheap  (1 comments, 2 tags)
+// expect:
+// expect: Posts tagged 'egg':
+// expect:   - Egg learns to call C
+// expect:   - Checked arithmetic is cheap
+// expect:
+// expect: Comments on the FFI post:
+// expect:   alice: Wonderful — does it work with libcurl too?
+// expect:   bob: I tried sqlite3 myself; the bindings are tidy.
+uses io, alloc
+
+const sql = @import("sqlite3.egg")
+
+// The id of the tag called name, creating it if it is new.
+fn tag_id(db: sql.Db, name: str) !i64 {
+    const ins = try db.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)")
+    defer ins.finalize()
+    try ins.bind(1, name)
+    try ins.run()
+    const sel = try db.prepare("SELECT id FROM tags WHERE name = ?")
+    defer sel.finalize()
+    try sel.bind(1, name)
+    if (try sel.next()) {
+        return sel.int(0)
+    }
+    return error.NoTag
+}
+
+fn add_post(db: sql.Db, title: str, body: str, tags: []str) !i64 {
+    const st = try db.prepare("INSERT INTO posts (title, body) VALUES (?, ?)")
+    defer st.finalize()
+    try st.bind(1, title)
+    try st.bind(2, body)
+    try st.run()
+    const post = db.last_id()
+    for (tags) |t| {
+        const pt = try db.prepare("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)")
+        defer pt.finalize()
+        try pt.bind_int(1, post)
+        try pt.bind_int(2, try tag_id(db, t))
+        try pt.run()
+    }
+    return post
+}
+
+fn add_comment(db: sql.Db, post: i64, author: str, body: str) !void {
+    const st = try db.prepare("INSERT INTO comments (post_id, author, body) VALUES (?, ?, ?)")
+    defer st.finalize()
+    try st.bind_int(1, post)
+    try st.bind(2, author)
+    try st.bind(3, body)
+    try st.run()
+}
+
+fn main(out: Io, a: Allocator) !void {
+    // In memory: every run starts fresh.
+    const db = try sql.open(a, ":memory:")
+    defer db.close()
+
+    try db.exec("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL)")
+    try db.exec("CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)")
+    try db.exec("CREATE TABLE post_tags (post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (post_id, tag_id))")
+    try db.exec("CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL)")
+
+    const p1 = try add_post(db, "Egg learns to call C",
+        "extern fn and link: now we can drive sqlite3 directly.",
+        [3]str{ "egg", "ffi", "sqlite" }[0..])
+    const p2 = try add_post(db, "Tasting o'tea",
+        "She said it's the best Earl Grey in London.",
+        [2]str{ "food", "off-topic" }[0..])
+    const p3 = try add_post(db, "Checked arithmetic is cheap",
+        "Overflow checks cost a few percent on the benchmarks.",
+        [2]str{ "egg", "perf" }[0..])
+
+    try add_comment(db, p1, "alice", "Wonderful — does it work with libcurl too?")
+    try add_comment(db, p1, "bob", "I tried sqlite3 myself; the bindings are tidy.")
+    try add_comment(db, p2, "carol", "Where's the shop?")
+    try add_comment(db, p3, "dave", "Nice; the overflow builtins really pay off.")
+
+    out.print("Posts (with comment + tag counts):")
+    const posts = try db.prepare(
+        "SELECT p.id, p.title, (SELECT COUNT(*) FROM comments WHERE post_id = p.id), (SELECT COUNT(*) FROM post_tags WHERE post_id = p.id) FROM posts p ORDER BY p.id")
+    defer posts.finalize()
+    while (try posts.next()) {
+        const head = a.concat(a.concat("  [", a.int_str(posts.int(0))), a.concat("] ", posts.text(a, 1)))
+        const counts = a.concat(a.concat("  (", a.int_str(posts.int(2))), a.concat(" comments, ", a.concat(a.int_str(posts.int(3)), " tags)")))
+        out.print(a.concat(head, counts))
+    }
+
+    out.print("")
+    out.print("Posts tagged 'egg':")
+    const tagged = try db.prepare(
+        "SELECT p.title FROM posts p JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id WHERE t.name = ? ORDER BY p.id")
+    defer tagged.finalize()
+    try tagged.bind(1, "egg")
+    while (try tagged.next()) {
+        out.print(a.concat("  - ", tagged.text(a, 0)))
+    }
+
+    out.print("")
+    out.print("Comments on the FFI post:")
+    const comments = try db.prepare("SELECT author, body FROM comments WHERE post_id = ? ORDER BY id")
+    defer comments.finalize()
+    try comments.bind_int(1, p1)
+    while (try comments.next()) {
+        out.print(a.concat(a.concat("  ", comments.text(a, 0)), a.concat(": ", comments.text(a, 1))))
+    }
+}

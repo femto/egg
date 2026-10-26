@@ -1,0 +1,37 @@
+// Calls libm and libc directly. libc is always linked; `link "m"` adds
+// libm (part of libc on macOS, its own library on Linux).
+// expect: 1.0
+// expect: 4.0
+// expect: 1024
+// expect: 479425
+// expect: H
+// expect: pid > 0: true
+uses io, alloc
+allow unsafe
+link "m"
+
+extern fn cos(x: f64) f64
+extern fn sin(x: f64) f64
+extern fn sqrt(x: f64) f64
+extern fn pow(x: f64, y: f64) f64
+extern fn toupper(c: i32) i32
+extern fn getpid() i32
+
+fn main(out: Io, a: Allocator) void {
+    out.print(cos(0))
+    out.print(sqrt(16))
+    out.print(@as(i64, pow(2, 10)))
+    // Six digits: libms may differ in the last bit of sin.
+    out.print(@as(i64, sin(0.5) * 1000000))
+    const h = a.cstr("h")
+    h.* = @as(u8, toupper(@as(i32, h.*)))
+    out.print(a.str_from_c(h))
+    out.print(a.concat("pid > 0: ", if_str(getpid() > 0)))
+}
+
+fn if_str(b: bool) str {
+    if (b) {
+        return "true"
+    }
+    return "false"
+}

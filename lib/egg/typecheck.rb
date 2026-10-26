@@ -69,11 +69,13 @@ module Egg
     CAPABILITIES = %w[alloc io].freeze
     # Methods of capability values: name -> [parameter types, result]
     # ("printable" accepts numbers, bool, str and enums; "integer" any
-    # integer type, "float" f32 or f64).
+    # integer type, "float" f32 or f64, "cstring" a *u8 to 0-terminated
+    # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
       "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
+                       "cstr" => [["str"], "*u8"], "str_from_c" => [["cstring"], "str"],
                        "create" => [["value"], "pointer to the value"],
                        "alloc" => [%w[i64 element], "Buf(T)"], "free" => [["buffer"], "void"],
                        "resize" => [%w[inout_buffer i64 element], "void"] }
@@ -1639,6 +1641,7 @@ module Egg
       cap = CAP_TYPES[t]
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"]
       params, ret = m
+      ret = ptr_type("u8") if ret == "*u8"
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
@@ -1693,6 +1696,14 @@ module Egg
         elsif pt == "integer"
           at = check_expr(a)
           err("E103", "'#{name}' needs an integer, found #{at}", a.line, a.col) unless at == "error" || int?(at)
+        elsif pt == "cstring"
+          # Reading bytes up to a 0 through a pointer: as unsafe as p.*.
+          unless require_unsafe("a.#{name}", line, col)
+            check_expr(a)
+            return "error"
+          end
+          want = ptr_type("u8")
+          expect_type(want, check_expr(a, want), a)
         elsif pt == "float"
           # A literal here is an f64: a.float_str(10).
           at = check_expr(a, "f64")
