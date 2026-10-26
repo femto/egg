@@ -13,6 +13,8 @@
 # spec/core.md      -- every ```egg block is a test of one of the kinds above
 #                      ("// error: CODE" there needs no line), so the spec
 #                      cannot drift from the compiler.
+# test/link/        -- `link` and eggc's -l/-L against a C library built
+#                      here (linktest.c).
 # eggc lsp          -- the language server answers definition, hover,
 #                      outline and diagnostics requests. EGGC=path tests
 #                      another eggc, such as a Spinel-built one.
@@ -48,8 +50,9 @@ end
 
 # Compile, build and run a program; check its output or panic.
 # path: the file, so imports resolve (nil for a spec block). With debug,
-# build in debug mode and also check the #line directives.
-def check_program(name, src, dir, path = nil, debug: false)
+# build in debug mode and also check the #line directives. lib_dirs: where
+# the C compiler looks for the libraries the program links.
+def check_program(name, src, dir, path = nil, debug: false, lib_dirs: [])
   result = Egg.compile_to_c(src, path, debug: debug)
   unless result.diagnostics.empty?
     return report(false, name, result.diagnostics.map { |d| d.to_text(name) }.join("\n"))
@@ -63,7 +66,8 @@ def check_program(name, src, dir, path = nil, debug: false)
   # The debug build also tests the portable overflow checks, which gcc
   # and clang otherwise replace with their builtins.
   flags = debug ? CFLAGS - ["-O2"] + ["-g", "-O0", "-DEGG_PORTABLE"] : CFLAGS
-  _, cc_err, cc_status = Open3.capture3(CC, *flags, "-o", base, "#{base}.c")
+  links = lib_dirs.map { |d| "-L#{d}" } + result.links.map { |l| "-l#{l}" }
+  _, cc_err, cc_status = Open3.capture3(CC, *flags, "-o", base, "#{base}.c", *links)
   return report(false, name, "C compiler failed:\n#{cc_err}") unless cc_status.success?
   out, err, status = Open3.capture3(base)
   panic = comment_values(src, "panic").first
@@ -104,7 +108,7 @@ def bad_line_marks(c_source, src, path)
     continued = prev.match?(/(,|\(|\[|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/)
     # `uses`, `allow`, `@import` and `extern fn` lines declare, and
     # generate no code (an extern fn only a prototype).
-    declares = text.match?(/\A(uses|allow|extern)\s/) || text.match?(/\Aconst \w+ = @import\(/)
+    declares = text.match?(/\A(uses|allow|extern|link)\s/) || text.match?(/\Aconst \w+ = @import\(/)
     code << i + 1 unless continued || declares || text.match?(/\A\}( else \{)?\z/)
     prev = text
   end
@@ -439,6 +443,29 @@ def check_lsp
   report(status.success? && err.empty?, "lsp shutdown and exit", "status #{status.exitstatus}, stderr: #{err}")
 end
 
+# Build test/link/linktest.c into dir/liblinktest.a, then link it through
+# `link` in an imported module, and through eggc's -l and -L.
+def check_link(dir)
+  link = File.join(ROOT, "test", "link")
+  obj = File.join(dir, "linktest.o")
+  _, err, st = Open3.capture3(CC, "-std=c99", "-c", "-o", obj, File.join(link, "linktest.c"))
+  _, err2, st2 = Open3.capture3("ar", "rcs", File.join(dir, "liblinktest.a"), obj) if st.success?
+  return report(false, "build liblinktest.a", "#{err}#{err2}") unless st.success? && st2.success?
+  main = File.join(link, "main.egg")
+  check_program("link/main.egg", File.read(main), dir, main, lib_dirs: [dir])
+  check_program("link/main.egg -g", File.read(main), dir, main, debug: true, lib_dirs: [dir])
+  eggc = File.join(ROOT, "bin", "eggc")
+  out, err, st = Open3.capture3(eggc, "run", main, "-L", dir)
+  report(st.success? && out == "42\n", "eggc run links what `link` names", "#{out}#{err}")
+  cli = File.join(link, "cli.egg")
+  out, err, st = Open3.capture3(eggc, "run", cli, "-L#{dir}", "-llinktest")
+  report(st.success? && out == "73\n", "eggc run -L DIR -lLIB", "#{out}#{err}")
+  out, err, st = Open3.capture3(eggc, "run", cli, "-L", dir, "-l", "linktest")
+  report(st.success? && out == "73\n", "eggc run -L DIR -l LIB", "#{out}#{err}")
+  _, _, st = Open3.capture3(eggc, "run", cli)
+  report(!st.success?, "eggc run without -l fails to link", "status #{st.exitstatus}")
+end
+
 Dir.mktmpdir do |dir|
   puts "examples"
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
@@ -453,6 +480,9 @@ Dir.mktmpdir do |dir|
 
   puts "loader"
   check_loader(dir)
+
+  puts "link"
+  check_link(dir)
 
   puts "lsp"
   check_lsp

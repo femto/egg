@@ -1035,6 +1035,23 @@ fn main(out: Io) void {
 }
 ```
 
+A C function outside the C library is linked with `link`, also only in
+an `allow unsafe` file:
+
+```
+allow unsafe
+link "sqlite3"
+
+extern fn sqlite3_libversion_number() i32
+```
+
+`eggc build` and `eggc run` pass `-lsqlite3` to the C compiler for every
+`link` in every file the program loads, so a program that imports a
+module wrapping a library links it without saying so. The name is what
+follows `-l`: letters, digits and `_ . + -`, not starting with `.`, `+`
+or `-` (E138). eggc's own `-l LIB` links one more library, and `-L DIR`
+tells the C compiler where to look.
+
 ## 21. Buffers, ownership and defer
 
 `Buf(T)` is a buffer of T on the heap, with a length fixed until it is

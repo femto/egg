@@ -12,6 +12,8 @@
 #   --json   print diagnostics as JSON lines (for tools and AI agents)
 #   -g       debug build: #line directives map the C back to the .egg file,
 #            and build/run compile with -g -O0, so gdb/lldb break on .egg lines
+#   -l LIB   build/run: also link the C library LIB (as `link "LIB"` in a file)
+#   -L DIR   build/run: look for libraries in DIR too
 
 # The compiler uses `case ... in`; older Rubies (macOS ships 2.6 as
 # /usr/bin/ruby) would only report a confusing syntax error.
@@ -23,7 +25,7 @@ end
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g]\n       eggc (spec|lsp)"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g] [-l LIB] [-L DIR]\n       eggc (spec|lsp)"
 
 def fail_usage
   warn USAGE
@@ -54,6 +56,23 @@ if (i = args.index("-o"))
   fail_usage if out_path.nil?
   args.slice!(i, 2)
 end
+# -l LIB and -L DIR, also written -lLIB and -LDIR, in order.
+libs = []
+lib_dirs = []
+i = 0
+while i < args.length
+  a = args[i]
+  if a == "-l" || a == "-L"
+    fail_usage if args[i + 1].nil?
+    (a == "-l" ? libs : lib_dirs) << args[i + 1]
+    args.slice!(i, 2)
+  elsif a.start_with?("-l") || a.start_with?("-L")
+    (a.start_with?("-l") ? libs : lib_dirs) << a[2..]
+    args.slice!(i, 1)
+  else
+    i += 1
+  end
+end
 command = args[0]
 path = args[1]
 fail_usage if command.nil? || path.nil? || args.length != 2
@@ -75,17 +94,20 @@ unless result.diagnostics.empty?
   exit 1
 end
 
-def build_exe(c_source, c_path, exe_path, debug)
+# links: library flags, after the source so the linker sees what it needs.
+def build_exe(c_source, c_path, exe_path, debug, links)
   File.write(c_path, c_source)
   cc = ENV["CC"] || "cc"
   # Columns would be C columns, not .egg ones, so leave them out.
   opt = debug ? ["-g", "-gno-column-info", "-O0"] : ["-O2"]
-  ok = system(cc, "-std=c99", *opt, "-o", exe_path, c_path)
+  ok = system(cc, "-std=c99", *opt, "-o", exe_path, c_path, *links)
   unless ok
     warn "eggc: C compiler '#{cc}' failed"
     exit 1
   end
 end
+
+links = lib_dirs.map { |d| "-L#{d}" } + (result.links + libs).uniq.map { |l| "-l#{l}" }
 
 case command
 when "check"
@@ -98,10 +120,10 @@ when "emit-c"
   end
 when "build"
   exe = out_path || File.basename(path, ".egg")
-  build_exe(result.c_source, "#{exe}.c", exe, debug)
+  build_exe(result.c_source, "#{exe}.c", exe, debug, links)
 when "run"
   base = File.join(Dir.tmpdir, "eggc-#{Process.pid}")
-  build_exe(result.c_source, "#{base}.c", base, debug)
+  build_exe(result.c_source, "#{base}.c", base, debug, links)
   ok = system(base)
   status = $?.exitstatus
   File.delete(base) if File.exist?(base)

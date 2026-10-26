@@ -137,7 +137,7 @@ module Egg
       @loop_depth = 0
       @externs = []        # Sigs of extern fns, every declaration, in order
       @extern_c = {}       # C name -> Sig, to catch clashing declarations
-      @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], [], program.allows || []) }
+      @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], [], program.allows || [], program.links || []) }
       @mod = @modules[""]
       PRIMS.each { |p| @types[p] = TInfo.new(p, :prim) }
     end
@@ -265,6 +265,13 @@ module Egg
       end
       m.allows.each do |u|
         err("E131", "only `allow unsafe` exists, found `allow #{u.name}`", u.line, u.col) unless u.name == "unsafe"
+      end
+      m.links.each do |l|
+        next unless require_unsafe("`link`", l.line, l.col)
+        # Passed to the C compiler as -l<name>, so it must not read as a flag.
+        unless l.name.match?(/\A[A-Za-z0-9_][A-Za-z0-9_.+-]*\z/)
+          err("E138", "'#{l.name}' is not a library name: write the part after -l, as in link \"m\" for -lm", l.line, l.col)
+        end
       end
     end
 

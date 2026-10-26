@@ -1,0 +1,10 @@
+// No link line: the library comes from eggc's -l.
+// expect: 73
+uses io
+allow unsafe
+
+extern fn lt_mix(a: i64, b: i64) i64
+
+fn main(out: Io) void {
+    out.print(lt_mix(7, 3))
+}

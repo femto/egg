@@ -24,6 +24,7 @@ module Egg
       uses = []
       imports = []
       allows = []
+      links = []
       skip_nl
       until at?(:eof)
         if kw?("const")
@@ -39,6 +40,11 @@ module Egg
           advance
           parse_names(allows, "what to allow (unsafe)")
           end_stmt
+        elsif kw?("link")
+          advance
+          lib = expect(:string, "a C library name in quotes, as in link \"m\"")
+          links << UsesItem.new(lib.text, lib.line, lib.col)
+          end_stmt
         elsif kw?("extern")
           funcs << parse_extern
         else
@@ -46,7 +52,7 @@ module Egg
         end
         skip_nl
       end
-      Program.new(funcs, types, uses, imports, nil, allows)
+      Program.new(funcs, types, uses, imports, nil, allows, links)
     end
 
     # uses alloc, io
