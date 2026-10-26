@@ -1,0 +1,25 @@
+// defer and errdefer run an action: void, without try (E113, E118).
+uses alloc, io
+
+fn parse(n: i64) !i64 {
+    return n
+}
+
+fn f(a: Allocator) void {
+    const b = a.alloc(1, 0)
+    errdefer a.free(b)
+}
+
+fn g(out: Io) !void {
+    defer out.print(try parse(1))
+    defer parse(2)
+}
+
+fn main(out: Io, a: Allocator) !void {
+    f(a)
+    try g(out)
+}
+
+// error: E118 @10
+// error: E118 @14
+// error: E113 @15

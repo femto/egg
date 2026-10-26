@@ -1,0 +1,68 @@
+// Paths that agree are fine; a switch, a catch and a return of an error
+// union are each checked on every path.
+uses alloc, io
+
+const Mode = enum { keep, drop }
+
+fn parse(n: i64) !i64 {
+    return n
+}
+
+fn pick(a: Allocator, b: Buf(i64), m: Mode) Buf(i64) {
+    switch (m) {
+        .keep => {
+            return b
+        }
+        .drop => {
+            a.free(b)
+        }
+    }
+    return a.alloc(1, 0)
+}
+
+fn uneven(a: Allocator, m: Mode) void {
+    const b = a.alloc(1, 0)
+    switch (m) {
+        .keep => {
+        }
+        .drop => {
+            a.free(b)
+        }
+    }
+}
+
+fn rescue(a: Allocator) i64 {
+    const b = a.alloc(1, 0)
+    const n = parse(1) catch fail(a, b)
+    a.free(b)
+    return n
+}
+
+fn fail(a: Allocator, b: Buf(i64)) i64 {
+    a.free(b)
+    return 0
+}
+
+fn either(a: Allocator) !Buf(i64) {
+    const b = a.alloc(1, 0)
+    errdefer a.free(b)
+    return maybe(a)
+}
+
+fn maybe(a: Allocator) !Buf(i64) {
+    return a.alloc(1, 0)
+}
+
+fn main(out: Io, a: Allocator) !void {
+    const p = pick(a, a.alloc(2, 0), Mode.keep)
+    out.print(@len(p))
+    a.free(p)
+    uneven(a, Mode.drop)
+    out.print(rescue(a))
+    const e = try either(a)
+    a.free(e)
+}
+
+// error: E134 @25
+// error: E134 @36
+// error: E135 @49

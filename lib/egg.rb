@@ -5,6 +5,7 @@ require_relative "egg/parser"
 require_relative "egg/loader"
 require_relative "egg/typecheck"
 require_relative "egg/caps"
+require_relative "egg/own"
 require_relative "egg/codegen_c"
 
 module Egg
@@ -20,15 +21,15 @@ module Egg
 
   # Load src (the file at path; imports are found relative to it, or to the
   # current directory when path is nil), type-check it and check its
-  # capabilities. Raises CompileError on a lexing, parsing or import error.
+  # capabilities and who owns each buffer. Raises CompileError on a lexing, parsing or import error.
   # root: src already parsed, for tools that read the annotated AST.
   def self.check(src, path = nil, root = nil)
     program = Loader.new(src, path, root).load
     checker = TypeChecker.new(program)
     diags = checker.check
     caps = CapChecker.new(checker)
-    # Capabilities are checked only on a well-typed program.
-    diags = caps.check if diags.empty?
+    # Capabilities and ownership are checked only on a well-typed program.
+    diags = caps.check + OwnershipChecker.new(checker).check if diags.empty?
     CheckResult.new(program, checker, caps, diags)
   end
 

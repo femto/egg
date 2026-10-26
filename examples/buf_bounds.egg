@@ -1,0 +1,13 @@
+// Buffer indexing is checked, and a.resize can shrink a buffer.
+// expect: 2
+// panic: index out of bounds
+
+uses alloc, io
+
+fn main(out: Io, a: Allocator) void {
+    var b = a.alloc(4, 1)
+    defer a.free(b)
+    a.resize(&b, 2, 0)
+    out.print(@len(b))
+    b[2] = 5
+}

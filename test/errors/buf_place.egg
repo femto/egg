@@ -1,0 +1,35 @@
+// A Buf lives only in locals, parameters and results (E133).
+uses alloc, io
+
+const Holder = struct {
+    data: Buf(i64)
+}
+
+fn make(a: Allocator) Buf(i64) {
+    return a.alloc(2, 0)
+}
+
+fn maybe(a: Allocator) !Buf(i64) {
+    return a.alloc(2, 0)
+}
+
+fn takes(r: !Buf(i64)) void {
+}
+
+fn main(out: Io, a: Allocator) !void {
+    out.print(@len(make(a)))
+    const r = maybe(a)
+    const bs: [2]Buf(i64) = @splat(make(a))
+    const p = a.create(make(a))
+    const nested = a.alloc(2, make(a))
+    out.print(make(a)[0])
+}
+
+// error: E133 @5
+// error: E133 @16
+// error: E133 @20
+// error: E133 @21
+// error: E133 @22
+// error: E133 @23
+// error: E133 @24
+// error: E133 @25

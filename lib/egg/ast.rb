@@ -64,6 +64,9 @@ module Egg
   Continue = Struct.new(:line, :col)
   Return   = Struct.new(:value, :line, :col)                              # value may be nil
   ExprStmt = Struct.new(:expr, :line, :col)
+  # defer e / errdefer e (err: true): e runs when its block is left
+  # (errdefer: only when the function returns an error)
+  Defer    = Struct.new(:expr, :err, :line, :col)
 
   # ---- expressions -------------------------------------------------------
   IntLit     = Struct.new(:value, :line, :col, :ty, :info)

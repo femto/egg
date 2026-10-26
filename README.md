@@ -5,9 +5,9 @@ GC, exceptions, IO and allocation are capability modules a program declares
 on demand. See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
-This repository holds **eggc**, the first compiler, now partway through
-**v2** (modules, capabilities, integer types, pointers and `extern fn` are
-in; ownership is next): written
+This repository holds **eggc**, the first compiler, now at the end of
+**v2** (modules, capabilities, integer types, pointers, `extern fn` and
+owned buffers): written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
 compiles), running on CRuby 3.0+, emitting portable C99.
 
@@ -75,7 +75,7 @@ rebuild to switch back.
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
-v2 so far:
+v2:
 
 - Modules: `const m = @import("m.egg")`, then `m.f()`, `m.Point`,
   `m.Pair(i64)`; each file loaded once, cycles allowed; diagnostics name
@@ -97,6 +97,11 @@ v2 so far:
 - Function values `fn(T) R`: passed, returned, stored in fields, called
 - `extern fn toupper(c: i32) i32` (in an unsafe file) calls C; `uses io`
   on the declaration says what the C function does
+- Owned buffers `Buf(T)`: `a.alloc(n, v)`, `a.free(b)`, `a.resize(&b, n, v)`;
+  indexed, sliced and iterated like arrays. The **ownership check**
+  follows every path: no use after a move or free (E136), no leak (E135),
+  paths and loop iterations agree (E134); `defer` and `errdefer` free on
+  every way out
 
 From v1:
 
@@ -141,6 +146,7 @@ lib/egg/ast.rb         AST as Structs
 lib/egg/loader.rb      the root file and its imports, merged into one program
 lib/egg/typecheck.rb   types and Zig-style strictness checks
 lib/egg/caps.rb        capability check along the call graph
+lib/egg/own.rb         ownership check of buffers, along every path
 lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
 lib/egg/lsp.rb         language server (a tool: uses the json and uri stdlib, not Spinel)
 spec/core.md           the core language spec: types, scoping, semantics

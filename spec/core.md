@@ -3,7 +3,8 @@
 This is the complete definition of the v2 core: the v1 language plus
 integer types of every width (section 7), modules (section 16), the `io`
 and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
-(section 18), function values (section 19) and `extern fn` (section 20).
+(section 18), function values (section 19), `extern fn` (section 20), and
+owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
 with `grammar.ebnf` (syntax) and `diagnostics.md` (error codes).
 `eggc spec` prints all three.
@@ -51,7 +52,7 @@ fn add(a: i64, b: i64) i64 {
 - Source is UTF-8. Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `fn return if else while for break continue switch var const
   true false and or struct enum union try catch error inout comptime uses
-  allow extern null`.
+  allow extern null defer errdefer`.
 - Integer literals are decimal digits, optionally separated by `_`
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
   context (section 7); it must fit that type (E003). `-5` is unary minus
@@ -116,8 +117,9 @@ fn main(out: Io) void {
 | `type` | a type, at compile time only | `comptime` parameters; section 14 |
 | `Io` | the io capability | received by `main`, passed down; section 17 |
 | `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
+| `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 
-Every type that has runtime values, except slices, is a **value type**:
+Every type that has runtime values, except slices and buffers, is a **value type**:
 assignment, passing and returning copy the value (`void` and `type` have
 no runtime values). There are **no implicit conversions**. Every
 operator and every assignment, argument and return requires exactly the
@@ -228,10 +230,11 @@ fn main(out: Io) void {
 | `x = e`, `p.f = e`, `a[i] = e` | assign to a variable, a field or an element of a mutable variable |
 | `if (c) { } else if (c) { } else { }` | `c` must be `bool`; braces are required |
 | `while (c) { }` | repeats while `c` is true |
-| `for (xs) \|x\| { }`, `for (xs) \|x, i\| { }` | each element of an array, a slice or a str (bytes as i64), with its index `i` |
+| `for (xs) \|x\| { }`, `for (xs) \|x, i\| { }` | each element of an array, a slice, a `Buf` or a str (bytes as i64), with its index `i` |
 | `break`, `continue` | leave or restart the innermost loop (E126 outside one) |
 | `switch (x) { ... }` | section 10 |
 | `return` / `return e` | section 5 |
+| `defer e`, `errdefer e` | run `e` when the block is left; section 21 |
 | expression | must have type `void` (E113); a result or an error may not be discarded |
 
 Loop variables are constants; name one `_` to ignore it. Rule E113 is why
@@ -738,7 +741,7 @@ Builtins start with `@`; any other name is E112.
 
 | Builtin | Meaning |
 | --- | --- |
-| `@len(x)` | length of an array, a slice or a `str`, as `i64` |
+| `@len(x)` | length of an array, a slice, a `Buf` or a `str`, as `i64` |
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
@@ -826,7 +829,7 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `out.print(x)`: prints an integer, `bool`, `str` or enum and a newline to standard output |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.create(v) *T`: a pointer to a copy of v |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
@@ -848,9 +851,9 @@ fn main(out: Io) void {
 }
 ```
 
-The `Allocator` is one arena for the whole program: what it allocates is
-never freed, so nothing can be used after being freed. Allocators that
-free come with ownership checking.
+Strings and `a.create` pointers live as long as the program: they are
+never freed, so nothing can use them after being freed. Memory that is
+freed comes as a `Buf(T)`, whose owner the compiler checks (section 21).
 
 ```egg
 // expect: total: 42
@@ -1032,15 +1035,144 @@ fn main(out: Io) void {
 }
 ```
 
-## 21. Not yet
+## 21. Buffers, ownership and defer
 
-Closures, freeing memory and checking who owns it, optional types
+`Buf(T)` is a buffer of T on the heap, with a length fixed until it is
+resized. `a.alloc(n, v)` makes one holding n copies of v (T is v's type,
+or the element type the context expects); `a.free(b)` frees it;
+`a.resize(&b, n, v)` changes its length to n, filling new elements with v.
+A negative length panics with `negative buffer length`.
+
+A buffer is used like an array: `b[i]` (bounds-checked; `b[i] = v` needs
+a `var` or an `inout` parameter), `@len(b)`, `for (b)`, and `b[lo..hi]`,
+a slice of it. These **borrow** it. Everything else **moves** it:
+assigning it, passing it by value, returning it, and `a.free(b)`.
+
+**Each buffer has one owner.** A move hands it on, and the variable it
+came from owns nothing until it is assigned a new buffer. The compiler
+follows every path through each function and checks:
+
+- a variable is not used after its buffer was moved (E136), so nothing is
+  used after being freed and nothing is freed twice;
+- every buffer is moved before its owner goes away: at the end of its
+  block, at a return, break or continue, and where a `try` returns an
+  error; and a variable that still owns one is not assigned another
+  (E135). So nothing leaks. An `inout` buffer parameter belongs to the
+  caller, so it must own a buffer whenever the function returns;
+- paths that join agree on what was moved (after an `if`, a `switch`, a
+  `catch`, the right side of `and`/`or`), and an iteration of a loop
+  leaves each buffer from outside it as it found it (E134);
+- while `for (b)` iterates over a buffer, the body may change its
+  elements but not move, reassign or resize it, nor pass it as `inout`
+  (E137).
+
+A buffer lives only in a local, a parameter or a result: not in a field,
+an array, another buffer or behind a pointer, and a `!Buf(T)` must be
+unwrapped with `try` or `catch` right away (E133). Borrowing from a
+temporary, as in `@len(make(a))`, is E133 too: nothing could free it. A
+buffer moved into a call may not appear in another argument of it (E117),
+so a slice of it cannot outlive it. Buffers cannot be compared or printed.
+
+**defer.** `defer e` runs the void expression `e` when its block is left,
+however that happens: at its end, at `return` (after the value is
+computed), `break`, `continue`, or a `try` that returns an error. Several
+run last first. `errdefer e`, only in a function returning `!T`, runs only
+when the function returns an error. Neither may contain `try` (E118). The
+ownership check counts what they do at every way out, so
+`defer a.free(b)` right after making b frees it exactly once.
+
+```egg
+// expect: 10
+// expect: 20
+// expect: 5
+uses alloc, io
+
+fn sum(xs: []i64) i64 {
+    var total = 0
+    for (xs) |x| {
+        total = total + x
+    }
+    return total
+}
+
+// Takes the buffer, frees it, and returns a new one.
+fn doubled(a: Allocator, b: Buf(i64)) Buf(i64) {
+    var out = a.alloc(@len(b), 0)
+    for (b) |x, i| {
+        out[i] = 2 * x
+    }
+    a.free(b)
+    return out
+}
+
+fn range(a: Allocator, n: i64) !Buf(i64) {
+    var b = a.alloc(n, 0)
+    errdefer a.free(b)       // only if an error leaves the function
+    var i = 0
+    while (i < n) {
+        if (i > 99) {
+            return error.TooLong
+        }
+        b[i] = i + 1
+        i = i + 1
+    }
+    return b
+}
+
+fn main(out: Io, a: Allocator) !void {
+    var b = try range(a, 4)
+    defer a.free(b)          // whatever b owns when main returns
+    out.print(sum(b[0..]))
+    b = doubled(a, b)        // moved in, and a new buffer back
+    out.print(sum(b[0..]))
+    a.resize(&b, 5, 0)
+    out.print(@len(b))
+}
+```
+
+```egg
+// error: E136
+uses alloc, io
+
+fn main(out: Io, a: Allocator) void {
+    const b = a.alloc(3, 0)
+    a.free(b)
+    out.print(b[0])          // b was moved by a.free
+}
+```
+
+```egg
+// error: E135
+uses alloc, io
+
+fn main(out: Io, a: Allocator) void {
+    const b = a.alloc(3, 0)
+    out.print(@len(b))       // b is never freed
+}
+```
+
+```egg
+// error: E134
+uses alloc, io
+
+fn main(out: Io, a: Allocator) void {
+    const b = a.alloc(3, 0)
+    if (@len(b) > 2) {
+        a.free(b)            // freed on one path only
+    }
+    out.print(1)
+}
+```
+
+## 22. Not yet
+
+Closures, optional types
 (`?*T`) and many-item pointers, floating point, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, and capabilities other
 than `io` and `alloc`. See the design document's roadmap for when each
 arrives.
 
-## 22. A complete program
+## 23. A complete program
 
 ```egg
 // expect: 21

@@ -29,6 +29,10 @@
 #
 # Pointer operations and `extern fn` need `allow unsafe` in their own file
 # (E131); unlike capabilities, this is not carried along calls.
+#
+# Buf(T) is an owned heap buffer. It lives only in locals, parameters and
+# results (E133); who owns it at each point is checked afterwards, along
+# every path through each function (own.rb).
 
 module Egg
   VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
@@ -64,8 +68,12 @@ module Egg
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
       "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["integer"], "str"],
-                       "create" => [["value"], "pointer to the value"] }
+                       "create" => [["value"], "pointer to the value"],
+                       "alloc" => [%w[i64 element], "Buf(T)"], "free" => [["buffer"], "void"],
+                       "resize" => [%w[inout_buffer i64 element], "void"] }
     }.freeze
+    # Type names the language defines; no declaration may take them.
+    RESERVED_TYPES = (PRIMS + ["Buf"]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Builtins and how many arguments each takes.
@@ -157,8 +165,9 @@ module Egg
       @modules.each_value { |m| in_module(m.prefix) { check_uses(m) } }
       @program.types.each do |d|
         in_module(d.mod) do
-          if @decls.key?(d.name) || PRIMS.include?(base_name(d.name))
-            err("E106", "type '#{d.name}' is defined more than once", d.line, d.col)
+          if @decls.key?(d.name) || RESERVED_TYPES.include?(base_name(d.name))
+            builtin = RESERVED_TYPES.include?(base_name(d.name)) ? " (#{base_name(d.name)} is built in)" : ""
+            err("E106", "type '#{d.name}' is defined more than once#{builtin}", d.line, d.col)
             next
           end
           @decls[d.name] = d
@@ -166,8 +175,10 @@ module Egg
       end
       @program.funcs.each do |f|
         in_module(f.mod) do
-          if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name)
-            err("E106", "function '#{f.name}' is defined more than once", f.line, f.col)
+          # Buf(...) always means the built-in type, so no function may take the name.
+          builtin = base_name(f.name) == "Buf"
+          if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name) || builtin
+            err("E106", "function '#{f.name}' is defined more than once#{builtin ? ' (Buf is built in)' : ''}", f.line, f.col)
             next
           end
           if !f.ext.nil?
@@ -366,6 +377,9 @@ module Egg
           if t == "void" || t == "type"
             err("E108", t == "void" ? "a value cannot have type void" : "only a comptime parameter can have type 'type'", p.line, p.col)
             t = "error"
+          elsif t.start_with?("!") && owned?(@types[t].inner)
+            err("E133", "a parameter cannot be a #{t}; unwrap it with try or catch and pass the #{@types[t].inner}", p.line, p.col)
+            t = "error"
           end
           sig.params << [t, p.mode]
         end
@@ -483,6 +497,9 @@ module Egg
         elsif t.start_with?("[]")
           err("E116", "a struct cannot hold a slice; slices exist only as parameters", f.line, f.col)
           t = "error"
+        elsif owned_or_err?(t)
+          err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; buffers live only in locals, parameters and results", f.line, f.col)
+          t = "error"
         end
         fields << [f.name, t, f.line]
       end
@@ -495,6 +512,10 @@ module Egg
       when String
         return @tenv[t] if @tenv.key?(t)
         return t if PRIMS.include?(t) || t == "type"
+        if t == "Buf"
+          err("E108", "Buf needs its element type: Buf(T), such as Buf(u8)", line, col)
+          return "error"
+        end
         q = qualify(t)
         decl = @decls[q]
         return register_decl(decl).canon unless decl.nil?
@@ -516,6 +537,7 @@ module Egg
         elem = resolve_type(t.elem, line, col)
         return "error" if elem == "error"
         return value_type_error(elem, "an array element", line, col) unless storable?(elem)
+        return owned_place_error(elem, "an array element", line, col) if owned_or_err?(elem)
         canon = "[#{t.len}]#{elem}"
         info = register(canon, :array, line, col)
         info.elem = elem
@@ -525,6 +547,7 @@ module Egg
         elem = resolve_type(t.elem, line, col)
         return "error" if elem == "error"
         return value_type_error(elem, "a slice element", line, col) unless storable?(elem)
+        return owned_place_error(elem, "a slice element", line, col) if owned_or_err?(elem)
         canon = "[]#{elem}"
         info = register(canon, :slice, line, col)
         info.elem = elem
@@ -543,11 +566,13 @@ module Egg
       when GenericType
         args = t.args.map { |a| resolve_type(a, line, col) }
         return "error" if args.include?("error")
+        return buf_type(args, line, col) if t.name == "Buf"
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
         inner = resolve_type(t.inner, line, col)
         return "error" if inner == "error"
         return value_type_error(inner, "a pointer's target", line, col) unless storable?(inner)
+        return owned_place_error(inner, "a pointer's target", line, col) if owned_or_err?(inner)
         ptr_type(inner)
       when FnType
         params = t.params.map { |p| resolve_type(p, line, col) }
@@ -580,6 +605,44 @@ module Egg
 
     def storable?(t)
       !(t == "void" || t == "type" || t == "anyerror" || t.start_with?("[]"))
+    end
+
+    # Buf(T): an owned buffer of T. Its elements are plain values.
+    def buf_type(args, line, col)
+      if args.length != 1
+        err("E104", "Buf takes one type argument, its element type, but #{args.length} were given", line, col)
+        return "error"
+      end
+      elem = args[0]
+      return value_type_error(elem, "a Buf element", line, col) unless storable?(elem)
+      return owned_place_error(elem, "a Buf element", line, col) if owned_or_err?(elem)
+      canon = "Buf(#{elem})"
+      register(canon, :buf, line, col).elem = elem
+      canon
+    end
+
+    # An owned buffer: moved, not copied (own.rb).
+    def owned?(t)
+      @types[t]&.kind == :buf
+    end
+
+    # Buf(T) or !Buf(T).
+    def owned_or_err?(t)
+      return true if owned?(t)
+      info = @types[t]
+      info&.kind == :err && owned?(info.inner)
+    end
+
+    def owned_place_error(t, what, line, col)
+      err("E133", "#{what} cannot be a #{t}; buffers live only in locals, parameters and results", line, col)
+      "error"
+    end
+
+    # Borrowing from a buffer (b[i], b[lo..], @len(b), for (b)) needs a
+    # variable that owns it: a temporary one would never be freed.
+    def check_borrowed(obj, t)
+      return unless owned?(t) && !obj.is_a?(Var)
+      err("E133", "this #{t} is a temporary that would never be freed; store it in a variable first", obj.line, obj.col)
     end
 
     def value_type_error(t, what, line, col)
@@ -725,6 +788,9 @@ module Egg
         elsif ty.start_with?("[]")
           err("E116", "'#{name}' cannot hold a slice; slices exist only as parameters", line, col)
           ty = "error"
+        elsif ty.start_with?("!") && owned?(@types[ty].inner)
+          err("E133", "'#{name}' cannot hold a #{ty}; unwrap it right away with try or catch", line, col)
+          ty = "error"
         end
         stmt.ty = ty
         declare(name, VarInfo.new(ty, mutable, false, false, line, col, false, false))
@@ -765,9 +831,10 @@ module Egg
       in For[iter:, var:, index_var:, body:, line:, col:]
         # A slice may be iterated directly: it lives only as long as the loop.
         it = iter.is_a?(SliceExpr) ? check_slice_arg(iter, nil) : check_expr(iter)
+        check_borrowed(iter, it)
         elem = elem_type(it)
         if elem.nil? && it != "error"
-          err("E103", "'for' needs an array, a slice or a str, found #{it}", iter.line, iter.col)
+          err("E103", "'for' needs an array, a slice, a Buf or a str, found #{it}", iter.line, iter.col)
         end
         @loop_depth += 1
         @scopes << {}
@@ -796,6 +863,17 @@ module Egg
             vt = check_expr(value, ret)
             expect_type(ret, vt, value)
           end
+        end
+      in Defer[expr:, err:, line:, col:]
+        what = err ? "errdefer" : "defer"
+        if err && !@current.ret.start_with?("!") && @current.ret != "error"
+          err("E118", "'errdefer' runs when the function returns an error, but '#{@current.func.name}' returns #{@current.ret}; use defer", line, col)
+        end
+        t = check_expr(expr)
+        if contains_try?(expr)
+          err("E118", "'try' cannot be used in #{what}: leaving the function from there would skip the rest", line, col)
+        elsif t != "void" && t != "error"
+          err("E113", "#{what} runs an action, which must be void; found #{t}", line, col)
         end
       in ExprStmt[expr:, line:, col:]
         t = check_expr(expr)
@@ -874,7 +952,7 @@ module Egg
       return "i64" if t == "str"
       info = @types[t]
       return nil if info.nil?
-      return info.elem if info.kind == :array || info.kind == :slice
+      return info.elem if %i[array slice buf].include?(info.kind)
       nil
     end
 
@@ -938,6 +1016,7 @@ module Egg
         err("E108", "cannot take the address of a #{t}", place.line, place.col)
         return "error"
       end
+      return owned_place_error(t, "a pointer's target", place.line, place.col) if owned?(t)
       ptr_type(t)
     end
 
@@ -1017,7 +1096,7 @@ module Egg
       in Call[name:, args:, line:, col:]
         check_call(e, name, args, line, col)
       in MethodCall[obj:, name:, args:, line:, col:]
-        check_method_call(e, obj, name, args, line, col)
+        check_method_call(e, obj, name, args, line, col, expected)
       in Builtin[name:, args:, line:, col:]
         check_builtin(e, name, args, expected, line, col)
       in Field[obj:, name:, line:, col:]
@@ -1062,6 +1141,7 @@ module Egg
         field_type(t, name, line, col)
       in Index[obj:, index:, line:, col:]
         t = check_expr(obj)
+        check_borrowed(obj, t)
         expect_type("i64", check_expr(index), index)
         e.info[:len] = @types[t]&.len
         index_type(t, line, col)
@@ -1243,6 +1323,8 @@ module Egg
         if lt != "error" && rt != "error"
           if lt != rt
             err("E103", "cannot compare #{lt} with #{rt}", line, col)
+          elsif owned?(lt)
+            err("E103", "cannot compare buffers with #{op}; compare their elements", line, col)
           elsif !comparable?(lt)
             err("E103", "cannot compare values of type #{lt} with #{op}; compare their fields", line, col)
           end
@@ -1303,6 +1385,12 @@ module Egg
       local = lookup(written)
       return check_indirect_call(e, local, args, written, line, col) unless local.nil?
       name = qualify(written)
+      if written == "Buf"
+        types = args.map { |a| type_arg(a) }
+        return "error" if types.include?("error")
+        e.info[:type] = buf_type(types, line, col)
+        return e.info[:type] == "error" ? "error" : "type"
+      end
       if @type_fns.key?(name)
         types = args.map { |a| type_arg(a) }
         return "error" if types.include?("error")
@@ -1416,7 +1504,7 @@ module Egg
       sig
     end
 
-    def check_method_call(e, obj, name, args, line, col)
+    def check_method_call(e, obj, name, args, line, col, expected = nil)
       unless module_ref(obj).nil?
         # m.f(...): a function of another module
         obj.info = {}
@@ -1426,7 +1514,7 @@ module Egg
       end
       t = check_expr(obj)
       return check_all_error(args) if t == "error"
-      return check_cap_method(e, obj, t, name, args, line, col) if CAP_METHODS.key?(t)
+      return check_cap_method(e, obj, t, name, args, line, col, expected) if CAP_METHODS.key?(t)
       if t == "type"
         owner = obj.info[:type]
         sig = @sigs[method_key(owner, name)]
@@ -1480,7 +1568,7 @@ module Egg
     end
 
     # out.print(x), a.concat(s, t): a direct use of a capability.
-    def check_cap_method(e, obj, t, name, args, line, col)
+    def check_cap_method(e, obj, t, name, args, line, col, expected = nil)
       m = CAP_METHODS[t][name]
       if m.nil?
         err("E122", "#{t} has no method '#{name}' (methods: #{CAP_METHODS[t].keys.join(', ')})", line, col)
@@ -1493,9 +1581,47 @@ module Egg
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
       end
+      # The element type of a.alloc / a.resize: from the buffer, or from
+      # the type the context expects (`var b: Buf(u8) = a.alloc(4, 0)`).
+      want = expected
+      want = @types[want].inner if !want.nil? && @types[want]&.kind == :err
+      elem = owned?(want) ? @types[want].elem : nil
       params.each_with_index do |pt, i|
         a = args[i]
-        if pt == "printable"
+        if pt == "element"
+          at = check_expr(a, elem)
+          return "error" if at == "error"
+          expect_type(elem, at, a) unless elem.nil?
+          return value_type_error(at, "a Buf element", a.line, a.col) unless storable?(at)
+          return owned_place_error(at, "a Buf element", a.line, a.col) if owned_or_err?(at)
+          ret = buf_type([at], a.line, a.col) if name == "alloc"
+        elsif pt == "buffer"
+          at = check_expr(a)
+          if at != "error" && !owned?(at)
+            err("E103", "'#{name}' frees a Buf, found #{at}", a.line, a.col)
+          end
+        elsif pt == "inout_buffer"
+          unless a.is_a?(AddrOf)
+            err("E121", "'#{name}' changes the buffer in place: pass it as &b", a.line, a.col)
+            check_expr(a)
+            return "error"
+          end
+          a.info = {}
+          at = check_lvalue(a.expr, "resize")
+          mark_root_used(a.expr)
+          a.ty = at
+          return "error" if at == "error"
+          unless owned?(at)
+            err("E103", "'#{name}' resizes a Buf, found #{at}", a.line, a.col)
+            return "error"
+          end
+          elem = @types[at].elem
+          root = root_name(a.expr)
+          clash = args.find { |o| !o.equal?(a) && !root.nil? && mentions?(o, root) }
+          unless clash.nil?
+            err("E117", "'#{root}' is passed as inout and also used by another argument of the same call", a.line, a.col)
+          end
+        elsif pt == "printable"
           at = check_expr(a)
           if at == "void"
             err("E103", "'#{name}' cannot print a void value", a.line, a.col)
@@ -1510,6 +1636,7 @@ module Egg
           at = check_expr(a)
           return "error" if at == "error"
           return value_type_error(at, "an allocated value", a.line, a.col) unless storable?(at)
+          return owned_place_error(at, "a pointer's target", a.line, a.col) if owned_or_err?(at)
           ret = ptr_type(at)
         else
           expect_type(pt, check_expr(a, pt), a)
@@ -1574,6 +1701,14 @@ module Egg
         next if clash.nil?
         err("E117", "'#{root}' is passed as inout and also used by another argument of the same call", a.line, a.col)
       end
+      # Likewise a buffer moved into the call: another argument must not
+      # borrow from it (a slice of it would outlive a free in the callee).
+      args.each do |a|
+        next unless a.is_a?(Var) && owned?(a.ty)
+        clash = others.find { |o| !o.equal?(a) && mentions?(o, a.name) }
+        next if clash.nil?
+        err("E117", "'#{a.name}' is moved into this call and also used by another argument of the same call", a.line, a.col)
+      end
     end
 
     def check_slice_arg(a, _expected)
@@ -1588,13 +1723,14 @@ module Egg
 
     def check_slice(e, obj, lo, hi, line, col)
       t = check_expr(obj)
+      check_borrowed(obj, t)
       expect_type("i64", check_expr(lo), lo)
       expect_type("i64", check_expr(hi), hi) unless hi.nil?
       return "error" if t == "error"
       e.info[:len] = @types[t]&.len
       return "str" if t == "str"
       info = @types[t]
-      if info.nil? || (info.kind != :array && info.kind != :slice)
+      if info.nil? || !%i[array slice buf].include?(info.kind)
         err("E103", "cannot slice a #{t}", line, col)
         return "error"
       end
@@ -1641,6 +1777,28 @@ module Egg
       in Deref[expr:] then mentions?(expr, name)
       in Try[expr:] then mentions?(expr, name)
       in Catch[expr:, fallback:] then mentions?(expr, name) || mentions?(fallback, name)
+      else false
+      end
+    end
+
+    # Does expression e contain a `try`?
+    def contains_try?(e)
+      case e
+      in Try then true
+      in Var | IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit then false
+      in Unary[operand:] then contains_try?(operand)
+      in Binary[lhs:, rhs:] then contains_try?(lhs) || contains_try?(rhs)
+      in Call[args:] then args.any? { |a| contains_try?(a) }
+      in Builtin[args:] then args.any? { |a| contains_try?(a) }
+      in MethodCall[obj:, args:] then contains_try?(obj) || args.any? { |a| contains_try?(a) }
+      in Field[obj:] then contains_try?(obj)
+      in AddrOf[expr:] then contains_try?(expr)
+      in Deref[expr:] then contains_try?(expr)
+      in Index[obj:, index:] then contains_try?(obj) || contains_try?(index)
+      in SliceExpr[obj:, lo:, hi:] then contains_try?(obj) || contains_try?(lo) || (!hi.nil? && contains_try?(hi))
+      in StructLit[fields:] then fields.any? { |f| contains_try?(f[1]) }
+      in ArrayLit[items:] then items.any? { |i| contains_try?(i) }
+      in Catch[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
       else false
       end
     end
@@ -1703,6 +1861,10 @@ module Egg
       elem = resolve_type(type.elem, line, col)
       return check_all_error(items) if elem == "error"
       return check_all_error(items) if value_type_error_if(elem, line, col)
+      if owned_or_err?(elem)
+        owned_place_error(elem, "an array element", line, col)
+        return check_all_error(items)
+      end
       len = type.len.nil? ? items.length : type.len
       if len < 1
         err("E124", "an array needs at least one element", line, col)
@@ -1806,8 +1968,9 @@ module Egg
         t
       when "len"
         t = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
-        if t != "error" && t != "str" && !%i[array slice].include?(@types[t]&.kind)
-          err("E103", "'@len' needs an array, a slice or a str, found #{t}", line, col)
+        check_borrowed(a, t)
+        if t != "error" && t != "str" && !%i[array slice buf].include?(@types[t]&.kind)
+          err("E103", "'@len' needs an array, a slice, a Buf or a str, found #{t}", line, col)
         end
         e.info[:len] = @types[t]&.len
         "i64"

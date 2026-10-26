@@ -80,15 +80,15 @@ fn hash(bytes: []const u8) u64 {
 }
 ```
 
-Declaring what it needs (the planned form: v2 so far has only `out.print`, `a.concat` and `a.int_str`; file IO and `free` come later):
+Declaring what it needs (file IO is still to come; buffers, `free` and `defer` are in v2):
 
 ```
 uses alloc, io
 
-fn read_config(io: Io, a: Allocator, path: []const u8) !Config {
-    const text = try io.read_file(a, path)
+fn read_config(io: Io, a: Allocator, path: str) !Config {
+    const text = try io.read_file(a, path)   // a Buf(u8) the caller owns
     defer a.free(text)
-    return parse(text)
+    return parse(text[0..])
 }
 ```
 
@@ -96,7 +96,7 @@ First capabilities:
 
 | Capability | Provides | Planned |
 | --- | --- | --- |
-| `alloc` | heap allocation, allocator passed explicitly | v2 (first a program-lifetime arena; freeing with ownership checking) |
+| `alloc` | heap allocation, allocator passed explicitly | v2 (strings in a program-lifetime arena; owned buffers `Buf(T)` that are freed, with ownership checking) |
 | `io` | files and standard streams, one implementation per OS | v2 (first standard output; files later) |
 | `gc` | GC-managed objects, implemented in core code | v3 |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
@@ -134,8 +134,9 @@ Pipeline:
 3. Loading imported modules and merging them into one program (`loader.rb`, from v2)
 4. Type checking (`typecheck.rb`)
 5. Capability checking, from v2 (`caps.rb`)
-6. C code generation (`codegen_c.rb`)
-7. Invoking the C compiler to produce an executable
+6. Ownership checking of buffers, from v2 (`own.rb`)
+7. C code generation (`codegen_c.rb`)
+8. Invoking the C compiler to produce an executable
 
 Layout:
 
@@ -149,6 +150,7 @@ egg/
 │   ├── loader.rb
 │   ├── typecheck.rb
 │   ├── caps.rb
+│   ├── own.rb
 │   └── codegen_c.rb
 ├── spec/          # machine-readable language spec
 ├── examples/
@@ -193,13 +195,13 @@ The C that Egg generates must be portable from day one:
 
 ## Roadmap
 
-Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0 and v1 are done; full reflection (`@typeInfo`) moved past v1. v2 is under way. Step 1, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done. Step 2 is done too: integer types of every width with `@as`, raw pointers usable in files that `allow unsafe` (local to the file, not carried along the call graph, so an unsafe module can offer a safe API), function values, and `extern fn` declaring the capabilities the C function uses. Function values turned out not to need `allow unsafe`: taking a function as a value counts as calling it for the capability check, so a function value carries capabilities the way an `Io` value does. Still to come is ownership checking, with an allocator that frees.
+Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0, v1 and v2 are done; full reflection (`@typeInfo`) moved past v1. In v2, step 1, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done. Step 2 is done too: integer types of every width with `@as`, raw pointers usable in files that `allow unsafe` (local to the file, not carried along the call graph, so an unsafe module can offer a safe API), function values, and `extern fn` declaring the capabilities the C function uses. Function values turned out not to need `allow unsafe`: taking a function as a value counts as calling it for the capability check, so a function value carries capabilities the way an `Io` value does. Step 3 added ownership: `Buf(T)`, a heap buffer with one owner, made by `a.alloc` and freed by `a.free`. The check is linear: following every path, a buffer is used only while owned and must be freed, returned or passed on before its owner goes away, so there is no use after free, no double free and no leak. It needs no lifetimes, because slices are already second-class: a borrowed slice of a buffer cannot outlive the call. Buffers live only in locals, parameters and results; buffers in struct fields and arrays are left for later. `defer` and `errdefer` came with it, since freeing on every error path is otherwise impractical. Strings and `a.create` stay in the program-lifetime arena.
 
 | Phase | Scope | Acceptance gate |
 | --- | --- | --- |
 | v0 · Core subset ✅ | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
 | v1 · Types and comptime ✅ | `struct` with methods, `enum`, tagged unions, `str`, arrays, second-class slices, `inout`; error values; comptime generics; `@sizeOf`, `@typeName` | Generic `Pair` and error-value examples pass their tests |
-| v2 · Capability checks (capability check ✅, pointers and extern ✅) | modules; `alloc` and `io` capabilities; recursive check along the call graph; integer types, raw pointers, function values, `extern fn`; ownership | Programs using undeclared capabilities are rejected |
+| v2 · Capability checks ✅ | modules; `alloc` and `io` capabilities; recursive check along the call graph; integer types, raw pointers, function values, `extern fn`; ownership of buffers, `defer` | Programs using undeclared capabilities are rejected |
 | v3 · GC written in core | `gc` library uses only core code | `gc` declares no capabilities and passes the capability check |
 | v4 · Self-hosting | `eggc` rewritten in Egg, compiled by the previous generation | Generation 2 and 3 output is byte-identical |
 
@@ -208,6 +210,7 @@ Each phase ends at a gate that can be checked automatically. v3 is the first rea
 - [ ] Semicolons at the end of statements? The examples omit them; weigh against parser simplicity.
 - [x] Syntax for capabilities in signatures: `fn f() !void with io`, or only module-level declarations with generated docs? Decided in v2: module-level `uses alloc, io`, with capability values passed explicitly; signatures carry no capability list, and tooling shows each function's set.
 - [ ] Granularity: is `io` one capability, or split into `fs`, `net` and `stdio`? v2 starts with one `io` (standard output only); revisit when files arrive.
+- [x] How is freed memory kept safe? Decided in v2: an owned `Buf(T)` checked linearly (moved, never copied; freed or passed on exactly once on every path), with `defer`/`errdefer`; freeing is never implicit. Strings stay in an arena that is never freed.
 - [ ] Rules for GC objects crossing a capability boundary: pin, copy or forbid?
 - [ ] Conservative scanning or a shadow stack with precise scanning for the GC? The latter allows a moving GC but costs something on every call.
 - [ ] Exceptions via `setjmp`/`longjmp` or a check after every call? The latter fits a shadow stack more simply.

@@ -1,0 +1,28 @@
+// A buffer is moved by passing it, assigning it or freeing it; the old
+// variable cannot be used after (E136).
+uses alloc, io
+
+fn total(a: Allocator, b: Buf(i64)) i64 {
+    const n = @len(b)
+    a.free(b)
+    return n
+}
+
+fn main(out: Io, a: Allocator) void {
+    const b = a.alloc(3, 1)
+    out.print(total(a, b))
+    out.print(b[0])
+
+    const c = a.alloc(2, 0)
+    const d = c
+    a.free(c)
+    a.free(d)
+
+    const e = a.alloc(1, 0)
+    a.free(e)
+    a.free(e)
+}
+
+// error: E136 @14
+// error: E136 @18
+// error: E136 @23

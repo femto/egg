@@ -314,6 +314,9 @@ module Egg
       elsif kw?("continue")
         advance
         Continue.new(t.line, t.col)
+      elsif kw?("defer") || kw?("errdefer")
+        advance
+        Defer.new(parse_expr, t.text == "errdefer", t.line, t.col)
       else
         e = parse_expr
         if op?("=")
