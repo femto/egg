@@ -1,0 +1,10 @@
+// A float that does not fit the integer type panics, as nan does.
+// expect: 127
+// panic: float cast out of range
+uses io
+
+fn main(out: Io) void {
+    out.print(@as(i8, 127.99))
+    const x = 128.0
+    out.print(@as(i8, x))
+}

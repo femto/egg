@@ -80,7 +80,7 @@ module Egg
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
-                      egg_buf_resize].freeze
+                      egg_fmt_float egg_print_float egg_float_str egg_buf_resize].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -221,6 +221,41 @@ module Egg
             return (egg_str){ p, n };
         }
       C
+      # The shortest decimal that reads back as x (with f32, as (float)x),
+      # keeping ".0" on whole numbers, positional from 1e-4 to below 1e16
+      # and in exponent form outside, as Python prints floats. No math.h:
+      # it would claim names (sqrt, sin) an extern fn may want.
+      "egg_fmt_float" => <<~C,
+        static void egg_fmt_float(char *buf, double x, bool f32) {
+            if (x != x) { strcpy(buf, "nan"); return; }
+            if (x - x != x - x) { strcpy(buf, x > 0 ? "inf" : "-inf"); return; }
+            int p = 1;
+            for (; p < (f32 ? 9 : 17); p++) {
+                snprintf(buf, 40, "%.*e", p - 1, x);
+                if (f32 ? strtof(buf, NULL) == (float)x : strtod(buf, NULL) == x) break;
+            }
+            snprintf(buf, 40, "%.*e", p - 1, x);
+            int exp = atoi(strchr(buf, 'e') + 1);
+            if (exp >= -4 && exp < 16) snprintf(buf, 40, "%.*f", p - 1 - exp < 1 ? 1 : p - 1 - exp, x);
+        }
+      C
+      "egg_print_float" => <<~C,
+        static void egg_print_float(double x, bool f32) {
+            char buf[40];
+            egg_fmt_float(buf, x, f32);
+            puts(buf);
+        }
+      C
+      "egg_float_str" => <<~C,
+        static egg_str egg_float_str(double x, bool f32) {
+            char buf[40];
+            egg_fmt_float(buf, x, f32);
+            int64_t n = (int64_t)strlen(buf);
+            char *p = egg_alloc(n);
+            memcpy(p, buf, (size_t)n);
+            return (egg_str){ p, n };
+        }
+      C
       # p (NULL for a new buffer) resized to n elements of size bytes.
       "egg_buf_resize" => <<~C
         static void *egg_buf_resize(void *p, int64_t n, size_t size) {
@@ -234,7 +269,11 @@ module Egg
     }.freeze
 
     # Helpers that call others.
-    HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"], "egg_uint_str" => ["egg_alloc"] }.freeze
+    HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"], "egg_uint_str" => ["egg_alloc"],
+                    "egg_print_float" => ["egg_fmt_float"], "egg_float_str" => %w[egg_alloc egg_fmt_float] }.freeze
+    # Helpers that never panic, so need no egg_panic.
+    NO_PANIC = %w[egg_str_eq egg_fmt_float].freeze
+    FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
     ARITH_NAME = { "+" => "add", "-" => "sub", "*" => "mul", "/" => "div", "%" => "mod" }.freeze
@@ -381,8 +420,35 @@ module Egg
       "#{name}((#{wide})#{code})"
     end
 
-    # An integer literal of type t.
+    # x of number type `from` as number type `to`, when either is a float.
+    # To an integer type it is checked: x truncated toward zero must fit
+    # (C leaves anything else undefined), and nan and inf never do.
+    def float_conv(from, to, code)
+      return "((#{FLOAT_C[to]})#{code})" if FLOAT_C.key?(to)
+      ct = INT_C[to][0]
+      name = "egg_as_#{to}_f"
+      unless @int_helpers.key?(name)
+        helper("egg_panic")
+        bits = to == "usize" ? 64 : to[1..].to_i
+        # The open range of x around the type: (lo - 1, hi + 1). For 64
+        # bits lo - 1 is no double, but nothing lies between it and lo.
+        lo, hi = to.start_with?("i") ? [-(2**(bits - 1)), 2**(bits - 1)] : [0, 2**bits]
+        test = bits == 64 && to.start_with?("i") ? "x >= #{lo}.0" : "x > #{lo - 1}.0"
+        @int_helpers[name] = "static #{ct} #{name}(double x) {\n" \
+                             "    if (!(#{test} && x < #{hi}.0)) egg_panic(\"float cast out of range\");\n" \
+                             "    return (#{ct})x;\n}\n"
+      end
+      "#{name}((double)#{code})"
+    end
+
+    # A float literal (its text as written) of type t.
+    def float_lit(text, t)
+      t == "f32" ? "#{text}f" : text
+    end
+
+    # An integer literal of type t (which may be a float type: 2 as an f64).
     def int_lit(value, t)
+      return float_lit("#{value}.0", t) if FLOAT_C.key?(t)
       return(value == -9_223_372_036_854_775_808 ? "INT64_MIN" : "INT64_C(#{value})") if t == "i64" || t.nil?
       ct, min, = INT_C[t]
       return "UINT64_C(#{value})" if t == "u64"
@@ -396,8 +462,8 @@ module Egg
 
     def helper(name)
       @used[name] = true
-      @used["egg_panic"] = true unless name.start_with?("egg_print") || name == "egg_str_eq"
-      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str].include?(name)
+      @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
+      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -426,6 +492,7 @@ module Egg
         @need_cap[t] = true
         "egg_allocator"
       when *INT_C.keys then INT_C[t][0]
+      when *FLOAT_C.keys then FLOAT_C[t]
       else
         info = @types[t]
         return "#{c_type(info.inner)} *" if info&.kind == :ptr
@@ -932,6 +999,8 @@ module Egg
       case e
       in IntLit[value:]
         int_lit(value, e.ty)
+      in FloatLit[text:]
+        float_lit(text, e.ty)
       in BoolLit[value:]
         value ? "true" : "false"
       in StrLit[value:]
@@ -942,9 +1011,13 @@ module Egg
       in Var[name:]
         var_ref(name)
       in Unary[op:, operand:, info: { neg_lit: true }]
-        int_lit(-operand.value, e.ty)
+        # As a float, -0 keeps its sign: negate the literal, do not fold it.
+        FLOAT_C.key?(e.ty) ? "(-#{int_lit(operand.value, e.ty)})" : int_lit(-operand.value, e.ty)
       in Unary[op:, operand:]
-        op == "-" ? "#{int_op('neg', e.ty)}(#{expr(operand)})" : "(!#{expr(operand)})"
+        if op != "-" then "(!#{expr(operand)})"
+        elsif FLOAT_C.key?(e.ty) then "(-#{expr(operand)})"
+        else "#{int_op('neg', e.ty)}(#{expr(operand)})"
+        end
       in Binary[op:, lhs:, rhs:]
         binary(op, lhs, rhs)
       in Call[name:, info: { indirect: true } => info]
@@ -1043,6 +1116,7 @@ module Egg
       if ARITH_FN.key?(op)
         a = expr(lhs)
         b = expr(rhs)
+        return "(#{a} #{op} #{b})" if FLOAT_C.key?(lhs.ty)
         return "#{int_op(op, lhs.ty)}(#{a}, #{b})"
       end
       if op == "and" || op == "or"
@@ -1101,6 +1175,7 @@ module Egg
                when "i64" then "#{helper('egg_print_i64')}(#{codes[0]})"
                when "i8", "i16", "i32" then "#{helper('egg_print_i64')}((int64_t)#{codes[0]})"
                when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}((uint64_t)#{codes[0]})"
+               when "f32", "f64" then "#{helper('egg_print_float')}((double)#{codes[0]}, #{t == 'f32'})"
                else
                  @enum_names[t] = true
                  "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{codes[0]}])"
@@ -1144,6 +1219,7 @@ module Egg
                else
                  "#{helper('egg_uint_str')}((uint64_t)#{codes[0]})"
                end
+             when "Allocator.float_str" then "#{helper('egg_float_str')}((double)#{codes[0]}, #{args[0].ty == 'f32'})"
              else raise "codegen: unknown capability method #{m}"
              end
       text = "((void)#{recv}, #{text})"
@@ -1163,6 +1239,7 @@ module Egg
         x = args[1]
         code = expr(x)
         return code if x.ty == e.ty
+        return float_conv(x.ty, e.ty, code) if FLOAT_C.key?(x.ty) || FLOAT_C.key?(e.ty)
         as_conv(x.ty, e.ty, code)
       when "len"
         code = expr(a)

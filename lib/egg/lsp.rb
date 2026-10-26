@@ -281,7 +281,7 @@ module Egg
 
       def walk_expr(expr)
         case expr
-        in IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | StructTypeExpr | NullLit then nil
+        in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | StructTypeExpr | NullLit then nil
         in Var[name:, line:, col:]
           decl = @types[name]
           if !decl.nil? && lookup_local(name).nil?

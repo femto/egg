@@ -103,6 +103,7 @@ fn main(out: Io) void {
 | `i8` `i16` `i32` `i64` | signed integers of 8 to 64 bits | section 7 |
 | `u8` `u16` `u32` `u64` | unsigned integers of 8 to 64 bits | section 7 |
 | `usize` | unsigned, the size of a pointer | section 7 |
+| `f32` `f64` | IEEE 754 floating point, 32 and 64 bits | section 7 |
 | `bool` | `true`, `false` | |
 | `str` | immutable byte strings | section 8 |
 | `void` | none | only as a function result (E108 elsewhere) |
@@ -270,11 +271,12 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 | 1 | `e catch f` | `!T`, fallback `T` | `T` (section 13) |
 | 2 | `or` | bool | bool |
 | 3 | `and` | bool | bool |
-| 4 | `==` `!=` | both the same integer type, bool, str, enum, pointer or function type | bool |
-| 4 | `<` `<=` `>` `>=` | both the same integer type | bool |
-| 5 | `+` `-` | both the same integer type | that type |
-| 6 | `*` `/` `%` | both the same integer type | that type |
-| 7 | unary `-`, `!`, `try`, `&` | signed integer / bool / `!T` / place | |
+| 4 | `==` `!=` | both the same number type, bool, str, enum, pointer or function type | bool |
+| 4 | `<` `<=` `>` `>=` | both the same number type | bool |
+| 5 | `+` `-` | both the same number type | that type |
+| 6 | `*` `/` | both the same number type | that type |
+| 6 | `%` | both the same integer type | that type |
+| 7 | unary `-`, `!`, `try`, `&` | signed integer or float / bool / `!T` / place | |
 | 8 | `a.f`, `a.m(...)`, `a.*`, `a[i]`, `a[lo..hi]`, calls | | |
 
 - `and` / `or` short-circuit: the right side is evaluated only if needed.
@@ -310,6 +312,73 @@ fn main(out: Io) void {
 `@as(T, x)` converts the integer `x` to the integer type `T`, and panics
 `integer cast out of range` if the value does not fit. Negating an
 unsigned value is E103.
+
+### Floating-point types
+
+`f32` and `f64` are IEEE 754 single and double precision. A literal with
+a fraction or an exponent (`1.5`, `2e10`, `6.02e-23`) is a float: `f64`,
+or `f32` where the context wants one. An integer literal also becomes a
+float where one is expected, so `x * 2` with `x: f64` needs no `2.0`; a
+fraction never becomes an integer. A literal that does not fit its type
+(`1e400`, or `1e39` as an `f32`), or that is not zero but rounds to zero
+(`1e-400`), is E003.
+
+Float arithmetic follows IEEE 754 and never panics: `1.0 / 0.0` is `inf`,
+`0.0 / 0.0` is `nan`, and results round to the nearest value. That is
+defined behaviour, not overflow. There is no `%` on floats (declare C's
+`fmod`, section 20). `@as` converts between any two number types:
+to a float it rounds to the nearest value; from a float to an integer it
+truncates toward zero and panics `float cast out of range` if the result
+does not fit, or the value is `nan` or infinite.
+
+`out.print` and `a.float_str(x)` write the shortest decimal that reads
+back as the same value; a finite value always has a `.` or an exponent:
+`0.1`, `3.0`, `1e+16`, `1.5e-07`. The others are `nan`, `inf` and `-inf`.
+
+```egg
+// expect: 0.30000000000000004
+// expect: 3.5
+// expect: 1e+16
+// expect: 0.1
+// expect: inf
+// expect: -7
+uses io
+
+fn half(x: f64) f64 {
+    return x / 2
+}
+
+fn main(out: Io) void {
+    out.print(0.1 + 0.2)
+    out.print(half(7))
+    out.print(1e16)
+    const f: f32 = 0.1
+    out.print(f)
+    const zero = 0.0
+    out.print(1 / zero)
+    out.print(@as(i64, -7.9))
+}
+```
+
+```egg
+// panic: float cast out of range
+uses io
+
+fn main(out: Io) void {
+    const big = 1e10
+    out.print(@as(i32, big))
+}
+```
+
+```egg
+// error: E103
+uses io
+
+fn main(out: Io) void {
+    const n = 3
+    out.print(1.5 * n)       // i64 and f64: convert n with @as(f64, n)
+}
+```
 
 ### Integer arithmetic is checked
 
@@ -747,7 +816,7 @@ Builtins start with `@`; any other name is E112.
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
-| `@as(T, x)` | the integer x as integer type T; panics `integer cast out of range` if it does not fit (section 7) |
+| `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
 
 Builtins for pointers, which need `allow unsafe` (section 18):
 
@@ -828,8 +897,8 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `out.print(x)`: prints an integer, `bool`, `str` or enum and a newline to standard output |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
+| `io` | `Io` | `out.print(x)`: prints an integer, a float, `bool`, `str` or enum and a newline to standard output |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
@@ -1007,7 +1076,7 @@ extern fn write(fd: i32, buf: *u8, n: usize) i64 uses io
 ```
 
 declares a C function, called by its own name. It has no body. Its
-parameters and result are integers, `bool`, pointers or function types
+parameters and result are integers, floats, `bool`, pointers or function types
 (the result may be `void`), so the C types are exact; anything else, an
 `inout` parameter, a C keyword, `main` (the generated entry point), a
 name the C headers the generated code includes already declare
@@ -1184,7 +1253,7 @@ fn main(out: Io, a: Allocator) void {
 ## 22. Not yet
 
 Closures, optional types
-(`?*T`) and many-item pointers, floating point, reflection beyond
+(`?*T`) and many-item pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, and capabilities other
 than `io` and `alloc`. See the design document's roadmap for when each
 arrives.

@@ -71,6 +71,8 @@ module Egg
 
   # ---- expressions -------------------------------------------------------
   IntLit     = Struct.new(:value, :line, :col, :ty, :info)
+  # text: the literal as written, without underscores (1.5, 2e10)
+  FloatLit   = Struct.new(:text, :line, :col, :ty, :info)
   BoolLit    = Struct.new(:value, :line, :col, :ty, :info)
   StrLit     = Struct.new(:value, :line, :col, :ty, :info)
   Var        = Struct.new(:name, :line, :col, :ty, :info)
