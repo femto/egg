@@ -1,4 +1,4 @@
-# Benchmarks: the same programs in Egg, C, Rust, Go, Zig and Python.
+# Benchmarks: the same programs in Egg, C, Rust, Go, Zig, Python and Ruby.
 #
 # Each program is built with every toolchain found on PATH, run once to
 # warm up and then RUNS times, timed by wall clock; the table shows the fastest run of each, and how
@@ -17,6 +17,7 @@
 #
 #   python     python3 (CPython)
 #   pypy       pypy (a JIT)
+#   ruby       ruby (CRuby)
 #
 # Usage: ruby bench/run.rb [NAME...] [--runs N] [--slow]
 
@@ -51,6 +52,7 @@ VARIANTS = [
 INTERPRETERS = [
   ["python", "python3", "python", "py", ->(src) { ["python3", src] }],
   ["pypy", "pypy", "python", "py", ->(src) { ["pypy", src] }],
+  ["ruby", "ruby", "ruby", "rb", ->(src) { ["ruby", src] }],
 ].freeze
 
 def on_path?(tool)
