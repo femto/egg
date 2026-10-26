@@ -1,0 +1,25 @@
+// A heap buffer written and read by index: bounds checks in a tight loop.
+uses alloc, io
+
+fn count_primes(a: Allocator, n: i64) i64 {
+    var composite = a.alloc(n + 1, false)
+    defer a.free(composite)
+    var count = 0
+    var i = 2
+    while (i <= n) {
+        if (!composite[i]) {
+            count = count + 1
+            var j = i * i
+            while (j <= n) {
+                composite[j] = true
+                j = j + i
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn main(out: Io, a: Allocator) void {
+    out.print(count_primes(a, 50000000))
+}

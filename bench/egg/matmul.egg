@@ -1,0 +1,46 @@
+// Nested loops over flat buffers: checked multiply-add and indexing.
+uses alloc, io
+
+fn fill(inout m: Buf(i64), n: i64, seed: i64) void {
+    var i = 0
+    while (i < n * n) {
+        m[i] = (i * seed + 7) % 100
+        i = i + 1
+    }
+}
+
+fn multiply(a: Allocator, x: Buf(i64), y: Buf(i64), n: i64) Buf(i64) {
+    var z = a.alloc(n * n, 0)
+    var i = 0
+    while (i < n) {
+        var k = 0
+        while (k < n) {
+            const xik = x[i * n + k]
+            var j = 0
+            while (j < n) {
+                z[i * n + j] = z[i * n + j] + xik * y[k * n + j]
+                j = j + 1
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    a.free(x)
+    a.free(y)
+    return z
+}
+
+fn main(out: Io, a: Allocator) void {
+    const n = 800
+    var x = a.alloc(n * n, 0)
+    fill(&x, n, 3)
+    var y = a.alloc(n * n, 0)
+    fill(&y, n, 5)
+    const z = multiply(a, x, y, n)
+    var sum = 0
+    for (z) |v| {
+        sum = (sum + v) % 1000000007
+    }
+    a.free(z)
+    out.print(sum)
+}

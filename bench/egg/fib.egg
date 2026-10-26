@@ -1,0 +1,13 @@
+// Recursive calls and checked additions.
+uses io
+
+fn fib(n: i64) i64 {
+    if (n < 2) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main(out: Io) void {
+    out.print(fib(40))
+}
