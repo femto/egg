@@ -1,11 +1,12 @@
 # Benchmarks
 
-The same small programs in Egg, C, Rust, Go and Zig, to see what Egg's
+The same small programs in Egg, C, Rust, Go, Zig and Python, to see what Egg's
 checks cost and how the generated code compares.
 
 ```sh
 ruby bench/run.rb                # all programs, best of 5
 ruby bench/run.rb matmul --runs 10
+ruby bench/run.rb --slow         # also Python: takes about 3 minutes
 ```
 
 Toolchains that are not on PATH are skipped. Executables go to
@@ -27,6 +28,8 @@ the same output, or the run fails.
 | rust+ovf | bounds and overflow (`-C overflow-checks=on`) |
 | go | bounds; overflow wraps |
 | zig-safe | bounds and overflow (`-O ReleaseSafe`) |
+| python | CPython 3; only with `--slow`, 1 run |
+| pypy | PyPy, a JIT; only with `--slow`, 1 run |
 
 rust+ovf and zig-safe check what Egg checks, so they are the fair
 comparison.
@@ -34,14 +37,20 @@ comparison.
 ## Results
 
 2026-10-26, Intel i7-9700K, macOS 14, Apple clang 15, rustc 1.99.1,
-go 1.27.2, zig 0.17.0. Best of 10 runs; (Nx) is the time relative to c.
+go 1.27.2, zig 0.17.0, CPython 3.11.4, PyPy 7.3.17 (Python 2.7).
+`ruby bench/run.rb --slow --runs 10`: best of 10 runs for compiled
+programs, 1 run for interpreters; (Nx) is the time relative to c.
 
-| program | c | egg | rust | rust+ovf | go | zig-safe |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| collatz | 728 ms | 768 ms (1.05x) | 404 ms (0.56x) | 983 ms (1.35x) | 625 ms (0.86x) | 944 ms (1.30x) |
-| fib | 231 ms | 353 ms (1.53x) | 238 ms (1.03x) | 371 ms (1.61x) | 408 ms (1.77x) | 346 ms (1.50x) |
-| matmul | 266 ms | 623 ms (2.35x) | 335 ms (1.26x) | 272 ms (1.02x) | 315 ms (1.19x) | 277 ms (1.04x) |
-| sieve | 394 ms | 388 ms (0.98x) | 395 ms (1.00x) | 398 ms (1.01x) | 364 ms (0.92x) | 389 ms (0.99x) |
+| program | c | egg | rust | rust+ovf | go | zig-safe | python | pypy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| collatz | 716 ms | 754 ms (1.05x) | 402 ms (0.56x) | 984 ms (1.37x) | 604 ms (0.84x) | 937 ms (1.31x) | 38548 ms (54x) | 1353 ms (1.89x) |
+| fib | 229 ms | 350 ms (1.53x) | 237 ms (1.04x) | 369 ms (1.61x) | 406 ms (1.78x) | 343 ms (1.50x) | 20062 ms (88x) | 1995 ms (8.73x) |
+| matmul | 252 ms | 558 ms (2.22x) | 300 ms (1.19x) | 278 ms (1.10x) | 316 ms (1.26x) | 257 ms (1.02x) | 83300 ms (331x) | 1313 ms (5.22x) |
+| sieve | 367 ms | 391 ms (1.07x) | 362 ms (0.99x) | 374 ms (1.02x) | 366 ms (1.00x) | 373 ms (1.02x) | 8224 ms (22x) | 695 ms (1.89x) |
+
+Egg runs these programs **21 to 149 times faster than CPython** (sieve 21x,
+collatz 51x, fib 57x, matmul 149x), with every integer operation and index
+checked. Against PyPy, Egg is 1.8x (collatz, sieve) to 5.7x (fib) faster.
 
 Against the versions that check as much as Egg does (rust+ovf, zig-safe):
 
