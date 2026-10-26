@@ -60,7 +60,9 @@ def check_program(name, src, dir, path = nil, debug: false)
   end
   base = File.join(dir, name.gsub(/[^A-Za-z0-9_.-]/, "_"))
   File.write("#{base}.c", result.c_source)
-  flags = debug ? CFLAGS - ["-O2"] + ["-g", "-O0"] : CFLAGS
+  # The debug build also tests the portable overflow checks, which gcc
+  # and clang otherwise replace with their builtins.
+  flags = debug ? CFLAGS - ["-O2"] + ["-g", "-O0", "-DEGG_PORTABLE"] : CFLAGS
   _, cc_err, cc_status = Open3.capture3(CC, *flags, "-o", base, "#{base}.c")
   return report(false, name, "C compiler failed:\n#{cc_err}") unless cc_status.success?
   out, err, status = Open3.capture3(base)

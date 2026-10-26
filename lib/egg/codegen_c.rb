@@ -1,6 +1,8 @@
 # C code generator.
 #
-# Output is portable C99: no POSIX calls, no compiler extensions.
+# Output is portable C99: no POSIX calls, no compiler extensions except
+# gcc's and clang's overflow builtins, behind a check with a portable
+# fallback (EGG_BUILTIN_OVERFLOW below).
 # Integer arithmetic is checked (overflow and division by zero panic), and
 # so are array, slice and str indexing, because Egg does not allow
 # undefined behaviour to leak out of the core.
@@ -50,6 +52,20 @@ module Egg
       #include <stdlib.h>
       #include <string.h>
       #include <inttypes.h>
+
+      /* Compilers with __builtin_mul_overflow and friends (clang, gcc 5 and
+         later) check overflow with the CPU's flags; others, or -DEGG_PORTABLE,
+         get portable checks (slower: a multiply checks with a division).
+         gcc before 10 has the builtins but not __has_builtin. */
+      #if !defined(EGG_PORTABLE)
+      #if defined(__has_builtin)
+      #if __has_builtin(__builtin_mul_overflow)
+      #define EGG_BUILTIN_OVERFLOW 1
+      #endif
+      #elif defined(__GNUC__) && __GNUC__ >= 5
+      #define EGG_BUILTIN_OVERFLOW 1
+      #endif
+      #endif
     C
 
     STR_TYPEDEF = "typedef struct { const char *ptr; int64_t len; } egg_str;\n"
@@ -77,23 +93,41 @@ module Egg
       C
       "egg_add" => <<~C,
         static int64_t egg_add(int64_t a, int64_t b) {
+        #ifdef EGG_BUILTIN_OVERFLOW
+            int64_t r;
+            if (__builtin_add_overflow(a, b, &r)) egg_panic("integer overflow");
+            return r;
+        #else
             if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) egg_panic("integer overflow");
             return a + b;
+        #endif
         }
       C
       "egg_sub" => <<~C,
         static int64_t egg_sub(int64_t a, int64_t b) {
+        #ifdef EGG_BUILTIN_OVERFLOW
+            int64_t r;
+            if (__builtin_sub_overflow(a, b, &r)) egg_panic("integer overflow");
+            return r;
+        #else
             if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) egg_panic("integer overflow");
             return a - b;
+        #endif
         }
       C
       "egg_mul" => <<~C,
         static int64_t egg_mul(int64_t a, int64_t b) {
+        #ifdef EGG_BUILTIN_OVERFLOW
+            int64_t r;
+            if (__builtin_mul_overflow(a, b, &r)) egg_panic("integer overflow");
+            return r;
+        #else
             if (a == 0 || b == 0) return 0;
             if ((a == -1 && b == INT64_MIN) || (b == -1 && a == INT64_MIN)) egg_panic("integer overflow");
             int64_t r = (int64_t)((uint64_t)a * (uint64_t)b);
             if (r / b != a) egg_panic("integer overflow");
             return r;
+        #endif
         }
       C
       "egg_div" => <<~C,
@@ -305,10 +339,10 @@ module Egg
             "int64_t r = (int64_t)a #{op} (int64_t)b;\n    if (r < #{min} || r > #{max}) #{ovf};\n    return (#{ct})r;"
           elsif kind == "sub"
             "if (b > a) #{ovf};\n    return (#{ct})(a - b);"
-          elsif wide && kind == "add"
-            "if (a > #{max} - b) #{ovf};\n    return a + b;"
           elsif wide
-            "if (a != 0 && b > #{max} / a) #{ovf};\n    return a * b;"
+            portable = kind == "add" ? "if (a > #{max} - b) #{ovf};\n    return a + b;" : "if (a != 0 && b > #{max} / a) #{ovf};\n    return a * b;"
+            "#ifdef EGG_BUILTIN_OVERFLOW\n    #{ct} r;\n    if (__builtin_#{kind}_overflow(a, b, &r)) #{ovf};\n    return r;\n" \
+              "#else\n    #{portable}\n#endif"
           else
             "uint64_t r = (uint64_t)a #{op} (uint64_t)b;\n    if (r > #{max}) #{ovf};\n    return (#{ct})r;"
           end
