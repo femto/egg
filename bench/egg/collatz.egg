@@ -1,0 +1,32 @@
+// Division, remainder and multiplication: checked integer arithmetic.
+uses io
+
+fn steps(start: i64) i64 {
+    var n = start
+    var s = 0
+    while (n != 1) {
+        if (n % 2 == 0) {
+            n = n / 2
+        } else {
+            n = 3 * n + 1
+        }
+        s = s + 1
+    }
+    return s
+}
+
+fn main(out: Io) void {
+    var best = 0
+    var best_n = 0
+    var i = 1
+    while (i < 3000000) {
+        const s = steps(i)
+        if (s > best) {
+            best = s
+            best_n = i
+        }
+        i = i + 1
+    }
+    out.print(best_n)
+    out.print(best)
+}
