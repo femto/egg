@@ -53,11 +53,18 @@ module Egg
       #include <string.h>
       #include <inttypes.h>
 
-      /* gcc and clang check overflow with the CPU's flags; other compilers,
-         or -DEGG_PORTABLE, get portable checks (slower: a multiply checks
-         with a division). */
-      #if (defined(__GNUC__) || defined(__clang__)) && !defined(EGG_PORTABLE)
+      /* Compilers with __builtin_mul_overflow and friends (clang, gcc 5 and
+         later) check overflow with the CPU's flags; others, or -DEGG_PORTABLE,
+         get portable checks (slower: a multiply checks with a division).
+         gcc before 10 has the builtins but not __has_builtin. */
+      #if !defined(EGG_PORTABLE)
+      #if defined(__has_builtin)
+      #if __has_builtin(__builtin_mul_overflow)
       #define EGG_BUILTIN_OVERFLOW 1
+      #endif
+      #elif defined(__GNUC__) && __GNUC__ >= 5
+      #define EGG_BUILTIN_OVERFLOW 1
+      #endif
       #endif
     C
 
