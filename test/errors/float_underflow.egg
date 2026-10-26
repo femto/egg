@@ -1,0 +1,9 @@
+// A nonzero float literal that rounds to zero in its type.
+// error: E003 @6
+// error: E003 @7
+uses io
+fn main(out: Io) void {
+    out.print(1e-400)
+    const t: f32 = 1e-46
+    out.print(t)
+}

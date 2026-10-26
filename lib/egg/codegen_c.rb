@@ -1011,7 +1011,8 @@ module Egg
       in Var[name:]
         var_ref(name)
       in Unary[op:, operand:, info: { neg_lit: true }]
-        int_lit(-operand.value, e.ty)
+        # As a float, -0 keeps its sign: negate the literal, do not fold it.
+        FLOAT_C.key?(e.ty) ? "(-#{int_lit(operand.value, e.ty)})" : int_lit(-operand.value, e.ty)
       in Unary[op:, operand:]
         if op != "-" then "(!#{expr(operand)})"
         elsif FLOAT_C.key?(e.ty) then "(-#{expr(operand)})"

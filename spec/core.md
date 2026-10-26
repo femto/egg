@@ -320,7 +320,8 @@ a fraction or an exponent (`1.5`, `2e10`, `6.02e-23`) is a float: `f64`,
 or `f32` where the context wants one. An integer literal also becomes a
 float where one is expected, so `x * 2` with `x: f64` needs no `2.0`; a
 fraction never becomes an integer. A literal that does not fit its type
-(`1e400`, or `1e39` as an `f32`) is E003.
+(`1e400`, or `1e39` as an `f32`), or that is not zero but rounds to zero
+(`1e-400`), is E003.
 
 Float arithmetic follows IEEE 754 and never panics: `1.0 / 0.0` is `inf`,
 `0.0 / 0.0` is `nan`, and results round to the nearest value. That is
@@ -331,8 +332,8 @@ truncates toward zero and panics `float cast out of range` if the result
 does not fit, or the value is `nan` or infinite.
 
 `out.print` and `a.float_str(x)` write the shortest decimal that reads
-back as the same value, always with a `.` or an exponent: `0.1`, `3.0`,
-`1e+16`, `1.5e-07`, `nan`, `inf`, `-inf`.
+back as the same value; a finite value always has a `.` or an exponent:
+`0.1`, `3.0`, `1e+16`, `1.5e-07`. The others are `nan`, `inf` and `-inf`.
 
 ```egg
 // expect: 0.30000000000000004
@@ -896,7 +897,7 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `out.print(x)`: prints an integer, `bool`, `str` or enum and a newline to standard output |
+| `io` | `Io` | `out.print(x)`: prints an integer, a float, `bool`, `str` or enum and a newline to standard output |
 | `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them

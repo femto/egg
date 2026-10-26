@@ -60,8 +60,10 @@ module Egg
       "u64" => [0, 18_446_744_073_709_551_615], "usize" => [0, 18_446_744_073_709_551_615]
     }.freeze
     FLOAT_TYPES = %w[f32 f64].freeze
-    # The largest finite f32, for checking literals.
+    # The largest finite f32, and half its smallest subnormal (below it a
+    # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
+    F32_TINY = 7.006492321624085e-46
     PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc" }.freeze
     CAPABILITIES = %w[alloc io].freeze
@@ -1409,12 +1411,16 @@ module Egg
       e.is_a?(FloatLit) || (e.is_a?(Unary) && e.op == "-" && e.operand.is_a?(FloatLit))
     end
 
-    # A float literal of type t: it must be finite there (it is rounded
-    # to the nearest value of t).
+    # A float literal of type t: it must be finite there, and not round
+    # to zero unless it is zero (it is rounded to the nearest value of t).
     def float_lit(text, t, line, col)
       v = text.to_f
       if v.infinite? || (t == "f32" && v.abs > F32_MAX)
         err("E003", "float literal #{text} does not fit in #{t}", line, col)
+        return "error"
+      end
+      if text.split(/[eE]/)[0].match?(/[1-9]/) && (v.zero? || (t == "f32" && v.abs < F32_TINY))
+        err("E003", "float literal #{text} is too small for #{t}: it rounds to zero", line, col)
         return "error"
       end
       t
