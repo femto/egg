@@ -106,12 +106,15 @@ v2:
 - Capabilities: a file declares `uses alloc, io`; `main` receives the
   capability values (`fn main(out: Io, a: Allocator)`) and passes them
   down; `out.print(x)` replaces `@print`; `a.concat(s, t)` and
-  `a.int_str(n)` build strings in a program-lifetime arena
+  `a.int_str(n)`, `a.float_str(x)` build strings in a program-lifetime arena
 - **Capability check** (E130): following the call graph across files and
   generic instances, a function that uses a capability its file does not
   declare is rejected; hover in the editor shows what each function uses
 - Integer types `i8`…`i64`, `u8`…`u64`, `usize`, all overflow-checked;
   literals take their type from context; `@as(T, x)` converts (checked)
+- Floats `f32`, `f64` (IEEE 754: `1.0 / 0.0` is `inf`, no panic);
+  `@as` to an integer panics if it does not fit; printed as the shortest
+  decimal that reads back the same
 - Raw pointers `*T`, `null`, `a.create(v)`; holding, passing and
   comparing them is safe, but pointer operations (taking an address with
   `&x` outside an `inout` argument, `p.*`, `@ptrAdd`, `@ptrCast`, ...) need

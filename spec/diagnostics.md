@@ -13,7 +13,7 @@ program imports:
 |------|-------|---------|-------------|
 | E001 | lexer | unexpected character | remove it |
 | E002 | parser | syntax error (also: chained comparison `a < b < c`) | follow spec/grammar.ebnf |
-| E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum) | use a smaller literal or a wider type |
+| E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum), or a float literal is infinite in its type (`1e400`, `1e39` as `f32`) | use a smaller literal or a wider type |
 | E101 | checker | undefined variable | declare it with `const` or `var` |
 | E102 | checker | undefined function, or calling a variable | define the function |
 | E103 | checker | type mismatch (also: comparing structs, arrays or unions; an array where a slice is expected; two integer types in one operation; negating an unsigned value; a generic or inout function used as a value) | make both sides the same type with `@as`; no implicit conversions |
@@ -45,7 +45,7 @@ program imports:
 | E129 | loader, checker | an import that is not `const m = @import("file.egg")` at the top level, a file that cannot be found, or a module used as a value | import an existing `.egg` file, relative to the importing one; name something in it: `m.f(...)` |
 | E130 | capabilities | a function uses a capability (directly, or through a call) that its file does not declare | add `uses io` / `uses alloc` to that file, or move the code to a file that declares it |
 | E131 | checker | a pointer operation (`p.*`, `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`), an `extern fn` or a `link` in a file without `allow unsafe`; or `allow` with anything but `unsafe`. (`&x` outside an inout argument in such a file stays E121.) | add `allow unsafe` at the top of the file, or keep the unsafe operation in a module that has it |
-| E132 | checker | an invalid `extern fn`: a name that is a C keyword, `main`, declared by the C headers the generated code includes (functions, macros, types), reserved in C (`_X`, `__x`), or starts with a generated prefix; a parameter that is not an integer, bool, pointer or function type, or a result that is none of those and not `void`; an `inout` parameter; or two declarations of one C function with different types | rename it, pass pointers instead of str, structs or slices |
+| E132 | checker | an invalid `extern fn`: a name that is a C keyword, `main`, declared by the C headers the generated code includes (functions, macros, types), reserved in C (`_X`, `__x`), or starts with a generated prefix; a parameter that is not an integer, float, bool, pointer or function type, or a result that is none of those and not `void`; an `inout` parameter; or two declarations of one C function with different types | rename it, pass pointers instead of str, structs or slices |
 | E133 | checker | a `Buf(T)` somewhere other than a local, a parameter or a result: a struct or union field, an array, slice or `Buf` element, a pointer's target; a `!Buf(T)` local or parameter; or borrowing from a temporary buffer (`@len(make(a))`) | keep buffers in local variables and pass them by value or as `inout`; unwrap `!Buf(T)` with `try`/`catch`; store a temporary in a variable |
 | E134 | ownership | paths that join disagree on whether a buffer was moved (after `if`, `switch`, `catch`, `and`/`or`), or a loop iteration (or a `break`/`continue`, or a loop condition) changes whether a buffer from outside the loop is owned | move or free it on every path, or on none; free and reassign it within the same iteration |
 | E135 | ownership | a buffer still owned where its owner goes away (end of its block, `return`, `break`/`continue`, a `try` that returns an error), a variable that owns one assigned another, or an `inout` buffer parameter that does not own one when the function returns | `a.free(b)`, return it or pass it on; `defer a.free(b)` / `errdefer a.free(b)` right after making it |
@@ -62,6 +62,7 @@ Runtime panics (the program aborts with `egg panic: <message>`):
 | index out of bounds | `a[i]` with `i < 0` or `i >= @len(a)` |
 | slice out of bounds | `a[lo..hi]` unless `0 <= lo <= hi <= @len(a)` |
 | integer cast out of range | `@as(T, x)` where x does not fit T |
+| float cast out of range | `@as(T, x)` from a float to an integer type T, where x truncated does not fit T, or x is nan or infinite |
 | null pointer dereference | `p.*` where p is `null` |
 | negative buffer length | `a.alloc(n, v)` or `a.resize(&b, n, v)` with `n < 0` |
 | out of memory | an `Allocator` could not get memory from the system, a concatenated string's length does not fit in i64, or a buffer's size in bytes does not fit in `usize` |

@@ -73,7 +73,7 @@ postfix     = primary , { "." , IDENT , [ args ]            (* field, method cal
                         | "[" , nl , expr , nl , ".." , nl , [ expr , nl ] , "]"    (* slice *)
                         | struct_lit } ;                    (* after a capitalised type: Point, m.Point, Pair(i64) *)
 struct_lit  = "{" , { NL } , { "." , IDENT , "=" , expr , [ "," ] , { NL } } , "}" ;
-primary     = INT | STRING | "true" | "false" | "null"
+primary     = INT | FLOAT | STRING | "true" | "false" | "null"
             | "*" , type | fn_type                  (* a type as a value: @ptrCast( *u8, p) *)
             | IDENT , [ args ]                      (* variable, call, type name *)
             | BUILTIN , args                        (* @len(...) ... *)
@@ -90,6 +90,8 @@ args        = "(" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ]
 (* Lexical *)
 IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)
 INT         = digit , { digit | "_" } ;            (* at most u64's maximum; must fit its type *)
+FLOAT       = INT , ( "." , INT , [ exponent ] | exponent ) ;  (* f64, or f32 from context *)
+exponent    = ( "e" | "E" ) , [ "+" | "-" ] , INT ;
 STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \t \\ \" \0 *)
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;

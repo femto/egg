@@ -1,0 +1,55 @@
+// f32 and f64: literals from context, IEEE arithmetic, checked casts to
+// integers, and the shortest round-trip printing.
+// expect: 0.30000000000000004
+// expect: 0.3
+// expect: 100.0
+// expect: 1234567.0
+// expect: 1e+16
+// expect: 0.0001
+// expect: 1e-05
+// expect: -0.0
+// expect: nan
+// expect: -inf
+// expect: 16777216.0
+// expect: 255
+// expect: -128
+// expect: 9223372036854774784
+// expect: 18446744073709549568
+// expect: true
+// expect: false
+// expect: 2.5 of 10.0
+uses io, alloc
+
+const Point = struct {
+    x: f64
+    y: f64
+
+    fn dot(self: Point, o: Point) f64 {
+        return self.x * o.x + self.y * o.y
+    }
+}
+
+fn main(out: Io, a: Allocator) void {
+    out.print(0.1 + 0.2)
+    const t: f32 = 0.1
+    out.print(t + 0.2)
+    out.print(100.0)
+    out.print(1_234_567.0)
+    out.print(1e16)
+    out.print(0.0001)
+    out.print(0.00001)
+    out.print(-0.0)
+    const zero = 0.0
+    out.print(zero / zero)
+    out.print(-1 / zero)
+    const big: f32 = 16777217        // rounds: f32 has 24 bits of mantissa
+    out.print(big)
+    out.print(@as(u8, 255.9))
+    out.print(@as(i8, -128.9))
+    out.print(@as(i64, 9223372036854774784.0))
+    out.print(@as(u64, 18446744073709549568.0))
+    const p = Point{ .x = 1.5, .y = 2 }
+    out.print(p.dot(p) == 6.25)
+    out.print(zero / zero == zero / zero)
+    out.print(a.concat(a.float_str(2.5), a.concat(" of ", a.float_str(@as(f64, 10)))))
+}

@@ -50,13 +50,36 @@ module Egg
 
     private
 
+    # 42, or a float: 1.5, 2e10, 6.02e-23 (a '.' must have a digit on
+    # both sides, so 0..n stays a range).
     def lex_number
       line = @line
       col = @col
       start = @pos
-      advance while @pos < @src.length && (digit?(@src[@pos]) || @src[@pos] == "_")
+      kind = :int
+      lex_digits
+      if @src[@pos] == "." && digit_at?(@pos + 1)
+        kind = :float
+        advance
+        lex_digits
+      end
+      if (@src[@pos] == "e" || @src[@pos] == "E") &&
+         (digit_at?(@pos + 1) || ((@src[@pos + 1] == "+" || @src[@pos + 1] == "-") && digit_at?(@pos + 2)))
+        kind = :float
+        advance
+        advance unless digit?(@src[@pos])
+        lex_digits
+      end
       text = @src[start...@pos].delete("_")
-      @tokens << Token.new(:int, text, line, col)
+      @tokens << Token.new(kind, text, line, col)
+    end
+
+    def lex_digits
+      advance while @pos < @src.length && (digit?(@src[@pos]) || @src[@pos] == "_")
+    end
+
+    def digit_at?(i)
+      i < @src.length && digit?(@src[i])
     end
 
     # "..." on one line, with escapes \n \t \\ \" \0.

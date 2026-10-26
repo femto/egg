@@ -59,15 +59,19 @@ module Egg
       "u8" => [0, 255], "u16" => [0, 65_535], "u32" => [0, 4_294_967_295],
       "u64" => [0, 18_446_744_073_709_551_615], "usize" => [0, 18_446_744_073_709_551_615]
     }.freeze
-    PRIMS = (INT_TYPES + %w[bool str void Io Allocator]).freeze
+    FLOAT_TYPES = %w[f32 f64].freeze
+    # The largest finite f32, for checking literals.
+    F32_MAX = 3.4028234663852886e38
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc" }.freeze
     CAPABILITIES = %w[alloc io].freeze
     # Methods of capability values: name -> [parameter types, result]
-    # ("printable" accepts integers, bool, str and enums; "integer" any
-    # integer type).
+    # ("printable" accepts numbers, bool, str and enums; "integer" any
+    # integer type, "float" f32 or f64).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
       "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["integer"], "str"],
+                       "float_str" => [["float"], "str"],
                        "create" => [["value"], "pointer to the value"],
                        "alloc" => [%w[i64 element], "Buf(T)"], "free" => [["buffer"], "void"],
                        "resize" => [%w[inout_buffer i64 element], "void"] }
@@ -225,7 +229,7 @@ module Egg
       bad = sig.params.map(&:first).find { |t| t != "error" && !c_scalar?(t) }
       bad ||= sig.ret unless sig.ret == "void" || sig.ret == "error" || c_scalar?(sig.ret)
       unless bad.nil?
-        err("E132", "an extern fn passes only integers, bool, pointers and function values (and may return void), not #{bad}", f.line, f.col)
+        err("E132", "an extern fn passes only integers, floats, bool, pointers and function values (and may return void), not #{bad}", f.line, f.col)
         return
       end
       f.ext.each do |u|
@@ -249,7 +253,7 @@ module Egg
 
     # A type that crosses into C as itself.
     def c_scalar?(t)
-      int?(t) || t == "bool" || %i[ptr fn].include?(@types[t]&.kind)
+      num?(t) || t == "bool" || %i[ptr fn].include?(@types[t]&.kind)
     end
 
     # `uses alloc, io`: known capabilities, each named once.
@@ -1039,7 +1043,11 @@ module Egg
     def infer(e, expected)
       case e
       in IntLit[value:, line:, col:]
-        int_lit(value, int_target(expected), line, col)
+        t = num_target(expected)
+        float?(t) ? t : int_lit(value, t, line, col)
+      in FloatLit[text:, line:, col:]
+        t = num_target(expected)
+        float_lit(text, float?(t) ? t : "f64", line, col)
       in BoolLit then "bool"
       in StrLit then "str"
       in Var[name:, line:, col:]
@@ -1077,7 +1085,13 @@ module Egg
       in Unary[op:, operand:, line:, col:]
         if op == "-" && operand.is_a?(IntLit)
           # -128 as one literal, so it fits i8.
-          t = int_target(expected) || "i64"
+          t = num_target(expected) || "i64"
+          if float?(t)
+            operand.info = {}
+            operand.ty = t
+            e.info[:neg_lit] = true
+            return t
+          end
           if !signed?(t)
             err("E103", "cannot negate a #{t}: it is unsigned", line, col)
             return "error"
@@ -1087,10 +1101,10 @@ module Egg
           e.info[:neg_lit] = true
           return operand.ty
         end
-        t = check_expr(operand, op == "-" ? int_target(expected) : nil)
+        t = check_expr(operand, op == "-" ? num_target(expected) : nil)
         if op == "-"
-          if t != "error" && !signed?(t)
-            err("E103", int?(t) ? "cannot negate a #{t}: it is unsigned" : "expected a signed integer, found #{t}", line, col)
+          if t != "error" && !signed?(t) && !float?(t)
+            err("E103", int?(t) ? "cannot negate a #{t}: it is unsigned" : "expected a signed integer or a float, found #{t}", line, col)
             return "error"
           end
           t
@@ -1309,23 +1323,35 @@ module Egg
     def check_binary(op, lhs, rhs, line, col, expected = nil)
       arith = ARITH_OPS.include?(op)
       typed_by_other = (op == "==" || op == "!=" || arith || ORDER_OPS.include?(op))
-      hint = arith ? int_target(expected) : nil
-      if typed_by_other && untyped_lit?(lhs) && !untyped_lit?(rhs)
+      hint = arith ? num_target(expected) : nil
+      # The typed side goes first and types the literal; of two literals,
+      # a float one does (2 * 1.5 is f64).
+      if typed_by_other && untyped_lit?(lhs) && (!untyped_lit?(rhs) || (float_lit?(rhs) && !float_lit?(lhs)))
         rt = check_expr(rhs, hint)
         lt = check_expr(lhs, rt)
       else
         lt = check_expr(lhs, hint)
         rt = check_expr(rhs, typed_by_other ? lt : nil)
       end
-      if arith || ORDER_OPS.include?(op)
+      if op == "%"
+        # No float remainder: C's fmod (libm) is one extern fn away.
         if lt != "error" && !int?(lt)
-          err("E103", "'#{op}' needs integers, found #{lt}", lhs.line, lhs.col)
+          err("E103", "'%' needs integers, found #{lt}#{float?(lt) ? ' (for floats, declare fmod from libm)' : ''}", lhs.line, lhs.col)
         elsif rt != "error" && !int?(rt)
-          err("E103", "'#{op}' needs integers, found #{rt}", rhs.line, rhs.col)
+          err("E103", "'%' needs integers, found #{rt}#{float?(rt) ? ' (for floats, declare fmod from libm)' : ''}", rhs.line, rhs.col)
+        elsif lt != "error" && rt != "error" && lt != rt
+          err("E103", "'%' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
+        end
+        return int?(lt) ? lt : "error"
+      elsif arith || ORDER_OPS.include?(op)
+        if lt != "error" && !num?(lt)
+          err("E103", "'#{op}' needs numbers, found #{lt}", lhs.line, lhs.col)
+        elsif rt != "error" && !num?(rt)
+          err("E103", "'#{op}' needs numbers, found #{rt}", rhs.line, rhs.col)
         elsif lt != "error" && rt != "error" && lt != rt
           err("E103", "'#{op}' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
         end
-        return arith ? (int?(lt) ? lt : "error") : "bool"
+        return arith ? (num?(lt) ? lt : "error") : "bool"
       elsif op == "==" || op == "!="
         if lt != "error" && rt != "error"
           if lt != rt
@@ -1345,30 +1371,53 @@ module Egg
     end
 
     def comparable?(t)
-      %w[bool str].include?(t) || int?(t) || [:enum, :ptr, :fn].include?(@types[t]&.kind)
+      %w[bool str].include?(t) || num?(t) || [:enum, :ptr, :fn].include?(@types[t]&.kind)
     end
 
     def int?(t)
       INT_TYPES.include?(t)
     end
 
+    def float?(t)
+      FLOAT_TYPES.include?(t)
+    end
+
+    def num?(t)
+      int?(t) || float?(t)
+    end
+
     def signed?(t)
       int?(t) && t.start_with?("i")
     end
 
-    # The integer type a literal should take where `expected` is wanted
+    # The number type a literal should take where `expected` is wanted
     # (T, or the T of !T), or nil.
-    def int_target(expected)
+    def num_target(expected)
       return nil if expected.nil?
-      return expected if int?(expected)
+      return expected if num?(expected)
       info = @types[expected]
-      info&.kind == :err && int?(info.inner) ? info.inner : nil
+      info&.kind == :err && num?(info.inner) ? info.inner : nil
     end
 
-    # A literal whose type comes from context: 5, -5, .red, null.
+    # A literal whose type comes from context: 5, -5, 1.5, .red, null.
     def untyped_lit?(e)
-      e.is_a?(IntLit) || e.is_a?(EnumLit) || e.is_a?(NullLit) ||
-        (e.is_a?(Unary) && e.op == "-" && e.operand.is_a?(IntLit))
+      e.is_a?(IntLit) || e.is_a?(FloatLit) || e.is_a?(EnumLit) || e.is_a?(NullLit) ||
+        (e.is_a?(Unary) && e.op == "-" && (e.operand.is_a?(IntLit) || e.operand.is_a?(FloatLit)))
+    end
+
+    def float_lit?(e)
+      e.is_a?(FloatLit) || (e.is_a?(Unary) && e.op == "-" && e.operand.is_a?(FloatLit))
+    end
+
+    # A float literal of type t: it must be finite there (it is rounded
+    # to the nearest value of t).
+    def float_lit(text, t, line, col)
+      v = text.to_f
+      if v.infinite? || (t == "f32" && v.abs > F32_MAX)
+        err("E003", "float literal #{text} does not fit in #{t}", line, col)
+        return "error"
+      end
+      t
     end
 
     def int_lit(value, t, line, col)
@@ -1382,7 +1431,7 @@ module Egg
     end
 
     def printable?(t)
-      %w[bool str].include?(t) || int?(t) || @types[t]&.kind == :enum
+      %w[bool str].include?(t) || num?(t) || @types[t]&.kind == :enum
     end
 
     # ---- calls --------------------------------------------------------
@@ -1633,11 +1682,14 @@ module Egg
           if at == "void"
             err("E103", "'#{name}' cannot print a void value", a.line, a.col)
           elsif at != "error" && !printable?(at)
-            err("E103", "'#{name}' prints integers, bool, str and enums, not #{at}", a.line, a.col)
+            err("E103", "'#{name}' prints numbers, bool, str and enums, not #{at}", a.line, a.col)
           end
         elsif pt == "integer"
           at = check_expr(a)
           err("E103", "'#{name}' needs an integer, found #{at}", a.line, a.col) unless at == "error" || int?(at)
+        elsif pt == "float"
+          at = check_expr(a)
+          err("E103", "'#{name}' needs a float, found #{at}", a.line, a.col) unless at == "error" || float?(at)
         elsif pt == "value"
           # a.create(v): a copy of v in the arena; returns *T
           at = check_expr(a)
@@ -1769,7 +1821,7 @@ module Egg
     def mentions?(e, name)
       case e
       in Var[name: n] then n == name
-      in IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr then false
+      in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr then false
       in Unary[operand:] then mentions?(operand, name)
       in Binary[lhs:, rhs:] then mentions?(lhs, name) || mentions?(rhs, name)
       in Call[args:] then args.any? { |a| mentions?(a, name) }
@@ -1792,7 +1844,7 @@ module Egg
     def contains_try?(e)
       case e
       in Try then true
-      in Var | IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit then false
+      in Var | IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit then false
       in Unary[operand:] then contains_try?(operand)
       in Binary[lhs:, rhs:] then contains_try?(lhs) || contains_try?(rhs)
       in Call[args:] then args.any? { |a| contains_try?(a) }
@@ -1958,18 +2010,19 @@ module Egg
         end
         t
       when "as"
-        # @as(T, x): x converted to the integer type T; panics at run time
-        # if the value does not fit (a literal is checked now).
+        # @as(T, x): the number x converted to the number type T; panics at
+        # run time if the value does not fit an integer T (a literal is
+        # checked now). Floats round to the nearest value.
         t = type_arg(a)
         x = args[1]
-        if t != "error" && !int?(t)
-          err("E103", "@as converts between integer types, not to #{t}", line, col)
+        if t != "error" && !num?(t)
+          err("E103", "@as converts between number types, not to #{t}", line, col)
           check_expr(x)
           return "error"
         end
         xt = check_expr(x, t == "error" ? nil : t)
-        if xt != "error" && !int?(xt)
-          err("E103", "@as converts an integer, found #{xt}", x.line, x.col)
+        if xt != "error" && !num?(xt)
+          err("E103", "@as converts a number, found #{xt}", x.line, x.col)
           return "error"
         end
         t

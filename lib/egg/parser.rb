@@ -614,6 +614,9 @@ module Egg
           raise CompileError.new(Diagnostic.new("E003", "integer literal #{t.text} does not fit in any integer type (the largest is u64)", t.line, t.col))
         end
         IntLit.new(t.text.to_i, t.line, t.col)
+      elsif at?(:float)
+        advance
+        FloatLit.new(t.text, t.line, t.col)
       elsif kw?("true") || kw?("false")
         advance
         BoolLit.new(t.text == "true", t.line, t.col)

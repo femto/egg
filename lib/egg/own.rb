@@ -322,7 +322,7 @@ module Egg
       case e
       in Var[name:, line:, col:]
         use(name, line, col, borrow) if @decl.key?(name) && owned?(e.ty)
-      in IntLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit | StructTypeExpr then nil
+      in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit | StructTypeExpr then nil
       in Unary[operand:] then walk(operand)
       in Binary[op:, lhs:, rhs:, line:, col:]
         walk(lhs)

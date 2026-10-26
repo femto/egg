@@ -111,7 +111,7 @@
         { "name": "constant.numeric.hex.egg", "match": "\\b0x[0-9A-Fa-f][0-9A-Fa-f_]*\\b" },
         { "name": "constant.numeric.binary.egg", "match": "\\b0b[01][01_]*\\b" },
         { "name": "constant.numeric.octal.egg", "match": "\\b0o[0-7][0-7_]*\\b" },
-        { "name": "constant.numeric.float.egg", "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?\\b" },
+        { "name": "constant.numeric.float.egg", "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?|[eE][+-]?[0-9][0-9_]*)\\b" },
         { "name": "constant.numeric.integer.egg", "match": "\\b[0-9][0-9_]*\\b" }
       ]
     },
