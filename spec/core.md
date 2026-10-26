@@ -898,7 +898,7 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `out.print(x)`: prints an integer, a float, `bool`, `str` or enum and a newline to standard output |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
@@ -1101,6 +1101,34 @@ extern fn toupper(c: i32) i32
 
 fn main(out: Io) void {
     out.print(toupper(97))
+}
+```
+
+C strings end in a 0 byte; a `str` has a length instead and no 0. Two
+`Allocator` methods convert, copying into the program-lifetime arena:
+`a.cstr(s) *u8` is s followed by a 0 (C sees s up to its first 0 byte),
+and `a.str_from_c(p) str` is the bytes at p up to the first 0. Making a
+pointer is safe, but `a.str_from_c` reads through one, so it needs
+`allow unsafe` (E131); on `null` it panics `null pointer dereference`.
+Where a C function takes a pointer and a length, `@strPtr(s)` and
+`@len(s)` pass a `str` without copying.
+
+```egg
+// expect: HELLO
+uses io, alloc
+allow unsafe
+
+extern fn toupper(c: i32) i32
+
+fn main(out: Io, a: Allocator) void {
+    const p = a.cstr("hello")
+    var i = 0
+    while (@ptrAdd(p, i).* != 0) {
+        const c = @ptrAdd(p, i)
+        c.* = @as(u8, toupper(@as(i32, c.*)))
+        i = i + 1
+    }
+    out.print(a.str_from_c(p))
 }
 ```
 

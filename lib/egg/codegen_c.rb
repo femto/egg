@@ -80,7 +80,7 @@ module Egg
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
-                      egg_fmt_float egg_print_float egg_float_str egg_buf_resize].freeze
+                      egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -256,6 +256,26 @@ module Egg
             return (egg_str){ p, n };
         }
       C
+      # s for C: its bytes and a 0 (C reads up to the first 0 byte).
+      "egg_cstr" => <<~C,
+        static uint8_t *egg_cstr(egg_str s) {
+            if (s.len == INT64_MAX) egg_panic("out of memory");
+            char *p = egg_alloc(s.len + 1);
+            if (s.len > 0) memcpy(p, s.ptr, (size_t)s.len);
+            p[s.len] = 0;
+            return (uint8_t *)p;
+        }
+      C
+      # The 0-terminated bytes at p, copied into a str.
+      "egg_str_from_c" => <<~C,
+        static egg_str egg_str_from_c(const uint8_t *p) {
+            if (p == NULL) egg_panic("null pointer dereference");
+            int64_t n = (int64_t)strlen((const char *)p);
+            char *q = egg_alloc(n);
+            if (n > 0) memcpy(q, p, (size_t)n);
+            return (egg_str){ q, n };
+        }
+      C
       # p (NULL for a new buffer) resized to n elements of size bytes.
       "egg_buf_resize" => <<~C
         static void *egg_buf_resize(void *p, int64_t n, size_t size) {
@@ -270,7 +290,8 @@ module Egg
 
     # Helpers that call others.
     HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"], "egg_uint_str" => ["egg_alloc"],
-                    "egg_print_float" => ["egg_fmt_float"], "egg_float_str" => %w[egg_alloc egg_fmt_float] }.freeze
+                    "egg_print_float" => ["egg_fmt_float"], "egg_float_str" => %w[egg_alloc egg_fmt_float],
+                    "egg_cstr" => ["egg_alloc"], "egg_str_from_c" => ["egg_alloc"] }.freeze
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_fmt_float].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -463,7 +484,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str].include?(name)
+      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -1219,6 +1240,8 @@ module Egg
                else
                  "#{helper('egg_uint_str')}((uint64_t)#{codes[0]})"
                end
+             when "Allocator.cstr" then "#{helper('egg_cstr')}(#{codes[0]})"
+             when "Allocator.str_from_c" then "#{helper('egg_str_from_c')}(#{codes[0]})"
              when "Allocator.float_str" then "#{helper('egg_float_str')}((double)#{codes[0]}, #{args[0].ty == 'f32'})"
              else raise "codegen: unknown capability method #{m}"
              end

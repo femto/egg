@@ -13,6 +13,9 @@
 # spec/core.md      -- every ```egg block is a test of one of the kinds above
 #                      ("// error: CODE" there needs no line), so the spec
 #                      cannot drift from the compiler.
+# examples/ffi/*/   -- programs (files with "// expect:") calling C
+#                      libraries; skipped when a library they link is not
+#                      installed.
 # test/link/        -- `link` and eggc's -l/-L against a C library built
 #                      here (linktest.c).
 # eggc lsp          -- the language server answers definition, hover,
@@ -44,8 +47,10 @@ def report(ok, name, detail = nil)
   end
 end
 
+# The text after "// key: "; only the one space after the colon goes, so
+# "// expect:   x" expects "  x".
 def comment_values(src, key)
-  src.lines.filter_map { |l| l[%r{^\s*//\s*#{key}:\s*(.*)$}, 1]&.strip }
+  src.lines.filter_map { |l| l[%r{^\s*//\s*#{key}: ?(.*)$}, 1]&.rstrip }
 end
 
 # Compile, build and run a program; check its output or panic.
@@ -443,6 +448,14 @@ def check_lsp
   report(status.success? && err.empty?, "lsp shutdown and exit", "status #{status.exitstatus}, stderr: #{err}")
 end
 
+# Can the C compiler link library `lib`?
+def have_lib?(lib, dir)
+  c = File.join(dir, "have_lib.c")
+  File.write(c, "int main(void) { return 0; }\n")
+  _, _, st = Open3.capture3(CC, "-o", File.join(dir, "have_lib"), c, "-l#{lib}")
+  st.success?
+end
+
 # Build test/link/linktest.c into dir/liblinktest.a, then link it through
 # `link` in an imported module, and through eggc's -l and -L.
 def check_link(dir)
@@ -471,6 +484,21 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
     check_program(File.basename(path), File.read(path), dir, path)
     check_program("#{File.basename(path)} -g", File.read(path), dir, path, debug: true)
+  end
+
+  puts "examples/ffi"
+  Dir[File.join(ROOT, "examples", "ffi", "*", "*.egg")].sort.each do |path|
+    src = File.read(path)
+    next if comment_values(src, "expect").empty? # a module, not a program
+    name = path.delete_prefix("#{ROOT}/examples/")
+    links = Egg.compile_to_c(src, path).links || []
+    missing = links.reject { |l| have_lib?(l, dir) }
+    unless missing.empty?
+      puts "  skip  #{name} (no #{missing.map { |l| "lib#{l}" }.join(', ')})"
+      next
+    end
+    check_program(name, src, dir, path)
+    check_program("#{name} -g", src, dir, path, debug: true)
   end
 
   puts "errors"
