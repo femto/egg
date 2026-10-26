@@ -18,8 +18,8 @@ module Egg
   # file: path shown in diagnostics (nil for the root); uses: UsesItem list;
   # aliases: import name -> prefix of the module it names;
   # names: top-level names declared in the module (unqualified);
-  # allows: UsesItem list from `allow unsafe`
-  ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows)
+  # allows: UsesItem list from `allow unsafe`; links: from `link "name"`
+  ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows, :links)
 
   # The global name of `name` declared in module `mod`.
   def self.qualify(mod, name)
@@ -54,7 +54,7 @@ module Egg
           mod.aliases[imp.name] = target.prefix
         end
       end
-      Program.new(@funcs, @types, root.uses, root.imports, @modules, root.allows)
+      Program.new(@funcs, @types, root.uses, root.imports, @modules, root.allows, root.links)
     end
 
     private
@@ -89,7 +89,7 @@ module Egg
 
     def add_module(prefix, path, file, prog)
       names = prog.funcs.map(&:name) + prog.types.map(&:name)
-      mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports, prog.allows || [])
+      mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports, prog.allows || [], prog.links || [])
       @modules[prefix] = mod
       @by_path[path] = mod unless path.nil?
       prog.types.each do |d|

@@ -1,0 +1,9 @@
+// link "linktest" in an imported module: built with -L only.
+// expect: 42
+uses io
+
+const lt = @import("lib/lt.egg")
+
+fn main(out: Io) void {
+    out.print(lt.mix(4, 2))
+}

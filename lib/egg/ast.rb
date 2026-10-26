@@ -15,8 +15,9 @@ module Egg
   # types: TypeDecl for `const Name = struct/enum { ... }`
   # uses: UsesItem list from `uses alloc, io`; imports: ImportDecl list
   # allows: UsesItem list from `allow unsafe`
+  # links: UsesItem list from `link "name"` (name: the C library)
   # modules: filled by the Loader for the merged program (prefix -> ModuleInfo)
-  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules, :allows)
+  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules, :allows, :links)
   # owner: the struct a method belongs to (nil for free functions)
   # mod: prefix of the module it is declared in ("" for the root file)
   # ext: for `extern fn` (no body), the UsesItem list after `uses`; else nil

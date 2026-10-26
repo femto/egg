@@ -1,0 +1,9 @@
+// The library is named here, so a program that imports this module links it.
+allow unsafe
+link "linktest"
+
+extern fn lt_mix(a: i64, b: i64) i64
+
+fn mix(a: i64, b: i64) i64 {
+    return lt_mix(a, b)
+}

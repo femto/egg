@@ -50,6 +50,7 @@ bin/eggc emit-c examples/fib.egg     # show the generated C
 bin/eggc build examples/fib.egg -o fib
 bin/eggc check file.egg --json       # diagnostics as JSON lines
 bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
+bin/eggc run app.egg -lfoo -L lib    # link a C library (or `link "foo"` in a file)
 bin/eggc spec                        # whole spec, for pasting into an AI
 bin/eggc lsp                         # language server for editors (stdin/stdout)
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
@@ -118,7 +119,8 @@ v2:
   null panics
 - Function values `fn(T) R`: passed, returned, stored in fields, called
 - `extern fn toupper(c: i32) i32` (in an unsafe file) calls C; `uses io`
-  on the declaration says what the C function does
+  on the declaration says what the C function does; `link "sqlite3"`
+  links a C library (`-l`/`-L` on the command line too)
 - Owned buffers `Buf(T)`: `a.alloc(n, v)`, `a.free(b)`, `a.resize(&b, n, v)`;
   indexed, sliced and iterated like arrays. The **ownership check**
   follows every path: no use after a move or free (E136), no leak (E135),

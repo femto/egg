@@ -1,0 +1,8 @@
+// A library name must not read as a compiler flag.
+// error: E138 @4
+allow unsafe
+link "-o/tmp/x"
+link "m"
+
+fn main() void {
+}

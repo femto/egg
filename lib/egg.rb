@@ -12,8 +12,10 @@ module Egg
   VERSION = "0.0.2"
 
   # Result of compiling one source file to C.
-  # Exactly one of c_source / diagnostics is meaningful.
-  CompileResult = Struct.new(:c_source, :diagnostics)
+  # Exactly one of c_source / diagnostics is meaningful. links: the C
+  # libraries the program's files name with `link`, each once, to pass
+  # to the C compiler as -l<name>.
+  CompileResult = Struct.new(:c_source, :diagnostics, :links)
 
   # Result of checking: the checker (for codegen and tools), the capability
   # check, and every diagnostic.
@@ -38,8 +40,18 @@ module Egg
   def self.compile_to_c(src, path = nil, debug: false)
     r = check(src, path)
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
-    CompileResult.new(CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil).generate, [])
+    c = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil).generate
+    CompileResult.new(c, [], links(r.program))
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
+  end
+
+  # The libraries every loaded file links, in load order, each once.
+  def self.links(program)
+    names = []
+    program.modules.each_value do |m|
+      m.links.each { |l| names << l.name unless names.include?(l.name) }
+    end
+    names
   end
 end

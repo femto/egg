@@ -1,0 +1,6 @@
+// link needs allow unsafe, like extern fn.
+// error: E131 @3
+link "m"
+
+fn main() void {
+}
