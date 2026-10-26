@@ -34,20 +34,28 @@ comparison.
 ## Results
 
 2026-10-26, Intel i7-9700K, macOS 14, Apple clang 15, rustc 1.99.1,
-go 1.27.2, zig 0.17.0. Best of 5 runs; (Nx) is the time relative to c.
+go 1.27.2, zig 0.17.0. Best of 10 runs; (Nx) is the time relative to c.
 
 | program | c | egg | rust | rust+ovf | go | zig-safe |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| collatz | 721 ms | 739 ms (1.02x) | 403 ms (0.56x) | 1010 ms (1.40x) | 619 ms (0.86x) | 1025 ms (1.42x) |
-| fib | 231 ms | 594 ms (2.57x) | 238 ms (1.03x) | 372 ms (1.61x) | 407 ms (1.76x) | 359 ms (1.55x) |
-| matmul | 278 ms | 5806 ms (20.89x) | 316 ms (1.14x) | 309 ms (1.11x) | 308 ms (1.11x) | 286 ms (1.03x) |
-| sieve | 394 ms | 403 ms (1.02x) | 370 ms (0.94x) | 380 ms (0.96x) | 364 ms (0.93x) | 393 ms (1.00x) |
+| collatz | 728 ms | 768 ms (1.05x) | 404 ms (0.56x) | 983 ms (1.35x) | 625 ms (0.86x) | 944 ms (1.30x) |
+| fib | 231 ms | 353 ms (1.53x) | 238 ms (1.03x) | 371 ms (1.61x) | 408 ms (1.77x) | 346 ms (1.50x) |
+| matmul | 266 ms | 623 ms (2.35x) | 335 ms (1.26x) | 272 ms (1.02x) | 315 ms (1.19x) | 277 ms (1.04x) |
+| sieve | 394 ms | 388 ms (0.98x) | 395 ms (1.00x) | 398 ms (1.01x) | 364 ms (0.92x) | 389 ms (0.99x) |
 
-- **matmul**: `egg_mul` checks for overflow with a division (`r / b != a`),
-  a 64-bit `idiv` for every multiply whose operands are not zero. Rust and Zig use the CPU's overflow flag
-  instead. Replacing the check with `__builtin_mul_overflow` made this
-  program about 10 times faster in a hand-edited copy of the generated C.
-- **fib**: `egg_add` / `egg_sub` compare against the limits before adding;
-  the checked Rust and Zig versions cost half as much over C.
-- **sieve**, **collatz**: bounds checks and division checks cost little;
-  Egg is within a few percent of C.
+Against the versions that check as much as Egg does (rust+ovf, zig-safe):
+
+- **fib**, **sieve**: the same cost.
+- **collatz**: Egg is faster. A division only needs a check for zero and
+  for the minimum divided by -1, both cheap compares, and there is no
+  builtin to use instead.
+- **matmul**: still about 2x. The inner loop checks bounds on every
+  element; Apple clang 15 leaves those checks in the loop, while the newer
+  LLVM in rustc and zig moves them out. Closing the gap would take bounds
+  check elimination in eggc.
+
+Before #6, `egg_mul` checked overflow with a division (`r / b != a`): a
+64-bit `idiv` for every multiply whose operands are not zero. matmul took
+5806 ms (20.89x) and fib 594 ms (2.57x). With gcc 5+ or clang, add, sub and
+mul now use `__builtin_*_overflow`, which compiles to the CPU's overflow
+flag. Other compilers, or `-DEGG_PORTABLE`, get the portable checks.
