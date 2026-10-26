@@ -13,7 +13,7 @@ program imports:
 |------|-------|---------|-------------|
 | E001 | lexer | unexpected character | remove it |
 | E002 | parser | syntax error (also: chained comparison `a < b < c`) | follow spec/grammar.ebnf |
-| E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum), or a float literal is infinite in its type (`1e400`, `1e39` as `f32`) or rounds to zero though it is not zero (`1e-400`) | use a smaller literal or a wider type |
+| E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum), or a float literal is infinite in its type (`1e400`, `1e39` as `f32`) or rounds to zero though it is not zero (`1e-400`) | use a smaller literal or a wider type; for one that rounds to zero, write `0.0` or use `f64` instead of `f32` |
 | E101 | checker | undefined variable | declare it with `const` or `var` |
 | E102 | checker | undefined function, or calling a variable | define the function |
 | E103 | checker | type mismatch (also: comparing structs, arrays or unions; an array where a slice is expected; two integer types in one operation; negating an unsigned value; a generic or inout function used as a value) | make both sides the same type with `@as`; no implicit conversions |
