@@ -71,6 +71,28 @@ The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
 rebuild to switch back.
 
+## Performance
+
+Every integer operation and every index in Egg is checked: overflow and out
+of bounds panic, never wrap or corrupt memory. The checks cost little. On
+four small programs ([bench/](bench/README.md), i7-9700K), the time relative to C:
+
+| program | egg | rust (overflow checks on) | zig ReleaseSafe | CPython | Ruby 3.2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fib(40) | 1.53x | 1.62x | 1.51x | 95x | 44x |
+| sieve, 50M | 1.10x | 1.04x | 1.19x | 27x | 23x |
+| collatz, 3M | 1.07x | 1.37x | 1.34x | 55x | 26x |
+| matmul, 800×800 | 2.31x | 1.11x | 1.23x | 345x | 164x |
+
+So Egg is **25 to 149 times faster than CPython** and **21 to 71 times
+faster than Ruby** on the same loops. matmul is behind Rust and Zig because
+eggc does not yet remove bounds checks from inner loops.
+
+```bash
+ruby bench/run.rb          # Egg, C, Rust, Go, Zig
+ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
+```
+
 ## What eggc supports
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
@@ -170,6 +192,8 @@ test/run.rb            test runner, no gems
 - Egg functions become `fn_<name>`, locals `v_<name>`, runtime helpers
   `egg_*`, so nothing an Egg program names can collide with C or the runtime
 - Passes `-std=c99 -Wall -Wextra -pedantic -Werror` on gcc and clang
+- Overflow checks use `__builtin_*_overflow` where the compiler has them
+  (clang, gcc 5+), and portable C elsewhere or with `-DEGG_PORTABLE`
 - No POSIX calls; only `<stdio.h>`, `<stdlib.h>`, `<stdint.h>`,
   `<stdbool.h>`, `<inttypes.h>`
 
