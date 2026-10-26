@@ -11,6 +11,10 @@ int main(void) {
     int64_t *x = malloc(n * n * sizeof(int64_t));
     int64_t *y = malloc(n * n * sizeof(int64_t));
     int64_t *z = calloc(n * n, sizeof(int64_t));
+    if (x == NULL || y == NULL || z == NULL) {
+        fprintf(stderr, "out of memory\n");
+        return 1;
+    }
     fill(x, n, 3);
     fill(y, n, 5);
     for (int64_t i = 0; i < n; i++)

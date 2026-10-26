@@ -25,6 +25,7 @@ args = ARGV.dup
 runs = 5
 if (i = args.index("--runs"))
   runs = Integer(args[i + 1])
+  abort "--runs must be at least 1" if runs < 1
   args.slice!(i, 2)
 end
 names = args.empty? ? Dir[File.join(BENCH, "egg", "*.egg")].map { |f| File.basename(f, ".egg") }.sort : args
@@ -40,7 +41,8 @@ VARIANTS = [
 ].freeze
 
 def on_path?(tool)
-  ENV["PATH"].split(File::PATH_SEPARATOR).any? { |d| File.executable?(File.join(d, tool)) }
+  return File.executable?(tool) if tool.include?(File::SEPARATOR) # CC=/usr/bin/clang
+  ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).any? { |d| File.executable?(File.join(d, tool)) }
 end
 
 def now
@@ -60,7 +62,11 @@ names.each do |name|
   expected = nil
   variants.each do |label, _, dir, ext, build|
     src = File.join(BENCH, dir, "#{name}.#{ext}")
-    next unless File.exist?(src)
+    unless File.exist?(src)
+      warn "#{name}/#{label}: #{src} not found"
+      failed = true
+      next
+    end
     exe = File.join(OUT, "#{name}-#{label}")
     out, ok = Open3.capture2e(*build.(src, exe))
     unless ok.success?

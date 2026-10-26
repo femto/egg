@@ -44,7 +44,7 @@ go 1.27.2, zig 0.17.0. Best of 5 runs; (Nx) is the time relative to c.
 | sieve | 394 ms | 403 ms (1.02x) | 370 ms (0.94x) | 380 ms (0.96x) | 364 ms (0.93x) | 393 ms (1.00x) |
 
 - **matmul**: `egg_mul` checks for overflow with a division (`r / b != a`),
-  one 64-bit `idiv` per multiply. Rust and Zig use the CPU's overflow flag
+  a 64-bit `idiv` for every multiply whose operands are not zero. Rust and Zig use the CPU's overflow flag
   instead. Replacing the check with `__builtin_mul_overflow` made this
   program about 10 times faster in a hand-edited copy of the generated C.
 - **fib**: `egg_add` / `egg_sub` compare against the limits before adding;

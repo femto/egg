@@ -5,10 +5,11 @@ fn count_primes(n: usize) -> i64 {
     while i <= n {
         if !composite[i] {
             count += 1;
-            let mut j = i * i;
-            while j <= n {
-                composite[j] = true;
-                j += i;
+            // u64, so i * i cannot overflow where usize is 32 bits
+            let mut j = (i as u64) * (i as u64);
+            while j <= n as u64 {
+                composite[j as usize] = true;
+                j += i as u64;
             }
         }
         i += 1;

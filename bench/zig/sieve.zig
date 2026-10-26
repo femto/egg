@@ -9,8 +9,9 @@ fn countPrimes(a: std.mem.Allocator, n: usize) !i64 {
     while (i <= n) : (i += 1) {
         if (!composite[i]) {
             count += 1;
-            var j = i * i;
-            while (j <= n) : (j += i) composite[j] = true;
+            // u64, so i * i cannot overflow where usize is 32 bits
+            var j = @as(u64, i) * i;
+            while (j <= n) : (j += i) composite[@intCast(j)] = true;
         }
     }
     return count;
