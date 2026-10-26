@@ -59,3 +59,19 @@ Comments on the FFI post:
   is `@ptrFromInt(*u8, 18446744073709551615)`.
 - Egg does not let a value go unused, so the result codes of `close` and
   `finalize` are dropped through a tiny `ignore(rc)`.
+
+## Limits
+
+The wrapper keeps pointers out of `blog.egg`, but Egg cannot yet make it
+airtight:
+
+- `Db` and `Stmt` are ordinary structs with a public `handle` field (Egg
+  has no private fields yet), so a file without `allow unsafe` could
+  build one around any pointer (`a.create` makes one safely) and crash
+  inside SQLite.
+- They are value types, so a copy stays usable after `close` or
+  `finalize`, and closing a copy again is a double close. Ownership is
+  checked only for `Buf(T)` so far.
+- `Stmt.text` reads up to the first 0 byte, so TEXT holding a 0 byte is
+  cut there (a length-aware copy with `sqlite3_column_bytes` needs a
+  pointer-and-length to `str` conversion Egg does not have yet).

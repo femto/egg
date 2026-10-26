@@ -3,7 +3,7 @@
 // expect: 1.0
 // expect: 4.0
 // expect: 1024
-// expect: 0.479425538604203
+// expect: 479425
 // expect: H
 // expect: pid > 0: true
 uses io, alloc
@@ -21,7 +21,8 @@ fn main(out: Io, a: Allocator) void {
     out.print(cos(0))
     out.print(sqrt(16))
     out.print(@as(i64, pow(2, 10)))
-    out.print(sin(0.5))
+    // Six digits: libms may differ in the last bit of sin.
+    out.print(@as(i64, sin(0.5) * 1000000))
     const h = a.cstr("h")
     h.* = @as(u8, toupper(@as(i32, h.*)))
     out.print(a.str_from_c(h))
