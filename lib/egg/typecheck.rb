@@ -1694,7 +1694,8 @@ module Egg
           at = check_expr(a)
           err("E103", "'#{name}' needs an integer, found #{at}", a.line, a.col) unless at == "error" || int?(at)
         elsif pt == "float"
-          at = check_expr(a)
+          # A literal here is an f64: a.float_str(10).
+          at = check_expr(a, "f64")
           err("E103", "'#{name}' needs a float, found #{at}", a.line, a.col) unless at == "error" || float?(at)
         elsif pt == "value"
           # a.create(v): a copy of v in the arena; returns *T
