@@ -1,8 +1,9 @@
 # Egg
 
 An AI-native systems language with a core that has no capabilities at all.
-GC, exceptions, IO and allocation are capability modules a program declares
-on demand. See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
+Exceptions, IO and allocation are capability modules a program declares
+on demand, and there is no GC: heap buffers are managed by ownership (strings, for
+now, live in a program-lifetime arena). See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
 This repository holds **eggc**, the first compiler, now at the end of
