@@ -1,0 +1,45 @@
+// Several resources and the error paths between them: open_pair opens two
+// connections (owned structs with a deinit), and if the second fails,
+// errdefer closes the first. a.free of the pair closes both, the field
+// declared last first.
+// expect: open 1
+// expect: open 2
+// expect: EmptyMessage
+// expect: 1
+// expect: open 3
+// expect: close 3
+// expect: Refused
+// expect: close 2
+// expect: close 1
+uses alloc, io
+
+const c = @import("lib/conns.egg")
+
+const Pair = struct {
+    first: c.Conn
+    second: c.Conn
+}
+
+// Opens two connections; if the second fails, the first is closed.
+fn open_pair(out: Io, a: Allocator, x: i64, y: i64) !Pair {
+    const first = try c.open(out, a, x)
+    errdefer first.deinit(a)
+    const second = try c.open(out, a, y)
+    return Pair{ .first = first, .second = second }
+}
+
+fn main(out: Io, a: Allocator) !void {
+    var p = try open_pair(out, a, 1, 2)
+    defer a.free(p)
+    try p.first.send(a, "hello")
+    p.second.send(a, "") catch |e| {
+        out.print(@errorName(e))
+    }
+    out.print(p.first.count())
+
+    const bad = open_pair(out, a, 3, -1) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    a.free(bad)
+}
