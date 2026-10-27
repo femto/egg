@@ -1,0 +1,45 @@
+// Owned structs: partial moves and their fields.
+uses alloc, io
+
+const List = struct {
+    data: Buf(i64)
+    len: i64
+}
+
+fn give(a: Allocator, l: List) void {
+    a.free(l)
+}
+
+fn drop_data(a: Allocator, inout l: List) void {
+    a.free(l.data)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var l = List{ .data = a.alloc(2, 0), .len = 0 }
+    a.free(l.data)
+    give(a, l)
+    out.print(l.len)
+    l.data = a.alloc(1, 0)
+    l.data = a.alloc(1, 0)
+    a.free(l)
+
+    var m = List{ .data = a.alloc(2, 0), .len = 0 }
+    give(a, m)
+    m.data = a.alloc(1, 0)
+    out.print(m.len)
+
+    const k = List{ .data = a.alloc(2, 0), .len = 0 }
+    if (k.len > 0) {
+        a.free(k.data)
+    }
+    const n = List{ .data = a.alloc(2, 0), .len = 0 }
+    out.print(n.len)
+}
+
+// error: E135 @13
+// error: E136 @20
+// error: E135 @23
+// error: E136 @28
+// error: E136 @29
+// error: E134 @32
+// error: E135 @35

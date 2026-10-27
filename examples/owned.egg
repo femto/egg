@@ -1,0 +1,105 @@
+// Structs, arrays and buffers that own buffers: a growable list, a list
+// of lists, partial moves, and @take/@replace to get elements out.
+// expect: 3
+// expect: 60
+// expect: 2
+// expect: 5
+// expect: 4
+// expect: 3
+// expect: 0
+// expect: 0
+// expect: 0
+// expect: 9
+// expect: 4
+// expect: 0
+// expect: 11
+uses alloc, io
+
+// A growable list: its buffer has spare room, `len` of it is in use.
+const List = struct {
+    data: Buf(i64)
+    len: i64
+
+    fn new(a: Allocator) List {
+        return List{ .data = a.alloc(4, 0), .len = 0 }
+    }
+
+    fn push(inout self: List, a: Allocator, x: i64) void {
+        if (self.len == @len(self.data)) {
+            a.resize(&self.data, 2 * self.len, 0)
+        }
+        self.data[self.len] = x
+        self.len = self.len + 1
+    }
+
+    fn sum(inout self: List) i64 {
+        var total = 0
+        for (self.data[0..self.len]) |x| {
+            total = total + x
+        }
+        return total
+    }
+}
+
+// Takes the list apart: its buffer goes on, the rest is plain data.
+fn into_buf(a: Allocator, l: List) Buf(i64) {
+    var out = a.alloc(l.len, 0)
+    for (l.data[0..l.len]) |x, i| {
+        out[i] = x
+    }
+    a.free(l.data)
+    return out
+}
+
+fn main(out: Io, a: Allocator) !void {
+    var l = List.new(a)
+    l.push(a, 10)
+    l.push(a, 20)
+    l.push(a, 30)
+    out.print(l.len)
+    out.print(l.sum())
+
+    // Partial move: l.data is freed, then given a new buffer.
+    a.free(l.data)
+    l.data = a.alloc(2, 1)
+    l.len = 2
+    out.print(l.sum())
+    a.free(l)
+
+    // A list of lists, grown past its first size.
+    var ll = a.alloc(2, List{ .data = Buf(i64).empty, .len = 0 })
+    defer a.free(ll)
+    var i = 0
+    while (i < 5) {
+        if (i == @len(ll)) {
+            a.resize(&ll, i + 1, List{ .data = Buf(i64).empty, .len = 0 })
+        }
+        a.free(@replace(&ll[i], List.new(a)))
+        ll[i].push(a, i)
+        ll[i].push(a, 1)
+        i = i + 1
+    }
+    out.print(@len(ll))
+    out.print(ll[4].sum() + ll[2].sum() - 4)
+
+    // An element taken out and moved on.
+    const b = into_buf(a, @replace(&ll[1], List{ .data = Buf(i64).empty, .len = 0 }))
+    out.print(@len(b) + 1)
+    a.free(b)
+
+    // Buffers of buffers, and an array of them; shrinking frees the rest.
+    var grid = a.alloc(3, Buf(u8).empty)
+    for (grid) |row, r| {
+        out.print(@len(row) + r * 0)
+    }
+    a.free(@replace(&grid[0], a.alloc(9, 7)))
+    out.print(@len(grid[0]))
+    a.resize(&grid, 1, .empty)
+    var pair: [2]Buf(u8) = @splat(Buf(u8).empty)
+    a.free(@replace(&pair[1], @take(&grid[0])))
+    out.print(@len(grid[0]) + @len(pair[1]) - 5)
+    a.free(grid)
+    a.free(pair)
+    out.print(0)
+    out.print(@len(ll[0].data) + 7)
+}

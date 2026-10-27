@@ -131,7 +131,10 @@ v2:
   indexed, sliced and iterated like arrays. The **ownership check**
   follows every path: no use after a move or free (E136), no leak (E135),
   paths and loop iterations agree (E134); `defer` and `errdefer` free on
-  every way out
+  every way out. Structs, arrays and buffers holding buffers are owned
+  too: struct fields are followed one by one (free and replace `v.data`),
+  elements are swapped out with `@replace`/`@take`, and `a.free` frees
+  everything a value holds
 
 From v1:
 

@@ -1,26 +1,37 @@
 # Ownership check (linear buffers).
 #
-# A Buf(T) has exactly one owner. Passing it by value, assigning it,
-# returning it or freeing it (`a.free(b)`) moves it: the variable it came
-# from no longer owns anything, and using it again is E136. Indexing,
-# slicing, `@len`, `for` and `&b` only borrow it. Every buffer must be
-# given away before its owner goes out of scope (E135): freed, moved, or
-# returned; an inout parameter must own one again whenever the function
-# returns. So a buffer is freed exactly once, and never used after.
+# A Buf(T) has exactly one owner, and so does a struct or array holding
+# one (an owned value). Passing it by value, assigning it, returning it or
+# freeing it (`a.free(v)`) moves it: the variable it came from no longer
+# owns anything, and using it again is E136. Indexing, slicing, `@len`,
+# `for`, reading a field and `&v` only borrow it. Every owned value must
+# be given away before its owner goes out of scope (E135): freed, moved,
+# or returned; an inout parameter must own all of it again whenever the
+# function returns. So a buffer is freed exactly once, and never used
+# after.
+#
+# The state is kept per path: a buffer variable is one path, `b`; a struct
+# variable is one path per buffer field, `v.data` (nested: `v.inner.data`),
+# plus `v.#` for the rest of it. Moving `v.data` moves only that path, so
+# `v` is partly moved: its other fields can still be used, `v` as a whole
+# cannot, until `v.data = ...` gives it a buffer again. Moving `v` moves
+# all its paths. Elements of arrays and buffers are not followed: they can
+# be borrowed, but taken out only with @take/@replace (E139).
 #
 # The check follows every path through a function, after type checking:
-# the state of each buffer variable (owned or moved) is tracked statement
-# by statement. Where paths join (after an if, a switch, a catch, the right
-# side of and/or) they must agree on each variable, and each iteration of
-# a loop must leave it as the loop found it (E134). `defer` and `errdefer`
+# the state of each path (owned or moved) is tracked statement by
+# statement. Where paths join (after an if, a switch, a catch, the right
+# side of and/or) they must agree on each one, and each iteration of a
+# loop must leave it as the loop found it (E134). `defer` and `errdefer`
 # statements are replayed at every way out of their block: its end, a
 # return, a break or continue, and a `try` that returns an error.
 #
 # While `for (b)` iterates over a buffer, the loop holds on to it: the body
 # may read and write its elements, but not move, reassign or resize it
-# (E137).
+# (E137); if its elements own buffers, the body may not replace them
+# either, and the loop variable only borrows each one.
 #
-# A variable whose state is unknown after an error is "poison": it is not
+# A path whose state is unknown after an error is "poison": it is not
 # reported again.
 
 module Egg
@@ -45,7 +56,7 @@ module Egg
     private
 
     def owned?(t)
-      @types[t]&.kind == :buf
+      @checker.owned?(t)
     end
 
     def check_func(sig)
@@ -53,23 +64,74 @@ module Egg
       @file = @checker.modules[sig.func.mod || ""].file
       @frames = [Frame.new([], [])]
       @loops = []
-      @st = {}     # name -> [:owned | :moved | :poison, line of the move]
-      @decl = {}   # name -> [:local | :param | :inout, line, col]
+      @st = {}     # path -> [:owned | :moved | :poison, line of the move]
+      @decl = {}   # name -> [:local | :param | :inout | :borrowed, line, col]
       @defer_ctx = nil
-      @iterated = {} # buffer variable -> line of the for loop iterating it
+      @iterated = {} # path -> line of the for loop iterating it
+      @borrowed = {} # loop variable borrowing an owned element -> its container, as written
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       runtime.each_with_index do |p, i|
         t, mode = sig.params[i]
-        declare(p.name, mode == "inout" ? :inout : :param, p.line, p.col) if owned?(t)
+        declare(p.name, mode == "inout" ? :inout : :param, p.line, p.col, t) if owned?(t)
       end
       walk_stmts(sig.func.body.stmts)
       leave(0, false, nil, nil, "when '#{sig.func.name}' ends") unless @st.nil?
     end
 
-    def declare(name, kind, line, col)
+    def declare(name, kind, line, col, t)
       @frames.last.names << name
       @decl[name] = [kind, line, col]
-      @st[name] = [:owned, nil] unless @st.nil?
+      leaves(name, t).each { |l| @st[l] = [:owned, nil] } unless @st.nil?
+    end
+
+    # ---- paths ----------------------------------------------------------
+
+    # The paths whose state is kept for a value of type t at `path`.
+    def leaves(path, t)
+      info = @types[t]
+      return [path] unless info.kind == :struct
+      owned_fields = info.fields.select { |_, ft, _| owned?(ft) }
+      ["#{path}.#"] + owned_fields.flat_map { |f, ft, _| leaves("#{path}.#{f}", ft) }
+    end
+
+    # The kept paths at `path` or inside it.
+    def under(path, st = @st)
+      st.keys.select { |k| k == path || k.start_with?("#{path}.") }
+    end
+
+    # v.# -> v
+    def shown(leaf)
+      leaf.delete_suffix(".#")
+    end
+
+    def rest?(leaf)
+      leaf.end_with?(".#")
+    end
+
+    def root(path)
+      path.split(".").first
+    end
+
+    # "v" or "v.f.g" for a followed variable or a chain of fields of one.
+    def path_of(e)
+      case e
+      in Var[name:] then @decl.key?(name) ? name : nil
+      in Field[obj:, name:]
+        p = path_of(obj)
+        !p.nil? && @types[obj.ty]&.kind == :struct ? "#{p}.#{name}" : nil
+      else nil
+      end
+    end
+
+    # Source text of a place, for messages.
+    def place_text(e)
+      case e
+      in Var[name:] then name
+      in Field[obj:, name:] then "#{place_text(obj)}.#{name}"
+      in Index[obj:] then "#{place_text(obj)}[i]"
+      in Deref[expr:] then "#{place_text(expr)}.*"
+      else "this value"
+      end
     end
 
     def err(code, msg, line, col)
@@ -96,18 +158,30 @@ module Egg
     end
 
     def check_released(name, line, col, where)
-      sym, at = @st[name]
       kind, dl, dc = @decl[name]
+      return if kind == :borrowed
       l = line || dl
       c = line.nil? ? dc : col
+      paths = under(name).reject { |k| rest?(k) }
       if kind == :inout
-        return unless sym == :moved
-        err("E135", "inout parameter '#{name}' was moved on line #{at} and must own a buffer again #{where}; give it a new one (#{name} = ...)", l, c)
-      elsif sym == :owned
-        what = kind == :param ? "parameter '#{name}'" : "'#{name}'"
-        fix = where.include?("try") ? "free it on that path with `errdefer a.free(#{name})` or `defer a.free(#{name})`" : "free it (a.free(#{name})), return it or pass it on"
-        err("E135", "#{what} still owns its buffer #{where}; #{fix}", l, c)
+        moved = paths.find { |k| @st[k][0] == :moved }
+        return if moved.nil?
+        at = @st[moved][1]
+        if moved == name
+          err("E135", "inout parameter '#{name}' was moved on line #{at} and must own a buffer again #{where}; give it a new one (#{name} = ...)", l, c)
+        else
+          err("E135", "inout parameter '#{name}' must own all its buffers again #{where}, but '#{moved}' was moved on line #{at}; give it a new one (#{moved} = ...)", l, c)
+        end
+        return
       end
+      owned = paths.select { |k| @st[k][0] == :owned }
+      return if owned.empty?
+      # All of it, or the first part still owned.
+      it = owned.length == paths.length ? name : owned[0]
+      what = kind == :param && it == name ? "parameter '#{name}'" : "'#{it}'"
+      its = it == name && paths != [name] ? "its buffers" : "its buffer"
+      fix = where.include?("try") ? "free it on that path with `errdefer a.free(#{it})` or `defer a.free(#{it})`" : "free it (a.free(#{it})), return it or pass it on"
+      err("E135", "#{what} still owns #{its} #{where}; #{fix}", l, c)
     end
 
     # Run the block on a copy of the state, then go back to the original:
@@ -138,12 +212,14 @@ module Egg
       end
     end
 
-    def walk_block(block)
+    # pre: declares loop variables in the block's frame.
+    def walk_block(block, pre = nil)
       @frames << Frame.new([], [])
+      pre&.call
       walk_stmts(block.stmts)
       leave(@frames.length - 1, false, nil, nil, "at the end of its block") unless @st.nil?
       @frames.last.names.each do |n|
-        @st&.delete(n)
+        under(n).each { |k| @st.delete(k) } unless @st.nil?
         @decl.delete(n)
       end
       @frames.pop
@@ -153,17 +229,19 @@ module Egg
       case stmt
       in VarDecl[name:, value:, line:, col:, ty:]
         walk(value)
-        declare(name, :local, line, col) if owned?(ty)
+        declare(name, :local, line, col, ty) if owned?(ty)
       in Assign[name:, value:, line:, col:, target:]
         if target.nil?
           walk(value)
-          if @decl.key?(name)
-            check_iterated(name, line, col, "assigned")
-            sym, = @st[name]
-            if sym == :owned
-              err("E135", "assigning to '#{name}' would lose the buffer it owns; free it first (a.free(#{name}))", line, col)
-            end
-            @st[name] = [:owned, nil]
+          assign_path(name, line, col) if @decl.key?(name) && !@st.nil?
+        elsif owned?(target.ty)
+          walk(value)
+          path = path_of(target)
+          if path.nil?
+            walk_place(target)
+            err("E139", "assigning to '#{place_text(target)}' would lose the buffers it holds; swap the new value in and free the old one: a.free(@replace(&#{place_text(target)}, v))", line, col)
+          elsif !@st.nil?
+            assign_path(path, line, col)
           end
         else
           walk_place(target)
@@ -191,12 +269,19 @@ module Egg
           @st[n] = [:poison, nil]
         end
         walk_loop(body, line, col)
-      in For[iter:, body:, line:, col:]
+      in For[iter:, var:, body:, line:, col:]
         walk(iter, true)
         root = iter_root(iter)
         fresh = !root.nil? && !@iterated.key?(root)
         @iterated[root] = line if fresh
-        walk_loop(body, line, col)
+        elem = iter.ty == "str" ? nil : @types[iter.ty]&.elem
+        # An element that owns buffers is only borrowed by the loop variable.
+        pre = nil
+        if !elem.nil? && owned?(elem)
+          @borrowed[var] = place_text(iter.is_a?(SliceExpr) ? iter.obj : iter)
+          pre = -> { declare(var, :borrowed, line, col, elem) }
+        end
+        walk_loop(body, line, col, pre)
         @iterated.delete(root) if fresh
       in Switch[subject:, arms:, line:, col:]
         walk(subject)
@@ -226,16 +311,57 @@ module Egg
       end
     end
 
-    # The buffer variable a for loop iterates over (b, or b[lo..hi]), or nil.
-    def iter_root(iter)
-      v = iter.is_a?(SliceExpr) ? iter.obj : iter
-      v.is_a?(Var) && @decl.key?(v.name) && owned?(v.ty) ? v.name : nil
+    # `path = v`: what it held must have been moved; it owns all of v now.
+    def assign_path(path, line, col)
+      check_iterated(path, line, col, "assigned")
+      if path.include?(".")
+        parent = path[0...path.rindex(".")]
+        sym, at = @st["#{parent}.#"]
+        if sym == :moved
+          err("E136", "'#{parent}' was moved on line #{at}; give it a whole new value (#{parent} = ...) instead of one field", line, col)
+          return
+        end
+      end
+      owned = under(path).reject { |k| rest?(k) }.find { |k| @st[k][0] == :owned }
+      unless owned.nil?
+        lost = owned == path ? "the buffer it owns" : "the buffer in '#{owned}'"
+        err("E135", "assigning to '#{path}' would lose #{lost}; free it first (a.free(#{owned}))", line, col)
+      end
+      under(path).each { |k| @st[k] = [:owned, nil] }
     end
 
-    def check_iterated(name, line, col, what)
-      at = @iterated[name]
-      return if at.nil?
-      err("E137", "'#{name}' cannot be #{what} here: the for loop on line #{at} is iterating over it", line, col)
+    # The owned value a for loop iterates over (b, v.data, or a slice of
+    # one), or nil.
+    def iter_root(iter)
+      v = iter.is_a?(SliceExpr) ? iter.obj : iter
+      p = path_of(v)
+      !p.nil? && owned?(v.ty) ? p : nil
+    end
+
+    def overlap?(a, b)
+      a == b || a.start_with?("#{b}.") || b.start_with?("#{a}.")
+    end
+
+    def check_iterated(path, line, col, what)
+      key = @iterated.keys.find { |k| overlap?(k, path) }
+      return if key.nil?
+      err("E137", "'#{path}' cannot be #{what} here: the for loop on line #{@iterated[key]} is iterating over #{key == path ? 'it' : "'#{key}'"}", line, col)
+    end
+
+    # A place changed in place (&x, @replace): if it is (in) an element of
+    # an array or buffer whose elements own buffers, a for loop over that
+    # container would see a stale copy.
+    def check_elem_change(place, line, col, what)
+      p = place
+      while p.is_a?(Field) || p.is_a?(Index)
+        if p.is_a?(Index) && owned?(p.ty)
+          c = path_of(p.obj)
+          check_iterated(c, line, col, "#{what} (its elements own buffers)") unless c.nil?
+        end
+        p = p.obj
+      end
+      c = path_of(place)
+      check_iterated(c, line, col, what) unless c.nil?
     end
 
     # Does this return leave with an error (true), without one (false),
@@ -247,10 +373,10 @@ module Egg
       value.ty.to_s.start_with?("!") ? [false, true] : [false]
     end
 
-    def walk_loop(body, line, col)
+    def walk_loop(body, line, col, pre = nil)
       entry = dup(@st)
       @loops << Loop.new(@frames.length, entry)
-      walk_block(body)
+      walk_block(body, pre)
       unless @st.nil?
         loop_mismatch(entry, @st, line, col, "at the end of an iteration of this loop")
       end
@@ -273,6 +399,7 @@ module Egg
     # as the loop found it.
     def loop_mismatch(entry, now, line, col, where)
       differing(entry, now).each do |n|
+        next if rest?(n)
         was = entry[n][0] == :owned ? "owns a buffer" : "has been moved"
         is = now[n][0] == :owned ? "owns one" : "has been moved"
         err("E134", "'#{n}' #{was} when the loop starts but #{is} #{where}; each iteration must leave it as it found it", line, col)
@@ -299,6 +426,10 @@ module Egg
         syms = live.map { |s| s[n][0] }
         if syms.include?(:poison)
           out[n] = [:poison, nil]
+        elsif syms.uniq.length > 1 && rest?(n)
+          # Moved whole on one path, field by field on another: either way
+          # nothing is owned; the rest of it can no longer be used.
+          out[n] = live.find { |s| s[n][0] == :moved }[n]
         elsif syms.uniq.length > 1
           err("E134", "'#{n}' is moved on some paths through #{what} but not on others; move or free it on every path, or on none", line, col)
           out[n] = [:poison, nil]
@@ -322,6 +453,7 @@ module Egg
       case e
       in Var[name:, line:, col:]
         use(name, line, col, borrow) if @decl.key?(name) && owned?(e.ty)
+      in Field[info: { buf_empty: true }] then nil
       in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit | StructTypeExpr then nil
       in Unary[operand:] then walk(operand)
       in Binary[op:, lhs:, rhs:, line:, col:]
@@ -336,15 +468,38 @@ module Egg
           walk(rhs)
         end
       in Call[args:] then walk_args(args)
-      in MethodCall[obj:, args:]
-        walk(obj) unless obj.ty == "module" || obj.ty == "type"
+      in MethodCall[obj:, args:, info:]
+        unless obj.ty == "module" || obj.ty == "type"
+          if info&.[](:self_inout)
+            p = path_of(obj)
+            check_iterated(p, obj.line, obj.col, "passed as inout") unless p.nil?
+            walk_place(obj)
+          else
+            walk(obj)
+          end
+        end
         walk_args(args)
+      in Builtin[name: "replace" | "take" => name, args:, line:, col:]
+        place = args[0].expr
+        walk(args[1]) if name == "replace"
+        check_elem_change(place, line, col, name == "take" ? "taken from" : "replaced")
+        walk_place(place)
       in Builtin[name:, args:]
         args.each { |a| walk(a, name == "len") }
-      in Field[obj:] then walk(obj, true)
-      in Index[obj:, index:]
+      in Field[obj:, line:, col:]
+        path = path_of(e)
+        if path.nil?
+          walk(obj, true)
+          moved_out(e, line, col) if owned?(e.ty) && !borrow
+        elsif owned?(e.ty)
+          use(path, line, col, borrow)
+        else
+          read(path, line, col)
+        end
+      in Index[obj:, index:, line:, col:]
         walk(obj, true)
         walk(index)
+        moved_out(e, line, col) if owned?(e.ty) && !borrow
       in SliceExpr[obj:, lo:, hi:]
         walk(obj, true)
         walk(lo)
@@ -371,7 +526,7 @@ module Egg
       args.each do |a|
         if a.is_a?(AddrOf)
           # inout: the callee may replace or resize it
-          check_iterated(a.expr.name, a.line, a.col, "passed as inout") if a.expr.is_a?(Var) && @decl.key?(a.expr.name)
+          check_elem_change(a.expr, a.line, a.col, "passed as inout")
           walk_place(a.expr)
         else
           walk(a)
@@ -379,12 +534,20 @@ module Egg
       end
     end
 
-    # A place written or passed as inout: its root variable is borrowed.
+    # A place written or passed as inout: it is borrowed.
     def walk_place(p)
       case p
       in Var[name:, line:, col:]
         use(name, line, col, true) if @decl.key?(name)
-      in Field[obj:] then walk_place(obj)
+      in Field[obj:, line:, col:]
+        path = path_of(p)
+        if path.nil?
+          walk_place(obj)
+        elsif owned?(p.ty)
+          use(path, line, col, true)
+        else
+          read(path, line, col)
+        end
       in Index[obj:, index:]
         walk_place(obj)
         walk(index)
@@ -393,23 +556,68 @@ module Egg
       end
     end
 
-    def use(name, line, col, borrow)
-      sym, at = @st[name]
-      case sym
-      when :moved
-        if @defer_ctx.nil?
-          err("E136", "'#{name}' was moved on line #{at} and no longer owns a buffer; it cannot be used here", line, col)
-        else
-          d_line, l, c = @defer_ctx
-          err("E136", "the defer on line #{d_line} uses '#{name}', which was moved on line #{at} before the defer runs here", l, c)
-        end
-        @st[name] = [:poison, nil]
-      when :owned
-        unless borrow
-          check_iterated(name, line, col, "moved")
-          @st[name] = [:moved, line]
-        end
+    # Use the owned value at `path` (all of it): borrow it, or move it.
+    def use(path, line, col, borrow)
+      paths = under(path)
+      return if paths.empty?
+      if paths.any? { |k| @st[k][0] == :poison }
+        # Not reported again; but a move still moves the rest.
+        paths.each { |k| @st[k] = [:moved, line] unless @st[k][0] == :poison } unless borrow
+        return
       end
+      moved = paths.find { |k| @st[k][0] == :moved }
+      unless moved.nil?
+        moved_error(path, moved, line, col)
+        paths.each { |k| @st[k] = [:poison, nil] }
+        return
+      end
+      return if borrow
+      if @decl[root(path)][0] == :borrowed
+        c = @borrowed[root(path)]
+        err("E139", "'#{path}' only borrows an element of '#{c}' for one iteration; it cannot be moved. Take the element out with @take(&#{c}[i]) or @replace(&#{c}[i], v), looping over an index", line, col)
+        return
+      end
+      check_iterated(path, line, col, "moved")
+      paths.each { |k| @st[k] = [:moved, line] }
+    end
+
+    # Read a plain field at `path` (v.len): v must not have been moved.
+    def read(path, line, col)
+      p = path
+      while p.include?(".")
+        p = p[0...p.rindex(".")]
+        sym, = @st["#{p}.#"]
+        next if sym.nil?
+        moved_error(path, "#{p}.#", line, col) if sym == :moved
+        @st["#{p}.#"] = [:poison, nil] if sym == :moved
+        return
+      end
+    end
+
+    def moved_error(path, moved, line, col)
+      at = @st[moved][1]
+      m = shown(moved)
+      what = if m == path then "'#{path}' was moved on line #{at} and no longer owns a buffer"
+             elsif path.start_with?("#{m}.") then "'#{m}' was moved on line #{at}"
+             else "'#{m}' was moved on line #{at}, so '#{path}' does not own all its buffers"
+             end
+      if @defer_ctx.nil?
+        err("E136", "#{what}; it cannot be used here", line, col)
+      else
+        d_line, l, c = @defer_ctx
+        err("E136", "the defer on line #{d_line} uses '#{path}', but #{what} before the defer runs here", l, c)
+      end
+    end
+
+    # Moving a value out of an element (xs[i], xs[i].f): not followed, so
+    # not allowed.
+    def moved_out(e, line, col)
+      p = e
+      p = p.obj while p.is_a?(Field)
+      return unless p.is_a?(Index)
+      t = place_text(e)
+      how = @types[e.ty].kind == :buf ? "take it with @take(&#{t}) or swap it with @replace(&#{t}, v)" : "swap it out with @replace(&#{t}, v)"
+      err("E139", "cannot move '#{t}' out of an element of '#{place_text(p.obj)}'; #{how}", line, col)
     end
   end
 end

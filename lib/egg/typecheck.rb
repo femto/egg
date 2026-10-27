@@ -30,9 +30,11 @@
 # Pointer operations and `extern fn` need `allow unsafe` in their own file
 # (E131); unlike capabilities, this is not carried along calls.
 #
-# Buf(T) is an owned heap buffer. It lives only in locals, parameters and
-# results (E133); who owns it at each point is checked afterwards, along
-# every path through each function (own.rb).
+# Buf(T) is an owned heap buffer. A struct or array holding one is owned
+# too. Owned values live in locals, parameters, results, struct fields,
+# arrays and buffers, but not in unions or behind pointers (E133); who
+# owns each one at each point is checked afterwards, along every path
+# through each function (own.rb).
 
 module Egg
   VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
@@ -86,6 +88,7 @@ module Egg
     ORDER_OPS = %w[< <= > >=].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
+                      "replace" => 2, "take" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
@@ -512,8 +515,11 @@ module Egg
         elsif t.start_with?("[]")
           err("E116", "a struct cannot hold a slice; slices exist only as parameters", f.line, f.col)
           t = "error"
-        elsif owned_or_err?(t)
-          err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; buffers live only in locals, parameters and results", f.line, f.col)
+        elsif owned_err?(t)
+          err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with try or catch and store the #{@types[t].inner}", f.line, f.col)
+          t = "error"
+        elsif union && owned?(t)
+          err("E133", "a union cannot hold a #{t}: only one member is live at a time, so its buffers could not be followed; use a struct", f.line, f.col)
           t = "error"
         end
         fields << [f.name, t, f.line]
@@ -552,7 +558,7 @@ module Egg
         elem = resolve_type(t.elem, line, col)
         return "error" if elem == "error"
         return value_type_error(elem, "an array element", line, col) unless storable?(elem)
-        return owned_place_error(elem, "an array element", line, col) if owned_or_err?(elem)
+        return owned_place_error(elem, "an array element", line, col) if owned_err?(elem)
         canon = "[#{t.len}]#{elem}"
         info = register(canon, :array, line, col)
         info.elem = elem
@@ -562,7 +568,7 @@ module Egg
         elem = resolve_type(t.elem, line, col)
         return "error" if elem == "error"
         return value_type_error(elem, "a slice element", line, col) unless storable?(elem)
-        return owned_place_error(elem, "a slice element", line, col) if owned_or_err?(elem)
+        return owned_place_error(elem, "a slice element", line, col) if owned_err?(elem)
         canon = "[]#{elem}"
         info = register(canon, :slice, line, col)
         info.elem = elem
@@ -622,7 +628,7 @@ module Egg
       !(t == "void" || t == "type" || t == "anyerror" || t.start_with?("[]"))
     end
 
-    # Buf(T): an owned buffer of T. Its elements are plain values.
+    # Buf(T): an owned buffer of T. Its elements may be owned too.
     def buf_type(args, line, col)
       if args.length != 1
         err("E104", "Buf takes one type argument, its element type, but #{args.length} were given", line, col)
@@ -630,34 +636,84 @@ module Egg
       end
       elem = args[0]
       return value_type_error(elem, "a Buf element", line, col) unless storable?(elem)
-      return owned_place_error(elem, "a Buf element", line, col) if owned_or_err?(elem)
+      return owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
       canon = "Buf(#{elem})"
       register(canon, :buf, line, col).elem = elem
       canon
     end
 
-    # An owned buffer: moved, not copied (own.rb).
+    # An owned value: a buffer, or a struct or array holding one. It is
+    # moved, not copied (own.rb).
     def owned?(t)
-      @types[t]&.kind == :buf
+      info = @types[t]
+      return false if info.nil?
+      case info.kind
+      when :buf then true
+      when :array then owned?(info.elem)
+      when :struct then (info.fields || []).any? { |_, ft, _| owned?(ft) }
+      else false
+      end
     end
+    public :owned?
 
-    # Buf(T) or !Buf(T).
-    def owned_or_err?(t)
-      return true if owned?(t)
+    # !T with an owned T: it must be unwrapped right away.
+    def owned_err?(t)
       info = @types[t]
       info&.kind == :err && owned?(info.inner)
     end
 
+    def owned_or_err?(t)
+      owned?(t) || owned_err?(t)
+    end
+
     def owned_place_error(t, what, line, col)
-      err("E133", "#{what} cannot be a #{t}; buffers live only in locals, parameters and results", line, col)
+      err("E133", "#{what} cannot be a #{t}; owned values live in locals, parameters, results, struct fields, arrays and buffers", line, col)
       "error"
     end
 
-    # Borrowing from a buffer (b[i], b[lo..], @len(b), for (b)) needs a
-    # variable that owns it: a temporary one would never be freed.
+    # Borrowing from an owned value (b[i], b[lo..], @len(b), for (b), v.f)
+    # needs a place that owns it: a temporary would never be freed.
     def check_borrowed(obj, t)
-      return unless owned?(t) && !obj.is_a?(Var)
+      return unless owned?(t) && !owned_place?(obj)
       err("E133", "this #{t} is a temporary that would never be freed; store it in a variable first", obj.line, obj.col)
+    end
+
+    # A variable, or a field or element of one.
+    def owned_place?(e)
+      case e
+      in Var then true
+      in Field[obj:] then owned_place?(obj)
+      in Index[obj:] then owned_place?(obj)
+      else false
+      end
+    end
+
+    # An owned value made without taking anything: Buf(T).empty, and
+    # literals and @splat built only of those. a.alloc, a.resize and @splat
+    # copy their fill value, which is safe only for these.
+    def empty_value?(e)
+      return true unless owned?(e.ty)
+      case e
+      in Field[info: { buf_empty: true }] | EnumLit[info: { buf_empty: true }] then true
+      in StructLit[fields:] then fields.all? { |f| empty_value?(f[1]) }
+      in ArrayLit[items:] then items.all? { |i| empty_value?(i) }
+      in Builtin[name: "splat", args:] then empty_value?(args[0])
+      else false
+      end
+    end
+
+    def check_empty_fill(a, what)
+      return if a.ty.nil? || a.ty == "error" || empty_value?(a)
+      err("E140", "#{what} copies this #{a.ty} into every element, but it owns buffers; fill with #{empty_hint(a.ty)} and put values in with @replace", a.line, a.col)
+    end
+
+    def empty_hint(t)
+      info = @types[t]
+      case info.kind
+      when :buf then "#{t}.empty"
+      when :array then "@splat(#{empty_hint(info.elem)})"
+      else "a #{t} literal of empty buffers"
+      end
     end
 
     def value_type_error(t, what, line, col)
@@ -1151,6 +1207,14 @@ module Egg
           enum_t = obj.info[:type]
           info = @types[enum_t]
           return union_tag_value(e, info, enum_t, name, line, col) if info&.kind == :union
+          if info&.kind == :buf
+            if name == "empty"
+              e.info[:buf_empty] = true
+              return enum_t
+            end
+            err("E122", "#{enum_t} has no member '#{name}' (Buf(T).empty is an empty buffer)", line, col)
+            return "error"
+          end
           if info&.kind == :enum
             idx = info.members.index(name)
             if idx.nil?
@@ -1163,6 +1227,7 @@ module Egg
           err("E122", "#{enum_t || 'this type'} has no member '#{name}'", line, col) unless enum_t.nil?
           return "error"
         end
+        check_borrowed(obj, t)
         field_type(t, name, line, col)
       in Index[obj:, index:, line:, col:]
         t = check_expr(obj)
@@ -1182,6 +1247,10 @@ module Egg
         info = target.nil? ? nil : @types[target]
         if !info.nil? && info.kind == :union
           return union_tag_value(e, info, target, name, line, col)
+        end
+        if !info.nil? && info.kind == :buf && name == "empty"
+          e.info[:buf_empty] = true
+          return target
         end
         if info.nil? || info.kind != :enum
           err("E115", "cannot infer the enum type of '.#{name}'; write Type.#{name}", line, col) unless expected == "error"
@@ -1361,7 +1430,7 @@ module Egg
           if lt != rt
             err("E103", "cannot compare #{lt} with #{rt}", line, col)
           elsif owned?(lt)
-            err("E103", "cannot compare buffers with #{op}; compare their elements", line, col)
+            err("E103", "cannot compare #{lt} with #{op}: it owns buffers; compare their elements", line, col)
           elsif !comparable?(lt)
             err("E103", "cannot compare values of type #{lt} with #{op}; compare their fields", line, col)
           end
@@ -1628,6 +1697,16 @@ module Egg
       e.info[:params] = sig.params.drop(1)
       rest = Sig.new(sig.name, sig.params.drop(1), sig.ret)
       check_args(rest, args, name, line, col, [obj])
+      if self_mode == "inout"
+        # The arguments are computed before the call, so reading plain
+        # values of self is fine; a slice of it or a buffer moved out of it
+        # would not be.
+        path = inout_path(obj)
+        clash = path.nil? ? nil : args.find { |a| holds?(a, path) }
+        unless clash.nil?
+          err("E117", "'#{path}' is passed to '#{name}' as inout self, and this argument borrows from it or moves part of it; copy what you need into a local first", clash.line, clash.col)
+        end
+      end
       sig.ret
     end
 
@@ -1658,12 +1737,13 @@ module Egg
           return "error" if at == "error"
           expect_type(elem, at, a) unless elem.nil?
           return value_type_error(at, "a Buf element", a.line, a.col) unless storable?(at)
-          return owned_place_error(at, "a Buf element", a.line, a.col) if owned_or_err?(at)
+          return owned_place_error(at, "a Buf element", a.line, a.col) if owned_err?(at)
+          check_empty_fill(a, "a.#{name}")
           ret = buf_type([at], a.line, a.col) if name == "alloc"
         elsif pt == "buffer"
           at = check_expr(a)
           if at != "error" && !owned?(at)
-            err("E103", "'#{name}' frees a Buf, found #{at}", a.line, a.col)
+            err("E103", "'#{name}' frees a Buf, or a struct or array holding buffers; found #{at}", a.line, a.col)
           end
         elsif pt == "inout_buffer"
           unless a.is_a?(AddrOf)
@@ -1681,10 +1761,10 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
-          root = root_name(a.expr)
-          clash = args.find { |o| !o.equal?(a) && !root.nil? && mentions?(o, root) }
+          path = inout_path(a.expr)
+          clash = args.find { |o| !o.equal?(a) && !path.nil? && mentions_path?(o, path) }
           unless clash.nil?
-            err("E117", "'#{root}' is passed as inout and also used by another argument of the same call", a.line, a.col)
+            err("E117", "'#{path}' is passed as inout and also used by another argument of the same call", a.line, a.col)
           end
         elsif pt == "printable"
           at = check_expr(a)
@@ -1750,8 +1830,8 @@ module Egg
           mark_root_used(a.expr)
           a.ty = t
           expect_type(pt, t, a)
-          root = root_name(a.expr)
-          inout_roots << [root, a] unless root.nil?
+          path = inout_path(a.expr)
+          inout_roots << [path, a] unless path.nil?
         elsif a.is_a?(SliceExpr)
           at = check_slice_arg(a, pt)
           expect_type(pt, at, a)
@@ -1773,18 +1853,19 @@ module Egg
       # Exclusivity: a variable passed as inout may not appear anywhere else
       # in the same call, so the callee never sees two views of it.
       others = receivers + args
-      inout_roots.each do |root, a|
-        clash = others.find { |o| !o.equal?(a) && mentions?(o, root) }
+      inout_roots.each do |path, a|
+        clash = others.find { |o| !o.equal?(a) && mentions_path?(o, path) }
         next if clash.nil?
-        err("E117", "'#{root}' is passed as inout and also used by another argument of the same call", a.line, a.col)
+        err("E117", "'#{path}' is passed as inout and also used by another argument of the same call", a.line, a.col)
       end
       # Likewise a buffer moved into the call: another argument must not
       # borrow from it (a slice of it would outlive a free in the callee).
       args.each do |a|
-        next unless a.is_a?(Var) && owned?(a.ty)
-        clash = others.find { |o| !o.equal?(a) && mentions?(o, a.name) }
+        path = place_path(a)
+        next if path.nil? || !owned?(a.ty)
+        clash = others.find { |o| !o.equal?(a) && mentions_path?(o, path) }
         next if clash.nil?
-        err("E117", "'#{a.name}' is moved into this call and also used by another argument of the same call", a.line, a.col)
+        err("E117", "'#{path}' is moved into this call and also used by another argument of the same call", a.line, a.col)
       end
     end
 
@@ -1827,6 +1908,90 @@ module Egg
       in Index[obj:] then root_name(obj)
       else nil
       end
+    end
+
+    # "v", "v.f.g" for a variable or a chain of fields of one; else nil.
+    def place_path(e)
+      case e
+      in Var[name:] then name
+      in Field[obj:, name:]
+        p = place_path(obj)
+        p.nil? ? nil : "#{p}.#{name}"
+      else nil
+      end
+    end
+
+    # The place an inout argument hands over: v.f for &v.f, and the whole
+    # container for an element (&v.data[i] -> v.data).
+    def inout_path(e)
+      p = place_path(e)
+      return p unless p.nil?
+      case e
+      in Field[obj:] then inout_path(obj)
+      in Index[obj:] then inout_path(obj)
+      else nil
+      end
+    end
+
+    def overlap?(a, b)
+      a == b || a.start_with?("#{b}.") || b.start_with?("#{a}.")
+    end
+
+    # Does e take a slice of `path` (or of something overlapping it) or
+    # move an owned part of it? Plain values read from it are copies.
+    def holds?(e, path)
+      p = place_path(e)
+      return owned?(e.ty) && overlap?(p, path) unless p.nil?
+      case e
+      in SliceExpr[obj:, lo:, hi:] then mentions_path?(obj, path) || holds?(lo, path) || (!hi.nil? && holds?(hi, path))
+      in Index[obj:, index:] then (place_path(obj).nil? && holds?(obj, path)) || holds?(index, path)
+      in Field[obj:] then holds?(obj, path)
+      in Builtin[name: "len"] then false
+      in Unary[operand:] then holds?(operand, path)
+      in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
+      in Call[args:] then args.any? { |x| holds?(x, path) }
+      in Builtin[args:] then args.any? { |x| holds?(x, path) }
+      in MethodCall[obj:, args:] then [obj, *args].any? { |x| holds?(x, path) }
+      in StructLit[fields:] then fields.any? { |f| holds?(f[1], path) }
+      in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
+      in AddrOf[expr:] then mentions_path?(expr, path)
+      in Try[expr:] then holds?(expr, path)
+      in Catch[expr:, fallback:] then holds?(expr, path) || holds?(fallback, path)
+      else false
+      end
+    end
+
+    # Does e read `path`, a part of it, or something it is part of?
+    def mentions_path?(e, path)
+      root = path.split(".").first
+      return false unless mentions?(e, root)
+      paths = []
+      collect_paths(e, paths)
+      paths.any? { |p| overlap?(p, path) }
+    end
+
+    # The longest place paths in e (v.a.b counts once, not also v and v.a).
+    def collect_paths(e, out)
+      p = place_path(e)
+      return out << p unless p.nil?
+      case e
+      in Unary[operand:] then collect_paths(operand, out)
+      in Binary[lhs:, rhs:] then [lhs, rhs].each { |x| collect_paths(x, out) }
+      in Call[args:] then args.each { |x| collect_paths(x, out) }
+      in Builtin[args:] then args.each { |x| collect_paths(x, out) }
+      in MethodCall[obj:, args:] then [obj, *args].each { |x| collect_paths(x, out) }
+      in Field[obj:] then collect_paths(obj, out)
+      in Index[obj:, index:] then [obj, index].each { |x| collect_paths(x, out) }
+      in SliceExpr[obj:, lo:, hi:] then [obj, lo, hi].compact.each { |x| collect_paths(x, out) }
+      in StructLit[fields:] then fields.each { |f| collect_paths(f[1], out) }
+      in ArrayLit[items:] then items.each { |x| collect_paths(x, out) }
+      in AddrOf[expr:] then collect_paths(expr, out)
+      in Deref[expr:] then collect_paths(expr, out)
+      in Try[expr:] then collect_paths(expr, out)
+      in Catch[expr:, fallback:] then [expr, fallback].each { |x| collect_paths(x, out) }
+      else nil
+      end
+      out
     end
 
     def mark_root_used(e)
@@ -2071,8 +2236,43 @@ module Egg
         end
         vt = check_expr(a, info.elem)
         expect_type(info.elem, vt, a)
+        check_empty_fill(a, "@splat") if vt == info.elem
         expected
+      when "replace", "take"
+        check_swap(name, args, line, col)
       end
+    end
+
+    # @replace(&place, v): puts v in the place and gives back what was
+    # there; @take(&place) puts Buf(T).empty there. The way to get an owned
+    # value out of an array or buffer element.
+    def check_swap(name, args, line, col)
+      a = args[0]
+      unless a.is_a?(AddrOf)
+        err("E121", "'@#{name}' changes a place: pass it as &x", a.line, a.col)
+        check_all_error(args)
+        return "error"
+      end
+      a.info = {}
+      t = check_lvalue(a.expr, name)
+      mark_root_used(a.expr)
+      a.ty = t
+      if name == "take"
+        return "error" if t == "error"
+        unless @types[t]&.kind == :buf
+          err("E103", "'@take' needs a Buf, found #{t}; use @replace(&x, v) and give the value to put back", a.line, a.col)
+          return "error"
+        end
+        return t
+      end
+      v = args[1]
+      vt = check_expr(v, t == "error" ? nil : t)
+      expect_type(t, vt, v)
+      root = root_name(a.expr)
+      if !root.nil? && mentions?(v, root)
+        err("E117", "'#{root}' is changed by this @replace and also used by its value; compute the value first", v.line, v.col)
+      end
+      t
     end
 
     # ---- helpers ------------------------------------------------------

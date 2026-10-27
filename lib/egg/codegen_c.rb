@@ -319,6 +319,7 @@ module Egg
       @line_file = nil
       @need_cap = {}
       @int_helpers = {} # name -> C text, generated in use order
+      @drops = {}       # owned type -> its egg_drop_ function's name
       @out = +""
       @indent = 0
       @locals = []
@@ -351,6 +352,7 @@ module Egg
         out << HELPERS[name] << "\n"
       end
       @int_helpers.each_value { |text| out << text << "\n" }
+      emit_drops(out)
       @enum_names.each_key do |canon|
         info = @types[canon]
         names = info.members.map { |m| c_string(m) }.join(", ")
@@ -369,6 +371,43 @@ module Egg
     end
 
     private
+
+    # Deep free of an owned value: a buffer's elements, then the buffer; a
+    # struct's buffer fields; an array's elements. Returns the function.
+    def drop(t)
+      return @drops[t] if @drops.key?(t)
+      @drops[t] = "egg_drop_#{@types[t].c_name}"
+      info = @types[t]
+      case info.kind
+      when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
+      when :struct then info.fields.each { |_, ft, _| drop(ft) if @checker.owned?(ft) }
+      end
+      @drops[t]
+    end
+
+    def emit_drops(out)
+      return if @drops.empty?
+      @drops.each { |t, name| out << "static void #{name}(#{c_type(t)} v);\n" }
+      @drops.each do |t, name|
+        info = @types[t]
+        body = case info.kind
+               when :buf
+                 elem = @checker.owned?(info.elem) ? "    for (int64_t i = 0; i < v.len; i++) #{drop(info.elem)}(v.ptr[i]);\n" : ""
+                 "#{elem}    free(v.ptr);\n"
+               when :array
+                 "    for (int64_t i = 0; i < #{info.len}; i++) #{drop(info.elem)}(v.a[i]);\n"
+               when :struct
+                 info.fields.select { |_, ft, _| @checker.owned?(ft) }.map { |f, ft, _| "    #{drop(ft)}(v.f_#{f});\n" }.join
+               end
+        out << "static void #{name}(#{c_type(t)} v) {\n#{body}}\n"
+      end
+      out << "\n"
+    end
+
+    # Buf(T).empty: no elements, nothing on the heap.
+    def empty_buf(t)
+      "((#{c_type(t)}){ .ptr = NULL, .len = 0 })"
+    end
 
     # Record a helper call; every checked helper also needs egg_panic.
     # The checked helper for `op` ("+", "-", ..., "neg") on integer type t.
@@ -1058,6 +1097,7 @@ module Egg
       in Builtin[name:, args:]
         builtin(e, name, args)
       in Field[obj:, name:, info:]
+        return empty_buf(e.ty) if info[:buf_empty]
         return "((#{c_type(e.ty)}){ .tag = #{info[:union_tag]} })" unless info[:union_tag].nil?
         return "((#{c_type(e.ty)})#{info[:enum_index]})" unless info[:enum_index].nil?
         "#{struct_value(obj)}.f_#{name}"
@@ -1081,6 +1121,8 @@ module Egg
         elem = @types[e.ty].elem
         vals = items.map { |i| coerce(expr(i), i.ty, elem) }
         "((#{c_type(e.ty)}){ { #{vals.join(', ')} } })"
+      in EnumLit[info: { buf_empty: true }]
+        empty_buf(e.ty)
       in EnumLit[info: { union_tag: Integer => tag }]
         "((#{c_type(e.ty)}){ .tag = #{tag} })"
       in EnumLit[info:]
@@ -1219,7 +1261,10 @@ module Egg
                i = tmp
                line("for (int64_t #{i} = 0; #{i} < #{b}.len; #{i}++) #{b}.ptr[#{i}] = #{v};")
                b
-             when "Allocator.free" then "free(#{codes[0]}.ptr)"
+             when "Allocator.free"
+               t = args[0].ty
+               info = @types[t]
+               info.kind == :buf && !@checker.owned?(info.elem) ? "free(#{codes[0]}.ptr)" : "#{drop(t)}(#{codes[0]})"
              when "Allocator.resize"
                # new elements, if it grows, are copies of v
                buf = args[0].ty
@@ -1228,6 +1273,11 @@ module Egg
                line("#{c_type(buf)} *#{p} = #{codes[0]};")
                n = hoist(codes[1], "i64")
                v = hoist(codes[2], elem)
+               if @checker.owned?(elem)
+                 # Elements cut off when it shrinks are freed first.
+                 i = tmp
+                 line("if (#{n} >= 0) for (int64_t #{i} = #{n}; #{i} < #{p}->len; #{i}++) #{drop(elem)}(#{p}->ptr[#{i}]);")
+               end
                line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{n}, sizeof(#{c_type(elem)}));")
                i = tmp
                line("for (int64_t #{i} = #{p}->len; #{i} < #{n}; #{i}++) #{p}->ptr[#{i}] = #{v};")
@@ -1274,6 +1324,16 @@ module Egg
         name = e.info[:type]
         @need_str = true
         "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
+      when "replace", "take"
+        # The value first, then the place, which it cannot change (E117).
+        t = e.ty
+        v = name == "take" ? empty_buf(t) : hoist(coerce(expr(args[1]), args[1].ty, t), t)
+        p = tmp
+        line("#{c_type(t)} *#{p} = &#{lvalue(a.expr)};")
+        old = tmp
+        line("#{c_type(t)} #{old} = *#{p};")
+        line("*#{p} = #{v};")
+        old
       when "splat"
         info = @types[e.ty]
         v = hoist(expr(a), info.elem)
