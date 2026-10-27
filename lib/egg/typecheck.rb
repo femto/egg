@@ -712,15 +712,17 @@ module Egg
     # The `owned struct` without a deinit that t is or holds (in a field
     # or element, at any depth), or nil: what a.free cannot end. One with a
     # deinit ends its own fields.
-    def resource_in(t)
+    def resource_in(t, seen = {})
+      return nil if seen[t]
+      seen[t] = true
       info = @types[t]
       return nil if info.nil?
       case info.kind
-      when :array, :buf then resource_in(info.elem)
+      when :array, :buf then resource_in(info.elem, seen)
       when :struct
         return(info.deinit.nil? ? t : nil) if info.resource
         (info.fields || []).each do |_, ft, _|
-          r = resource_in(ft)
+          r = resource_in(ft, seen)
           return r unless r.nil?
         end
         nil
