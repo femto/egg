@@ -10,7 +10,7 @@ allow unsafe
 link "sqlite3"
 
 extern fn sqlite3_open(path: *u8, db: **u8) i32
-extern fn sqlite3_close(db: *u8) i32
+extern fn sqlite3_close_v2(db: *u8) i32
 extern fn sqlite3_errmsg(db: *u8) *u8
 extern fn sqlite3_prepare_v2(db: *u8, sql: *u8, n: i32, stmt: **u8, tail: **u8) i32
 extern fn sqlite3_bind_text(stmt: *u8, i: i32, text: *u8, n: i32, destructor: *u8) i32
@@ -42,9 +42,11 @@ fn ignore(rc: i32) void {
 const Db = owned struct {
     handle: *u8
 
-    // Close the database. Every statement must be finalized first.
+    // Close the database. close_v2 waits for any statement not yet
+    // finalized: the connection is freed when the last one is, so closing
+    // first neither fails nor leaks.
     fn close(self: Db) void {
-        ignore(sqlite3_close(self.handle))
+        ignore(sqlite3_close_v2(self.handle))
         @drop(self)
     }
 
@@ -138,7 +140,7 @@ fn open(a: Allocator, path: str) !Db {
     var h: *u8 = null
     const rc = sqlite3_open(a.cstr(path), &h)
     if (rc != ok()) {
-        ignore(sqlite3_close(h))
+        ignore(sqlite3_close_v2(h))
         return error.Open
     }
     return Db{ .handle = h }

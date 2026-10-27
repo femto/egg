@@ -4,7 +4,7 @@ Posts, tags (many-to-many) and comments on SQLite, ported from Spinel's
 `examples/ffi/sqlite`. It shows:
 
 - opening and closing an in-memory database (`sqlite3 **` out-parameter
-  as `&h`)
+  as `&h`; `sqlite3_close_v2`)
 - statements with `prepare_v2` / `step` / `finalize`, and
   `column_int64` / `column_text`
 - bound parameters (`?`) instead of quoting: text goes in by pointer and
@@ -78,9 +78,11 @@ them in `var`s and passes the database as `&db`.
 
 ## Limits
 
-- Nothing ties a `Stmt` to its `Db`: closing the database before
-  finalizing a statement is not caught (SQLite then refuses the close,
-  which `close` ignores).
+- Nothing ties a `Stmt` to its `Db`, so the compiler does not catch
+  closing the database before finalizing a statement. `close` calls
+  `sqlite3_close_v2`, which makes that order safe: the connection stays
+  alive until its last statement is finalized, instead of
+  `sqlite3_close` refusing with `SQLITE_BUSY` and leaving it open.
 - `Stmt.text` reads up to the first 0 byte, so TEXT holding a 0 byte is
   cut there (a length-aware copy with `sqlite3_column_bytes` needs a
   pointer-and-length to `str` conversion Egg does not have yet).
