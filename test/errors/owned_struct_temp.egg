@@ -1,0 +1,7 @@
+// @drop needs a place: a temporary is not something an API hands out.
+uses alloc
+const Cache = owned struct { data: Buf(i64) }
+fn main(a: Allocator) void {
+    @drop(Cache{ .data = .empty })
+}
+// error: E133 @5

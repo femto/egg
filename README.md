@@ -135,6 +135,10 @@ v2:
   too: struct fields are followed one by one (free and replace `v.data`),
   elements are swapped out with `@replace`/`@take`, and `a.free` frees
   everything a value holds
+- Owned structs for resources: `const Db = owned struct { ... }` is
+  checked like a buffer (a copy is a move, it must be ended on every
+  path), and only its own file can build one or end one (`@drop(v)`), so
+  callers release it only through its API (`db.close()`)
 
 From v1:
 

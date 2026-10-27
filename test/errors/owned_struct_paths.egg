@@ -1,0 +1,40 @@
+// An owned struct must be ended exactly once, on every path.
+uses alloc, io
+
+const conn = @import("../../examples/lib/conn.egg")
+
+fn leak(out: Io) void {
+    var c = conn.open(1)
+    c.send(out, 1)
+}
+
+fn twice(out: Io) void {
+    const c = conn.open(1)
+    const d = c
+    d.close(out)
+    c.close(out)
+}
+
+fn maybe(out: Io, b: bool) void {
+    const c = conn.open(1)
+    if (b) {
+        c.close(out)
+    }
+}
+
+fn overwrite(out: Io) void {
+    var c = conn.open(1)
+    c = conn.open(2)
+    c.close(out)
+}
+
+fn main(out: Io) void {
+    leak(out)
+    twice(out)
+    maybe(out, true)
+    overwrite(out)
+}
+// error: E135 @7
+// error: E136 @15
+// error: E134 @20
+// error: E135 @27

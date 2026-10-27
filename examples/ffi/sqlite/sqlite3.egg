@@ -10,7 +10,7 @@ allow unsafe
 link "sqlite3"
 
 extern fn sqlite3_open(path: *u8, db: **u8) i32
-extern fn sqlite3_close(db: *u8) i32
+extern fn sqlite3_close_v2(db: *u8) i32
 extern fn sqlite3_errmsg(db: *u8) *u8
 extern fn sqlite3_prepare_v2(db: *u8, sql: *u8, n: i32, stmt: **u8, tail: **u8) i32
 extern fn sqlite3_bind_text(stmt: *u8, i: i32, text: *u8, n: i32, destructor: *u8) i32
@@ -39,21 +39,24 @@ fn done() i32 {
 fn ignore(rc: i32) void {
 }
 
-const Db = struct {
+const Db = owned struct {
     handle: *u8
 
-    // Close the database. Every statement must be finalized first.
+    // Close the database. close_v2 waits for any statement not yet
+    // finalized: the connection is freed when the last one is, so closing
+    // first neither fails nor leaks.
     fn close(self: Db) void {
-        ignore(sqlite3_close(self.handle))
+        ignore(sqlite3_close_v2(self.handle))
+        @drop(self)
     }
 
     // The last error, as SQLite words it.
-    fn errmsg(self: Db, a: Allocator) str {
+    fn errmsg(inout self: Db, a: Allocator) str {
         return a.str_from_c(sqlite3_errmsg(self.handle))
     }
 
     // A statement for sql, to bind, step and finalize.
-    fn prepare(self: Db, sql: str) !Stmt {
+    fn prepare(inout self: Db, sql: str) !Stmt {
         var st: *u8 = null
         if (sqlite3_prepare_v2(self.handle, @strPtr(sql), @as(i32, @len(sql)), &st, null) != ok()) {
             return error.Sql
@@ -62,37 +65,37 @@ const Db = struct {
     }
 
     // Run sql that returns no rows (CREATE, INSERT, ...).
-    fn exec(self: Db, sql: str) !void {
-        const st = try self.prepare(sql)
+    fn exec(inout self: Db, sql: str) !void {
+        var st = try self.prepare(sql)
         defer st.finalize()
         try st.run()
     }
 
-    fn last_id(self: Db) i64 {
+    fn last_id(inout self: Db) i64 {
         return sqlite3_last_insert_rowid(self.handle)
     }
 }
 
-const Stmt = struct {
+const Stmt = owned struct {
     handle: *u8
 
     // Bind text to parameter i (from 1). SQLite copies it
     // (SQLITE_TRANSIENT, the destructor -1).
-    fn bind(self: Stmt, i: i32, s: str) !void {
+    fn bind(inout self: Stmt, i: i32, s: str) !void {
         const transient = @ptrFromInt(*u8, 18446744073709551615)
         if (sqlite3_bind_text(self.handle, i, @strPtr(s), @as(i32, @len(s)), transient) != ok()) {
             return error.Sql
         }
     }
 
-    fn bind_int(self: Stmt, i: i32, v: i64) !void {
+    fn bind_int(inout self: Stmt, i: i32, v: i64) !void {
         if (sqlite3_bind_int64(self.handle, i, v) != ok()) {
             return error.Sql
         }
     }
 
     // Move to the next row: true if there is one, false when done.
-    fn next(self: Stmt) !bool {
+    fn next(inout self: Stmt) !bool {
         const rc = sqlite3_step(self.handle)
         if (rc == row()) {
             return true
@@ -104,20 +107,20 @@ const Stmt = struct {
     }
 
     // Step a statement that returns no rows.
-    fn run(self: Stmt) !void {
+    fn run(inout self: Stmt) !void {
         if (try self.next()) {
             return error.Sql
         }
     }
 
     // Column i (from 0) of the current row.
-    fn int(self: Stmt, i: i32) i64 {
+    fn int(inout self: Stmt, i: i32) i64 {
         return sqlite3_column_int64(self.handle, i)
     }
 
     // Column i as text, copied: SQLite's bytes last only until the next
     // step. NULL reads as "".
-    fn text(self: Stmt, a: Allocator, i: i32) str {
+    fn text(inout self: Stmt, a: Allocator, i: i32) str {
         const p = sqlite3_column_text(self.handle, i)
         if (p == null) {
             return ""
@@ -127,6 +130,7 @@ const Stmt = struct {
 
     fn finalize(self: Stmt) void {
         ignore(sqlite3_finalize(self.handle))
+        @drop(self)
     }
 }
 
@@ -136,7 +140,7 @@ fn open(a: Allocator, path: str) !Db {
     var h: *u8 = null
     const rc = sqlite3_open(a.cstr(path), &h)
     if (rc != ok()) {
-        ignore(sqlite3_close(h))
+        ignore(sqlite3_close_v2(h))
         return error.Open
     }
     return Db{ .handle = h }

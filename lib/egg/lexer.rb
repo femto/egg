@@ -7,7 +7,7 @@ module Egg
   Token = Struct.new(:kind, :text, :line, :col)
 
   KEYWORDS = %w[fn return if else while var const true false and or
-                struct enum union switch for break continue try catch error inout comptime uses allow extern link null defer errdefer].freeze
+                struct enum union switch for break continue try catch error inout comptime uses allow extern link owned null defer errdefer].freeze
 
   # Longest operators first so "==" wins over "=" and ".." over ".".
   OPERATORS = %w[== != <= >= => .. ( ) { } [ ] , : = < > + - * / % ! . | &].freeze

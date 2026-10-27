@@ -1,0 +1,65 @@
+// An owned struct from another file cannot be built, dropped, changed
+// field by field, freed or kept in an array or buffer.
+uses alloc, io
+
+const conn = @import("../../examples/lib/conn.egg")
+
+const Pair = struct { c: conn.Conn, n: i64 }
+
+fn forge(out: Io) void {
+    const c = conn.Conn{ .id = 9 }
+    @drop(c)
+    out.print(0)
+}
+
+fn freed(a: Allocator) void {
+    const p = Pair{ .c = conn.open(1), .n = 0 }
+    a.free(p)
+}
+
+fn arrays(xs: [2]conn.Conn) void {
+}
+
+fn bufs(b: Buf(Pair)) void {
+}
+
+fn plain(a: Allocator) void {
+    const b = a.alloc(2, 0)
+    @drop(b)
+}
+
+fn bump(inout n: i64) void {
+    n = n + 1
+}
+
+fn fields(out: Io) void {
+    var c = conn.open(1)
+    c.id = 99
+    bump(&c.id)
+    const old = @replace(&c.id, 5)
+    out.print(old)
+    c.close(out)
+}
+
+fn literal(out: Io) void {
+    const xs = [1]conn.Conn{ conn.open(1) }
+    out.print(@len(xs))
+}
+
+fn main(out: Io, a: Allocator) void {
+    forge(out)
+    freed(a)
+    plain(a)
+    fields(out)
+    literal(out)
+}
+// error: E142 @10
+// error: E142 @11
+// error: E141 @17
+// error: E141 @20
+// error: E141 @23
+// error: E103 @28
+// error: E142 @37
+// error: E142 @38
+// error: E142 @39
+// error: E141 @45

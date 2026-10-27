@@ -38,8 +38,8 @@ module Egg
 
   # const Name = struct { ... } / enum { ... } / union(enum) { ... }
   # members: FieldDecl list (a union member with no payload has type nil);
-  # methods: Func list (struct and union)
-  TypeDecl  = Struct.new(:name, :kind, :members, :methods, :line, :col, :mod)
+  # fns: Func list, the methods (struct and union)
+  TypeDecl  = Struct.new(:name, :kind, :members, :fns, :line, :col, :mod, :owned)
   FieldDecl = Struct.new(:name, :type, :line, :col)
   # uses alloc, io: one entry per capability named
   UsesItem   = Struct.new(:name, :line, :col)
@@ -47,7 +47,7 @@ module Egg
   ImportDecl = Struct.new(:name, :path, :line, :col)
 
   # `struct { ... }` as an expression: the body of a type-returning function
-  StructTypeExpr = Struct.new(:members, :methods, :line, :col, :ty, :info)
+  StructTypeExpr = Struct.new(:members, :fns, :line, :col, :ty, :info)
 
   # ---- statements --------------------------------------------------------
   VarDecl  = Struct.new(:name, :mutable, :type, :value, :line, :col, :ty) # :ty filled by the checker

@@ -1,0 +1,42 @@
+// Owned structs: a Conn from lib/conn.egg must be closed exactly once,
+// on every path, and only its file can make or end one.
+// expect: 102
+// expect: 205
+// expect: 7
+// expect: -2
+// expect: 303
+// expect: -3
+// expect: -1
+uses alloc, io
+
+const conn = @import("lib/conn.egg")
+
+// A struct holding a Conn is owned too: it moves, and each part must be
+// handed on.
+const Session = struct {
+    c: conn.Conn
+    log: Buf(i64)
+}
+
+// Takes the Conn: it must end it or pass it on.
+fn finish(c: conn.Conn, out: Io) void {
+    c.close(out)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var c = conn.open(1)
+    defer c.close(out)          // runs last
+    c.send(out, 2)
+
+    var s = Session{ .c = conn.open(2), .log = a.alloc(3, 0) }
+    s.c.send(out, 5)
+    s.log[0] = 7
+    out.print(s.log[0])
+    finish(s.c, out)            // s.c moved; s.log still owned
+    a.free(s.log)
+
+    var d = conn.open(3)
+    d.send(out, 3)
+    const e = d                 // a move, not a copy
+    finish(e, out)
+}

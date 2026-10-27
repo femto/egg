@@ -1,0 +1,22 @@
+// An owned struct: a connection that must be closed exactly once. Only
+// this file can make one (open) or end one (close, with @drop).
+uses io
+
+const Conn = owned struct {
+    id: i64
+
+    // Reading or changing it borrows it: inout self.
+    fn send(inout self: Conn, out: Io, n: i64) void {
+        out.print(self.id * 100 + n)
+    }
+
+    // Taking self by value moves it in; @drop ends it.
+    fn close(self: Conn, out: Io) void {
+        out.print(-self.id)
+        @drop(self)
+    }
+}
+
+fn open(id: i64) Conn {
+    return Conn{ .id = id }
+}

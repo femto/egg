@@ -80,7 +80,7 @@
         },
         {
           "name": "storage.modifier.egg",
-          "match": "\\b(var|const|pub|comptime|inline|extern|allow|link)\\b"
+          "match": "\\b(var|const|pub|comptime|inline|extern|allow|link|owned)\\b"
         },
         {
           "name": "storage.type.egg",
