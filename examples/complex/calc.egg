@@ -8,11 +8,18 @@
 // expect: 2 * (3 -> error.MissingParen
 // expect: 8 / (2 - 2) -> error.DivByZero
 // expect: 1 + x -> error.Unexpected
+// expect: 99999999999999999999 -> error.TooBig
+// expect: 3
 uses alloc, io
 
 const Op = enum { num, neg, add, sub, mul, div }
 
 const Node = struct { op: Op, val: i64, l: i64, r: i64 }
+
+// Spaces, tabs, carriage returns and newlines separate tokens.
+fn space(c: i64) bool {
+    return c == 32 or c == 9 or c == 13 or c == 10
+}
 
 const Parser = struct {
     src: str
@@ -21,7 +28,7 @@ const Parser = struct {
 
     fn peek(self: Parser) i64 {
         var p = self.pos
-        while (p < @len(self.src) and self.src[p] == 32) {
+        while (p < @len(self.src) and space(self.src[p])) {
             p = p + 1
         }
         if (p >= @len(self.src)) {
@@ -31,7 +38,7 @@ const Parser = struct {
     }
 
     fn skip(inout self: Parser) void {
-        while (self.pos < @len(self.src) and self.src[self.pos] == 32) {
+        while (self.pos < @len(self.src) and space(self.src[self.pos])) {
             self.pos = self.pos + 1
         }
     }
@@ -92,9 +99,14 @@ const Parser = struct {
             return x
         }
         if (c >= 48 and c <= 57) {
+            // Numbers are magnitudes up to the i64 maximum; -x negates one.
             var v: i64 = 0
             while (self.pos < @len(self.src) and self.src[self.pos] >= 48 and self.src[self.pos] <= 57) {
-                v = v * 10 + self.src[self.pos] - 48
+                const digit = self.src[self.pos] - 48
+                if (v > (9223372036854775807 - digit) / 10) {
+                    return error.TooBig
+                }
+                v = v * 10 + digit
                 self.pos = self.pos + 1
             }
             return self.add(a, .num, v, -1, -1)
@@ -112,11 +124,12 @@ fn eval(ns: []Node, id: i64) !i64 {
         .sub => { return (try eval(ns, n.l)) - (try eval(ns, n.r)) }
         .mul => { return (try eval(ns, n.l)) * (try eval(ns, n.r)) }
         .div => {
+            const l = try eval(ns, n.l)
             const d = try eval(ns, n.r)
             if (d == 0) {
                 return error.DivByZero
             }
-            return (try eval(ns, n.l)) / d
+            return l / d
         }
     }
 }
@@ -132,7 +145,7 @@ fn run(a: Allocator, src: str) !i64 {
 }
 
 fn main(a: Allocator, out: Io) void {
-    const inputs = [_]str{ "1 + 2 * 3", "(1 + 2) * 3", "-(4 - 10) / 2", "2 * (3", "8 / (2 - 2)", "1 + x" }
+    const inputs = [_]str{ "1 + 2 * 3", "(1 + 2) * 3", "-(4 - 10) / 2", "2 * (3", "8 / (2 - 2)", "1 + x", "99999999999999999999" }
     for (inputs) |s| {
         const v = run(a, s) catch |e| {
             out.print(a.concat(a.concat(s, " -> error."), @errorName(e)))
@@ -140,4 +153,6 @@ fn main(a: Allocator, out: Io) void {
         }
         out.print(a.concat(a.concat(s, " = "), a.int_str(v)))
     }
+    // tabs and newlines separate tokens too
+    out.print(run(a, "\t1\n+\t2") catch -1)
 }

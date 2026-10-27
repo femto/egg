@@ -1,9 +1,14 @@
 // A stack bytecode VM: instructions are a union(enum) with payloads,
 // read by switch captures; the program computes 5! with a loop and a
 // jump patched after the loop body is emitted. Popping an empty stack is
-// error.StackUnderflow. The second line of output is the step count.
+// error.StackUnderflow, running off the end without halt is
+// error.MissingHalt. After 5! and 5! - 20 comes the step count.
 // expect: 120
-// expect: 76
+// expect: 100
+// expect: 80
+// expect: 7
+// expect: MissingHalt
+// expect: -1
 // expect: StackUnderflow
 uses alloc, io
 
@@ -78,8 +83,15 @@ const Vm = struct {
                 .halt => { return steps }
             }
         }
-        return steps
+        // halt is the only normal way out
+        return error.MissingHalt
     }
+}
+
+// Prints the error and gives -1 in place of a step count.
+fn report(out: Io, e: anyerror) i64 {
+    out.print(@errorName(e))
+    return -1
 }
 
 fn emit(a: Allocator, inout code: Buf(Ins), i: Ins) void {
@@ -111,6 +123,11 @@ fn main(a: Allocator, out: Io) void {
     code[exit_jump] = Ins{ .jump_if_zero = @len(code) }
     emit(a, &code, Ins{ .load = 1 })
     emit(a, &code, .print)
+    // and 5! - 20
+    emit(a, &code, Ins{ .load = 1 })
+    emit(a, &code, Ins{ .push = 20 })
+    emit(a, &code, .sub)
+    emit(a, &code, .print)
     emit(a, &code, .halt)
     var vm = Vm{ .code = code, .stack = .empty, .locals = @splat(0) }
     defer a.free(vm)
@@ -119,6 +136,13 @@ fn main(a: Allocator, out: Io) void {
         return
     }
     out.print(steps)
+    // a program that runs off its end
+    var open_end = Vm{ .code = .empty, .stack = .empty, .locals = @splat(0) }
+    defer a.free(open_end)
+    a.push(&open_end.code, Ins{ .push = 7 })
+    a.push(&open_end.code, .print)
+    const m = open_end.run(a, out) catch |e| report(out, e)
+    out.print(m)
     // a broken program: add with an empty stack
     var bad = Vm{ .code = .empty, .stack = .empty, .locals = @splat(0) }
     defer a.free(bad)

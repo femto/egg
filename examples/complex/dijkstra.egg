@@ -1,11 +1,13 @@
 // Shortest paths with Dijkstra's algorithm: a generic binary heap Heap(T)
 // ordered by a function value, and a graph in CSR form (node v's edges
-// are to[start[v] .. start[v + 1]]), all in owned buffers.
+// are to[start[v] .. start[v + 1]]), all in owned buffers. Weights must
+// not be negative; build rejects them.
 // expect: 0: 0
 // expect: 1: 3
 // expect: 2: 1
 // expect: 3: 4
 // expect: 4: 7
+// expect: NegativeWeight
 uses alloc, io
 
 fn Heap(comptime T: type) type {
@@ -72,9 +74,17 @@ const Graph = struct {
     w: Buf(i64)
 }
 
-fn build(a: Allocator, n: i64, edges: []i64) Graph {
+// edges: triples (from, to, weight). Dijkstra needs weights >= 0, so a
+// negative one is error.NegativeWeight.
+fn build(a: Allocator, n: i64, edges: []i64) !Graph {
+    var k: i64 = 2
+    while (k < @len(edges)) {
+        if (edges[k] < 0) {
+            return error.NegativeWeight
+        }
+        k = k + 3
+    }
     var g = Graph{ .start = a.alloc(n + 1, 0), .to = .empty, .w = .empty }
-    // edges: triples (from, to, weight)
     var i: i64 = 0
     while (i < @len(edges)) {
         g.start[edges[i] + 1] = g.start[edges[i] + 1] + 1
@@ -124,11 +134,20 @@ fn shortest(a: Allocator, g: Graph, src: i64) Buf(i64) {
 
 fn main(a: Allocator, out: Io) void {
     const edges = [_]i64{ 0, 1, 4, 0, 2, 1, 2, 1, 2, 1, 3, 1, 2, 3, 5, 3, 4, 3 }
-    const g = build(a, 5, edges[0..])
+    const g = build(a, 5, edges[0..]) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
     defer a.free(g)
     const d = shortest(a, g, 0)
     defer a.free(d)
     for (d) |x, v| {
         out.print(a.concat(a.concat(a.int_str(v), ": "), a.int_str(x)))
     }
+    const neg = [_]i64{ 0, 1, -2 }
+    const bad = build(a, 2, neg[0..]) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    a.free(bad)
 }

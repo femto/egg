@@ -3,13 +3,16 @@
 // with a generic insertion sort and a comparison function, and total by
 // department.
 // expect: line 4: NotANumber
+// expect: line 6: Overflow
 // expect: cy 150
 // expect: ann 120
 // expect: eve 110
 // expect: bob 90
-// expect: cy ann bob eve 
-// expect: eng 380
-// expect: ops 90
+// expect:  7
+// expect:  5
+// expect:   cy ann bob eve
+// expect: ops 97
+// expect: eng 385
 uses alloc, io
 
 // Insertion sort of any Buf by a comparison.
@@ -34,9 +37,12 @@ fn by_pay(a: Row, b: Row) bool {
 }
 
 fn by_name(a: Row, b: Row) bool {
-    // shorter first, then by first byte
+    // shorter first, then by first byte; empty names are equal
     if (@len(a.name) != @len(b.name)) {
         return @len(a.name) < @len(b.name)
+    }
+    if (@len(a.name) == 0) {
+        return false
     }
     return a.name[0] < b.name[0]
 }
@@ -63,13 +69,16 @@ fn parse_int(s: str) !i64 {
         if (c < 48 or c > 57) {
             return error.NotANumber
         }
+        if (n > (9223372036854775807 - (c - 48)) / 10) {
+            return error.Overflow
+        }
         n = n * 10 + c - 48
     }
     return n
 }
 
 fn main(a: Allocator, out: Io) void {
-    const text = "ann,eng,120\nbob,ops,90\ncy,eng,150\ndee,ops,x\neve,eng,110"
+    const text = "ann,eng,120\nbob,ops,90\ncy,eng,150\ndee,ops,x\neve,eng,110\nfay,ops,99999999999999999999\n,eng,5\n,ops,7"
     var rows: Buf(Row) = .empty
     defer a.free(rows)
     const lines = split(a, text, 10)
