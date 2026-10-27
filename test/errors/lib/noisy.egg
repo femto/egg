@@ -1,0 +1,15 @@
+// A deinit that uses io: whoever frees one uses io too.
+uses io
+allow unsafe
+extern fn getpid() i32 uses io
+const N = owned struct {
+    id: i64
+    fn deinit(self: N) void {
+        if (getpid() < 0) {
+        }
+        @drop(self)
+    }
+}
+fn make() N {
+    return N{ .id = 1 }
+}

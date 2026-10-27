@@ -1,0 +1,32 @@
+// An owned struct with a deinit that records, through a pointer, each
+// one it ends: the log is a number whose digits are the ids, oldest
+// first, so ids must be 0-9.
+uses alloc
+allow unsafe
+
+const Log = struct { n: i64 }
+
+const Res = owned struct {
+    id: i64
+    log: *Log
+    data: Buf(i64)
+
+    // a.free calls this: it must end everything the Res holds.
+    fn deinit(self: Res, a: Allocator) void {
+        self.log.*.n = self.log.*.n * 10 + self.id
+        a.free(self.data)
+        @drop(self)
+    }
+}
+
+fn new_log(a: Allocator) *Log {
+    return a.create(Log{ .n = 0 })
+}
+
+fn make(a: Allocator, log: *Log, id: i64) Res {
+    return Res{ .id = id, .log = log, .data = a.alloc(id, 0) }
+}
+
+fn read(log: *Log) i64 {
+    return log.*.n
+}

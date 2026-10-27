@@ -31,6 +31,7 @@ module Egg
   ArrayType   = Struct.new(:len, :elem)          # [N]T; len nil for [_]T in literals
   SliceType   = Struct.new(:elem)                # []T
   ErrType     = Struct.new(:inner)               # !T
+  OptType     = Struct.new(:inner)               # ?T
   GenericType = Struct.new(:name, :args)         # Pair(i64): args are types
   ThisType    = Struct.new(:line, :col)          # @This() inside a struct body
   PtrType     = Struct.new(:inner)               # *T
@@ -91,6 +92,8 @@ module Egg
   AddrOf     = Struct.new(:expr, :line, :col, :ty, :info)                # &x, for inout arguments
   Try        = Struct.new(:expr, :line, :col, :ty, :info)                # try e
   Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info)     # e catch f
+  # e orelse f; f is an expression, or a Return, Break or Continue
+  Orelse     = Struct.new(:expr, :fallback, :line, :col, :ty, :info)
   TypeExpr   = Struct.new(:type, :line, :col, :ty, :info)                # a type in value position: []i64
   Deref      = Struct.new(:expr, :line, :col, :ty, :info)                # p.*
   NullLit    = Struct.new(:line, :col, :ty, :info)                       # null
@@ -102,6 +105,7 @@ module Egg
     when ArrayType then "[#{t.len.nil? ? '_' : t.len}]#{type_src(t.elem)}"
     when SliceType then "[]#{type_src(t.elem)}"
     when ErrType then "!#{type_src(t.inner)}"
+    when OptType then "?#{type_src(t.inner)}"
     when GenericType then "#{t.name}(#{t.args.map { |a| type_src(a) }.join(', ')})"
     when ThisType then "@This()"
     when PtrType then "*#{type_src(t.inner)}"
