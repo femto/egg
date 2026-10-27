@@ -57,7 +57,7 @@ fn add(a: i64, b: i64) i64 {
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
   context (section 7); it must fit that type (E003). `-5` is unary minus
   applied to `5`, but checked as one literal, so `-128` fits `i8`.
-- String literals are `"..."` on one line, with escapes `\n \t \\ \" \0`.
+- String literals are `"..."` on one line, with escapes `\n \r \t \\ \" \0`.
 - `//` starts a comment that runs to the end of the line.
 - **Newlines end statements.** A newline may also appear after a binary
   operator, after `(` `[` `{` or `,`, before `)` `]` `}`, and before `else`.
@@ -473,6 +473,18 @@ fn main(out: Io) void {
     out.print(s[0])
     out.print(s[1..4])
     out.print(s[1..] == "ello")
+}
+```
+
+```egg
+// expect: 13
+// expect: 3
+uses io
+
+fn main(out: Io) void {
+    const crlf = "\r\n"
+    out.print(crlf[0])        // \r is byte 13
+    out.print(@len("a\r\n"))
 }
 ```
 
