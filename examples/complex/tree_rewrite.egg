@@ -1,0 +1,61 @@
+// An expression tree whose nodes own their children (kids: Buf(Node)),
+// evaluated through slices and rewritten in place: x * 1 becomes x by
+// swapping the child into its parent's place and freeing the old node.
+// The last line is how many children the folded node has left.
+// expect: 20
+// expect: 20
+// expect: 0
+uses alloc, io
+
+const Op = enum { num, add, mul }
+
+const Node = struct {
+    op: Op
+    val: i64
+    kids: Buf(Node)
+}
+
+fn num(v: i64) Node {
+    return Node{ .op = .num, .val = v, .kids = .empty }
+}
+
+fn bin(a: Allocator, op: Op, sink l: Node, sink r: Node) Node {
+    var kids: Buf(Node) = .empty
+    a.push(&kids, l)
+    a.push(&kids, r)
+    return Node{ .op = op, .val = 0, .kids = kids }
+}
+
+fn eval(ns: []Node, i: i64) i64 {
+    const op = ns[i].op
+    switch (op) {
+        .num => { return ns[i].val }
+        .add => { return eval(ns[i].kids[0..], 0) + eval(ns[i].kids[0..], 1) }
+        .mul => { return eval(ns[i].kids[0..], 0) * eval(ns[i].kids[0..], 1) }
+    }
+}
+
+// rewrite in place: fold x * 1 to x
+fn simplify(a: Allocator, inout n: Node) void {
+    var i: i64 = 0
+    while (i < @len(n.kids)) {
+        simplify(a, &n.kids[i])
+        i = i + 1
+    }
+    if (n.op == .mul and n.kids[1].op == .num and n.kids[1].val == 1) {
+        const left = @replace(&n.kids[0], num(0))
+        a.free(@replace(&n, left))
+    }
+}
+
+fn main(a: Allocator, out: Io) void {
+    // (2 + 3) * (4 * 1)
+    const e = bin(a, .mul, bin(a, .add, num(2), num(3)), bin(a, .mul, num(4), num(1)))
+    var root: Buf(Node) = .empty
+    a.push(&root, e)
+    out.print(eval(root[0..], 0))
+    simplify(a, &root[0])
+    out.print(eval(root[0..], 0))
+    out.print(@len(root[0].kids[1].kids))
+    a.free(root)
+}

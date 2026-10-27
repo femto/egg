@@ -13,6 +13,8 @@
 # spec/core.md      -- every ```egg block is a test of one of the kinds above
 #                      ("// error: CODE" there needs no line), so the spec
 #                      cannot drift from the compiler.
+# examples/complex/ -- larger programs (a parser, Dijkstra, a VM, ...),
+#                      run like examples/*.egg.
 # examples/ffi/*/   -- programs (files with "// expect:") calling C
 #                      libraries; skipped when a library they link is not
 #                      installed.
@@ -519,6 +521,13 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
     check_program(File.basename(path), File.read(path), dir, path)
     check_program("#{File.basename(path)} -g", File.read(path), dir, path, debug: true)
+  end
+
+  puts "examples/complex"
+  Dir[File.join(ROOT, "examples", "complex", "*.egg")].sort.each do |path|
+    name = path.delete_prefix("#{ROOT}/examples/")
+    check_program(name, File.read(path), dir, path)
+    check_program("#{name} -g", File.read(path), dir, path, debug: true)
   end
 
   puts "examples/ffi"

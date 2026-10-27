@@ -1,0 +1,143 @@
+// A recursive-descent calculator: a Parser with inout self methods builds
+// an AST in a pool (nodes refer to each other by index), eval walks it,
+// and errors (a missing paren, division by zero, a stray character) are
+// told apart with catch |e| and @errorName.
+// expect: 1 + 2 * 3 = 7
+// expect: (1 + 2) * 3 = 9
+// expect: -(4 - 10) / 2 = 3
+// expect: 2 * (3 -> error.MissingParen
+// expect: 8 / (2 - 2) -> error.DivByZero
+// expect: 1 + x -> error.Unexpected
+uses alloc, io
+
+const Op = enum { num, neg, add, sub, mul, div }
+
+const Node = struct { op: Op, val: i64, l: i64, r: i64 }
+
+const Parser = struct {
+    src: str
+    pos: i64
+    nodes: Buf(Node)
+
+    fn peek(self: Parser) i64 {
+        var p = self.pos
+        while (p < @len(self.src) and self.src[p] == 32) {
+            p = p + 1
+        }
+        if (p >= @len(self.src)) {
+            return -1
+        }
+        return self.src[p]
+    }
+
+    fn skip(inout self: Parser) void {
+        while (self.pos < @len(self.src) and self.src[self.pos] == 32) {
+            self.pos = self.pos + 1
+        }
+    }
+
+    fn add(inout self: Parser, a: Allocator, op: Op, val: i64, l: i64, r: i64) i64 {
+        a.push(&self.nodes, Node{ .op = op, .val = val, .l = l, .r = r })
+        return @len(self.nodes) - 1
+    }
+
+    // expr = term { (+|-) term }
+    fn expr(inout self: Parser, a: Allocator) !i64 {
+        var l = try self.term(a)
+        while (self.peek() == 43 or self.peek() == 45) {
+            var op: Op = .add
+            if (self.peek() == 45) {
+                op = .sub
+            }
+            self.skip()
+            self.pos = self.pos + 1
+            const r = try self.term(a)
+            l = self.add(a, op, 0, l, r)
+        }
+        return l
+    }
+
+    // term = unary { (*|/) unary }
+    fn term(inout self: Parser, a: Allocator) !i64 {
+        var l = try self.unary(a)
+        while (self.peek() == 42 or self.peek() == 47) {
+            var op: Op = .mul
+            if (self.peek() == 47) {
+                op = .div
+            }
+            self.skip()
+            self.pos = self.pos + 1
+            const r = try self.unary(a)
+            l = self.add(a, op, 0, l, r)
+        }
+        return l
+    }
+
+    fn unary(inout self: Parser, a: Allocator) !i64 {
+        const c = self.peek()
+        self.skip()
+        if (c == 45) {
+            self.pos = self.pos + 1
+            const x = try self.unary(a)
+            return self.add(a, .neg, 0, x, -1)
+        }
+        if (c == 40) {
+            self.pos = self.pos + 1
+            const x = try self.expr(a)
+            if (self.peek() != 41) {
+                return error.MissingParen
+            }
+            self.skip()
+            self.pos = self.pos + 1
+            return x
+        }
+        if (c >= 48 and c <= 57) {
+            var v: i64 = 0
+            while (self.pos < @len(self.src) and self.src[self.pos] >= 48 and self.src[self.pos] <= 57) {
+                v = v * 10 + self.src[self.pos] - 48
+                self.pos = self.pos + 1
+            }
+            return self.add(a, .num, v, -1, -1)
+        }
+        return error.Unexpected
+    }
+}
+
+fn eval(ns: []Node, id: i64) !i64 {
+    const n = ns[id]
+    switch (n.op) {
+        .num => { return n.val }
+        .neg => { return -(try eval(ns, n.l)) }
+        .add => { return (try eval(ns, n.l)) + (try eval(ns, n.r)) }
+        .sub => { return (try eval(ns, n.l)) - (try eval(ns, n.r)) }
+        .mul => { return (try eval(ns, n.l)) * (try eval(ns, n.r)) }
+        .div => {
+            const d = try eval(ns, n.r)
+            if (d == 0) {
+                return error.DivByZero
+            }
+            return (try eval(ns, n.l)) / d
+        }
+    }
+}
+
+fn run(a: Allocator, src: str) !i64 {
+    var p = Parser{ .src = src, .pos = 0, .nodes = .empty }
+    defer a.free(p.nodes)
+    const root = try p.expr(a)
+    if (p.peek() != -1) {
+        return error.Trailing
+    }
+    return try eval(p.nodes[0..], root)
+}
+
+fn main(a: Allocator, out: Io) void {
+    const inputs = [_]str{ "1 + 2 * 3", "(1 + 2) * 3", "-(4 - 10) / 2", "2 * (3", "8 / (2 - 2)", "1 + x" }
+    for (inputs) |s| {
+        const v = run(a, s) catch |e| {
+            out.print(a.concat(a.concat(s, " -> error."), @errorName(e)))
+            continue
+        }
+        out.print(a.concat(a.concat(s, " = "), a.int_str(v)))
+    }
+}
