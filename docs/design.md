@@ -6,7 +6,7 @@ English · [中文](design.zh.md)
 
 ## Overview
 
-Egg is an AI-native systems language whose core has no capabilities at all: GC, exceptions, IO and allocation are capability modules that each program declares on demand. The name says it: everything hatches from a minimal egg.
+Egg is an AI-native systems language whose core has no capabilities at all: exceptions, IO and allocation are capability modules that each program declares on demand. The name says it: everything hatches from a minimal egg.
 
 Three principles:
 
@@ -14,7 +14,7 @@ Three principles:
 2. **Capabilities are declared and checked recursively.** A module declares what it needs, and the compiler walks the call graph to confirm nothing exceeds it.
 3. **Designed for AI.** The core is small enough to fit in a model's context, and every capability ships with a machine-readable spec, examples and tests.
 
-One structural payoff: **the runtime is the restricted subset.** Go constrains its runtime with special rules such as `nosplit` and `nowritebarrier`. Egg needs none: the GC and exception machinery are capability libraries written in core code that declares no capabilities, and the compiler is an ordinary program that declares `alloc`, `gc` and `io`. The lowest layer is restricted by construction, and the compiler checks it.
+One structural payoff: **the runtime is the restricted subset.** Go constrains its runtime with special rules such as `nosplit` and `nowritebarrier`. Egg needs none: the exception machinery is a capability library written in core code that declares no capabilities, and the compiler is an ordinary program that declares `alloc` and `io`. The lowest layer is restricted by construction, and the compiler checks it.
 
 A second payoff: **the core is portable by construction**, because everything that touches an operating system lives in a capability module.
 
@@ -40,7 +40,7 @@ The core follows Zig but stays smaller: it keeps only features that need no runt
 | `[3][4]u8` | 3 rows of 4 bytes; indexed `grid[2][3]` in the same order |
 | `[]u8` | slice: pointer plus runtime length |
 | `*[4]u8` | pointer to an array of 4 bytes |
-| `?*T` | optional pointer |
+| `?T` | a `T` or `null` (`*T` can already be null, so `?*T` is not used) |
 | `!T` | a `T` or an error |
 
 Rust's `[u8; 4]` was considered and rejected: it is the only form that puts the element type in the middle, and nested arrays read inside out.
@@ -49,7 +49,8 @@ Kept out of the core on purpose:
 
 - Operator overloading and implicit conversions: mildly annoying for people, clearer for AI and reviewers
 - Closures: capturing an environment usually means allocating, so it belongs to a capability
-- Exceptions, GC, heap allocation, IO: all capability modules
+- Exceptions, heap allocation, IO: all capability modules
+- Garbage collection: not in the language at all. Memory is managed only by ownership (one owner, checked on every path), so freeing is explicit and costs nothing at run time
 
 Errors as values are in the core because they are just a return value plus a tag. Exceptions need stack unwinding, so they are not.
 
@@ -98,7 +99,6 @@ First capabilities:
 | --- | --- | --- |
 | `alloc` | heap allocation, allocator passed explicitly | v2 (strings in a program-lifetime arena; owned buffers `Buf(T)` that are freed, with ownership checking) |
 | `io` | files and standard streams, one implementation per OS | v2 (first standard output; files later) |
-| `gc` | GC-managed objects, implemented in core code | v3 |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:
@@ -106,9 +106,6 @@ Checking rules:
 1. A function may not use a capability its module did not declare (E130).
 2. The compiler infers each function's capability set along the call graph, including indirect calls, calls into other modules and generic instances: a module without `uses io` cannot print even inside a generic function instantiated with `Io`.
 3. Capability sets are not written in signatures; tooling shows them (the language server's hover does).
-4. Values crossing a capability boundary follow boundary rules; for example, a GC object passed to a non-GC module must be pinned or copied.
-
-The exact boundary rules are not settled; see Open questions.
 
 ## AI-native features
 
@@ -195,14 +192,14 @@ The C that Egg generates must be portable from day one:
 
 ## Roadmap
 
-Each phase ends at a gate that can be checked automatically. v3 is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0, v1 and v2 are done; full reflection (`@typeInfo`) moved past v1. In v2, step 1, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done. Step 2 is done too: integer types of every width with `@as`, raw pointers usable in files that `allow unsafe` (local to the file, not carried along the call graph, so an unsafe module can offer a safe API), function values, and `extern fn` declaring the capabilities the C function uses. Function values turned out not to need `allow unsafe`: taking a function as a value counts as calling it for the capability check, so a function value carries capabilities the way an `Io` value does. Step 3 added ownership: `Buf(T)`, a heap buffer with one owner, made by `a.alloc` and freed by `a.free`. The check is linear: following every path, a buffer is used only while owned and must be freed, returned or passed on before its owner goes away, so there is no use after free, no double free and no leak. It needs no lifetimes, because slices are already second-class: a borrowed slice of a buffer cannot outlive the call. Buffers first lived only in locals, parameters and results; then structs, arrays and buffers holding buffers became owned too. The fields of a struct variable are followed one by one, so `v.data` can be freed and replaced while `v` stays usable, and an `inout self` method can resize its buffer. Elements of containers are not followed: they are borrowed in place and swapped out with `@replace`/`@take`, `Buf(T).empty` is a buffer that owns nothing, and `a.free` frees everything a value holds. `defer` and `errdefer` came with it, since freeing on every error path is otherwise impractical. Strings and `a.create` stay in the program-lifetime arena.
+Each phase ends at a gate that can be checked automatically. v3 completes memory management without a GC; `raise` is the first real test of the runtime-is-the-subset design; v4 is self-hosting. v0, v1 and v2 are done; full reflection (`@typeInfo`) moved past v1. In v2, step 1, the capability check (modules, `uses`, the `Io` and `Allocator` values, E130), is done. Step 2 is done too: integer types of every width with `@as`, raw pointers usable in files that `allow unsafe` (local to the file, not carried along the call graph, so an unsafe module can offer a safe API), function values, and `extern fn` declaring the capabilities the C function uses. Function values turned out not to need `allow unsafe`: taking a function as a value counts as calling it for the capability check, so a function value carries capabilities the way an `Io` value does. Step 3 added ownership: `Buf(T)`, a heap buffer with one owner, made by `a.alloc` and freed by `a.free`. The check is linear: following every path, a buffer is used only while owned and must be freed, returned or passed on before its owner goes away, so there is no use after free, no double free and no leak. It needs no lifetimes, because slices are already second-class: a borrowed slice of a buffer cannot outlive the call. Buffers first lived only in locals, parameters and results; then structs, arrays and buffers holding buffers became owned too. The fields of a struct variable are followed one by one, so `v.data` can be freed and replaced while `v` stays usable, and an `inout self` method can resize its buffer. Elements of containers are not followed: they are borrowed in place and swapped out with `@replace`/`@take`, `Buf(T).empty` is a buffer that owns nothing, and `a.free` frees everything a value holds. `defer` and `errdefer` came with it, since freeing on every error path is otherwise impractical. Strings and `a.create` stay in the program-lifetime arena. A GC was planned as v3 and dropped on 2026-10-27: realistic programs (a growing hash map, a tree rewritten in place) work under the ownership rules, so v3 instead closes the two gaps they showed: read-only methods have to take `inout self`, and strings are never freed.
 
 | Phase | Scope | Acceptance gate |
 | --- | --- | --- |
 | v0 · Core subset ✅ | `i64`, functions, `if`, `while`, `return`; emits C for the system C compiler | `fib.egg` compiles and prints 6765 |
 | v1 · Types and comptime ✅ | `struct` with methods, `enum`, tagged unions, `str`, arrays, second-class slices, `inout`; error values; comptime generics; `@sizeOf`, `@typeName` | Generic `Pair` and error-value examples pass their tests |
 | v2 · Capability checks ✅ | modules; `alloc` and `io` capabilities; recursive check along the call graph; integer types, raw pointers, function values, `extern fn`; ownership of buffers, `defer` | Programs using undeclared capabilities are rejected |
-| v3 · GC written in core | `gc` library uses only core code | `gc` declares no capabilities and passes the capability check |
+| v3 · Memory without GC | read-only borrow parameters; owned strings that are freed like buffers | A long-running loop that builds strings stays in constant memory, and a generic map's read methods take a borrow instead of `inout self` |
 | v4 · Self-hosting | `eggc` rewritten in Egg, compiled by the previous generation | Generation 2 and 3 output is byte-identical |
 
 ## Open questions
@@ -211,8 +208,9 @@ Each phase ends at a gate that can be checked automatically. v3 is the first rea
 - [x] Syntax for capabilities in signatures: `fn f() !void with io`, or only module-level declarations with generated docs? Decided in v2: module-level `uses alloc, io`, with capability values passed explicitly; signatures carry no capability list, and tooling shows each function's set.
 - [ ] Granularity: is `io` one capability, or split into `fs`, `net` and `stdio`? v2 starts with one `io` (standard output only); revisit when files arrive.
 - [x] How is freed memory kept safe? Decided in v2: an owned `Buf(T)` checked linearly (moved, never copied; freed or passed on exactly once on every path), with `defer`/`errdefer`; freeing is never implicit. Strings stay in an arena that is never freed.
-- [ ] Rules for GC objects crossing a capability boundary: pin, copy or forbid?
-- [ ] Conservative scanning or a shadow stack with precise scanning for the GC? The latter allows a moving GC but costs something on every call.
-- [ ] Exceptions via `setjmp`/`longjmp` or a check after every call? The latter fits a shadow stack more simply.
+- [x] A GC? Decided on 2026-10-27: none. Memory is managed only by ownership.
+- [ ] How are built strings freed: an owned string type checked like `Buf(T)`, with `str` left for literals and borrows, or something else? Part of v3.
+- [ ] What does a read-only borrow parameter look like, and is it the default for `self`? Part of v3.
+- [ ] Exceptions via `setjmp`/`longjmp` or a check after every call?
 - [ ] How does comptime run in the Spinel-written compiler: interpret the AST, or generate C and run it?
 - [ ] Can users define their own capabilities, or does the first version ship only built-in ones?
