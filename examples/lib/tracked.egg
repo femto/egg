@@ -1,6 +1,6 @@
 // An owned struct with a deinit that records, through a pointer, each
 // one it ends: the log is a number whose digits are the ids, oldest
-// first.
+// first, so ids must be 0-9.
 uses alloc
 allow unsafe
 

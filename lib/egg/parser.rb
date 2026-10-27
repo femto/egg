@@ -127,7 +127,7 @@ module Egg
       params
     end
 
-    # T | m.T | Name(T, ...) | [N]T | [_]T | []T | !T | *T | fn(T, ...) R | @This()
+    # T | m.T | Name(T, ...) | [N]T | [_]T | []T | !T | ?T | *T | fn(T, ...) R | @This()
     def parse_type
       if op?("!")
         advance

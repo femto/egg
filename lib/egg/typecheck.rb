@@ -158,6 +158,8 @@ module Egg
       @this = nil
       @current = nil
       @loop_depth = 0
+      @registering = 0     # depth of register_decl calls under way
+      @elem_checks = []    # E141 checks waiting for those to finish
       @externs = []        # Sigs of extern fns, every declaration, in order
       @extern_c = {}       # C name -> Sig, to catch clashing declarations
       @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], [], program.allows || [], program.links || []) }
@@ -467,8 +469,30 @@ module Egg
       info.resource = d.owned == true
       # A type is registered on first use, maybe from another module; its
       # own errors belong to its file.
-      in_module(d.mod) { register_members(d, info) }
+      @registering += 1
+      begin
+        in_module(d.mod) { register_members(d, info) }
+      ensure
+        @registering -= 1
+      end
+      flush_elem_checks if @registering.zero?
       info
+    end
+
+    # E141 checks met while types are being registered wait until every
+    # one is done: Node { kids: Buf(Node) } resolves Buf(Node) before
+    # Node's deinit is known.
+    def flush_elem_checks
+      until @elem_checks.empty?
+        elem, what, line, col, mod = @elem_checks.shift
+        saved = @mod
+        @mod = mod
+        begin
+          resource_elem_error(elem, what, line, col)
+        ensure
+          @mod = saved
+        end
+      end
     end
 
     def register_members(d, info)
@@ -777,6 +801,10 @@ module Egg
     end
 
     def resource_elem_error(elem, what, line, col)
+      if @registering.positive?
+        @elem_checks << [elem, what, line, col, @mod]
+        return false
+      end
       r = resource_in(elem)
       return false if r.nil?
       held = r == elem ? "" : " (it holds a #{r})"
@@ -1616,12 +1644,12 @@ module Egg
     end
 
     # The number type a literal should take where `expected` is wanted
-    # (T, or the T of !T), or nil.
+    # (T, or the T of !T or ?T), or nil.
     def num_target(expected)
       return nil if expected.nil?
       return expected if num?(expected)
       info = @types[expected]
-      info&.kind == :err && num?(info.inner) ? info.inner : nil
+      %i[err opt].include?(info&.kind) && num?(info.inner) ? info.inner : nil
     end
 
     # A literal whose type comes from context: 5, -5, 1.5, .red, null.

@@ -1,11 +1,13 @@
 // ?T values: pop returns one, orelse unwraps it. A Buf(?i64) pops a ??i64,
 // so it takes two orelses: the outer one for an empty buffer, the inner
 // one for a null element. orelse return may end an index or a slice.
+// A literal takes its type from the T of a ?T.
 // expect: 4
 // expect: 1
 // expect: 7
 // expect: 10
 // expect: 2
+// expect: 3
 uses alloc, io
 
 fn show(xs: []i64, a: Allocator, out: Io) void {
@@ -28,4 +30,6 @@ fn main(a: Allocator, out: Io) void {
     out.print((a.pop(&b) orelse 7) orelse 1)
     const xs = [_]i64{ 10, 20, 30 }
     show(xs[0..], a, out)
+    const n: ?i32 = 3
+    out.print(n orelse 0)
 }
