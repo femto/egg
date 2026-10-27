@@ -1,0 +1,64 @@
+// Misusing error values, catch |e| and block fallbacks.
+uses io
+
+fn f(x: i64) !i64 {
+    if (x == 0) {
+        return error.Zero
+    }
+    return x
+}
+
+fn no_else(e: anyerror) i64 {
+    switch (e) {
+        error.Zero => { return 0 }
+    }
+    return 1
+}
+
+fn enum_arm(e: anyerror) i64 {
+    switch (e) {
+        .Zero => { return 0 }
+        else => { return 1 }
+    }
+}
+
+fn stays(x: i64) i64 {
+    const v = f(x) catch {
+        x + 1
+    }
+    return v
+}
+
+fn first(xs: []i64) ?i64 {
+    if (@len(xs) == 0) {
+        return null
+    }
+    return xs[0]
+}
+
+fn stays_too(xs: []i64) i64 {
+    const v = first(xs) orelse {
+        @len(xs)
+    }
+    return v
+}
+
+fn in_defer(out: Io) !void {
+    defer f(1) catch return
+    out.print(1)
+}
+
+fn main(out: Io) void {
+    out.print(@errorName(5))
+    const v = f(1) catch |e| e == 3
+    out.print(v)
+}
+// error: E127 @12
+// error: E127 @20
+// error: E118 @26
+// error: E113 @27
+// error: E118 @40
+// error: E113 @41
+// error: E118 @47
+// error: E103 @52
+// error: E103 @53

@@ -91,7 +91,7 @@ module Egg
   ErrorLit   = Struct.new(:name, :line, :col, :ty, :info)                # error.NotFound
   AddrOf     = Struct.new(:expr, :line, :col, :ty, :info)                # &x, for inout arguments
   Try        = Struct.new(:expr, :line, :col, :ty, :info)                # try e
-  Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info)     # e catch f
+  Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info, :capture) # e catch f, e catch |err| f; capture: [name, line, col]
   # e orelse f; f is an expression, or a Return, Break or Continue
   Orelse     = Struct.new(:expr, :fallback, :line, :col, :ty, :info)
   TypeExpr   = Struct.new(:type, :line, :col, :ty, :info)                # a type in value position: []i64

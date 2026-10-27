@@ -361,6 +361,11 @@ module Egg
         names = ["\"\""] + @checker.error_names.map { |n| c_string(n) }
         out << "static const char *const egg_error_names[] = { #{names.join(', ')} };\n"
       end
+      if @need_error_names
+        # @errorName(e): error ids index this table
+        strs = ["{ \"\", 0 }"] + @checker.error_names.map { |n| "{ #{c_string(n)}, #{n.bytesize} }" }
+        out << "static const egg_str egg_error_strs[] = { #{strs.join(', ')} };\n"
+      end
       out << "\n"
       # One prototype per C function, however many files declare it.
       @checker.externs.uniq(&:c_name).each { |sig| out << extern_prototype(sig) << ";\n" }
@@ -552,6 +557,7 @@ module Egg
       when "i64" then "int64_t"
       when "bool" then "bool"
       when "void" then "void"
+      when "anyerror" then "int32_t"
       when "str"
         @need_str = true
         "egg_str"
@@ -900,7 +906,7 @@ module Egg
         # The value first, then the defers, which may change what it came from.
         r = hoist(coerce(expr(value), value.ty, ret), ret)
         error = false
-        error = value.is_a?(ErrorLit) ? true : (value.ty.start_with?("!") ? "#{r}.err" : false) if ret.start_with?("!")
+        error = value.is_a?(ErrorLit) || value.ty == "anyerror" ? true : (value.ty.start_with?("!") ? "#{r}.err" : false) if ret.start_with?("!")
         mark(src_line) if emit_defers(0, error)
         line("return #{r};")
       end
@@ -998,7 +1004,7 @@ module Egg
       t = subject.ty
       info = @types[t]
       base = place?(subject) ? lvalue(subject) : hoist(expr(subject), t)
-      tag = info.kind == :union ? "#{base}.tag" : base
+      tag = info&.kind == :union ? "#{base}.tag" : base
       # The checker proved the arms exhaustive, so the last arm needs no
       # test; C then also sees that every path returns.
       last = stmt.arms.length - 1
@@ -1014,7 +1020,10 @@ module Egg
           end
         else
           test = arm.names.map do |n|
-            idx = info.kind == :union ? info.fields.index { |m, _| m == n } : info.members.index(n)
+            idx = if t == "anyerror" then @checker.error_names.index(n.delete_prefix("error.")) + 1
+                  elsif info.kind == :union then info.fields.index { |m, _| m == n }
+                  else info.members.index(n)
+                  end
             "#{tag} == #{idx}"
           end.join(" || ")
           if i.zero?
@@ -1171,6 +1180,7 @@ module Egg
         @indent += 1
         case fallback
         in Return | Break | Continue then gen_stmt(fallback)
+        in Block then gen_block(fallback)
         else line("#{out} = #{coerce(expr(fallback), fallback.ty, e.ty)};")
         end
         @indent -= 1
@@ -1178,24 +1188,37 @@ module Egg
         line("    #{out} = #{r}.value;")
         line("}")
         out
-      in Catch[expr: inner, fallback:]
+      in Catch[expr: inner, fallback:, capture:]
         r = hoist(expr(inner), inner.ty)
-        if e.ty == "void"
-          line("if (#{r}.err) {")
-          @indent += 1
+        out = nil
+        unless e.ty == "void"
+          out = tmp
+          line("#{c_type(e.ty)} #{out};")
+        end
+        line("if (#{r}.err) {")
+        @indent += 1
+        @locals << {}
+        unless capture.nil? || capture[0] == "_"
+          declare_local(capture[0], "anyerror")
+          line("const int32_t v_#{capture[0]} = #{r}.err;")
+        end
+        case fallback
+        in Return | Break | Continue then gen_stmt(fallback)
+        in Block then gen_block(fallback)
+        else
           fb = expr(fallback)
-          line("#{fb};") unless fb.empty?
-          @indent -= 1
+          if out.nil?
+            line("#{fb};") unless fb.empty?
+          else
+            line("#{out} = #{coerce(fb, fallback.ty, e.ty)};")
+          end
+        end
+        @locals.pop
+        @indent -= 1
+        if out.nil?
           line("}")
           return ""
         end
-        out = tmp
-        line("#{c_type(e.ty)} #{out};")
-        line("if (#{r}.err) {")
-        @indent += 1
-        fb = expr(fallback)
-        line("#{out} = #{fb};")
-        @indent -= 1
         line("} else {")
         line("    #{out} = #{r}.value;")
         line("}")
@@ -1375,6 +1398,10 @@ module Egg
         @need_str = true
         "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
       when "drop" then "((void)#{expr(a)})"
+      when "errorName"
+        @need_str = true
+        @need_error_names = true
+        "egg_error_strs[#{expr(a)}]"
       when "replace", "take"
         # The place first, left to right; the value cannot change it (E117).
         t = e.ty

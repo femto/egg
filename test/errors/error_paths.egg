@@ -1,0 +1,31 @@
+// A catch or orelse block that leaves must still give away what is owned.
+uses alloc
+
+fn f(x: i64) !i64 {
+    if (x == 0) {
+        return error.Zero
+    }
+    return x
+}
+
+fn leak(a: Allocator, x: i64) i64 {
+    const b = a.alloc(2, 0)
+    const v = f(x) catch {
+        return 0
+    }
+    a.free(b)
+    return v
+}
+
+fn main(a: Allocator) void {
+    var b = a.alloc(2, 0)
+    defer a.free(b)
+    const v = f(leak(a, 1)) catch |e| {
+        if (e == error.Zero) {
+            return
+        }
+        return
+    }
+    b[0] = v
+}
+// error: E135 @14

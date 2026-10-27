@@ -19,7 +19,7 @@ func        = "fn" , IDENT , params , type , block ;
 params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;
 param       = [ "inout" | "sink" | "comptime" ] , IDENT , ":" , type ;
 
-type        = name                                   (* i8..i64 u8..u64 usize bool str void type Io Allocator, or a declared type *)
+type        = name                                   (* i8..i64 u8..u64 usize f32 f64 bool str void type anyerror Io Allocator, or a declared type *)
             | name , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")"
                                                      (* type function instance: Pair(i64), Unit(); also Buf(T) *)
             | "[" , nl , INT , "]" , type            (* array *)
@@ -56,12 +56,13 @@ if_stmt     = "if" , "(" , expr , ")" , block , [ nl , "else" , ( if_stmt | bloc
 while_stmt  = "while" , "(" , expr , ")" , block ;
 for_stmt    = "for" , "(" , expr , ")" , "|" , IDENT , [ "," , IDENT ] , "|" , block ;
 switch_stmt = "switch" , "(" , expr , ")" , "{" , { NL } , { arm , [ "," ] , { NL } } , "}" ;
-arm         = ( "." , IDENT , { "," , "." , IDENT } | "else" ) , "=>" ,
+arm         = ( member , { "," , member } | "else" ) , "=>" ,
               [ "|" , IDENT , "|" ] , block ;
+member      = "." , IDENT | "error" , "." , IDENT ;   (* error.Name: in a switch on an anyerror *)
 return_stmt = "return" , [ expr ] ;
 
-expr        = or_expr , { "catch" , nl , or_expr | "orelse" , nl , fallback } ;
-fallback    = or_expr | "return" , [ or_expr ] | "break" | "continue" ;
+expr        = or_expr , { "catch" , [ "|" , IDENT , "|" ] , nl , fallback | "orelse" , nl , fallback } ;
+fallback    = or_expr | "return" , [ or_expr ] | "break" | "continue" | block ;
 or_expr     = and_expr , { "or" , nl , and_expr } ;
 and_expr    = cmp_expr , { "and" , nl , cmp_expr } ;
 cmp_expr    = add_expr , [ cmp_op , nl , add_expr ] ;   (* not chainable: a < b < c is E002 *)

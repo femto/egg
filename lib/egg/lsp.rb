@@ -325,12 +325,18 @@ module Egg
           walk_expr(inner)
         in Catch[expr: inner, fallback:]
           walk_expr(inner)
-          walk_expr(fallback)
+          case fallback
+          in Return[value:] then walk_expr(value) unless value.nil?
+          in Break | Continue then nil
+          in Block then walk_block(fallback)
+          else walk_expr(fallback)
+          end
         in Orelse[expr: inner, fallback:]
           walk_expr(inner)
           case fallback
           in Return[value:] then walk_expr(value) unless value.nil?
           in Break | Continue then nil
+          in Block then walk_block(fallback)
           else walk_expr(fallback)
           end
         in Unary[operand:]

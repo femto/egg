@@ -3,8 +3,8 @@
 # Types are canonical strings: "i64", "bool", "str", "void", "Point",
 # "Pair(i64)", "[3]i64", "[]i64", "!i64". `@types` maps each one to a TInfo
 # with its structure. Two pseudo types: "type" (a type used as a value,
-# compile time only) and "anyerror" (an `error.X` literal, which fits any
-# `!T`). "error" marks an expression that already produced a diagnostic,
+# compile time only) and "anyerror" (an error: an `error.X` literal, or e
+# in `catch |e|`; it fits any `!T` and may be stored and passed). "error" marks an expression that already produced a diagnostic,
 # so one mistake does not cascade into many.
 #
 # Every expression node gets `ty` (its type) and `info` (facts for the code
@@ -100,7 +100,7 @@ module Egg
     ORDER_OPS = %w[< <= > >=].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
-                      "replace" => 2, "take" => 1, "drop" => 1,
+                      "replace" => 2, "take" => 1, "drop" => 1, "errorName" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
@@ -591,7 +591,7 @@ module Egg
       case t
       when String
         return @tenv[t] if @tenv.key?(t)
-        return t if PRIMS.include?(t) || t == "type"
+        return t if PRIMS.include?(t) || t == "type" || t == "anyerror"
         if t == "Buf"
           err("E108", "Buf needs its element type: Buf(T), such as Buf(u8)", line, col)
           return "error"
@@ -671,7 +671,7 @@ module Egg
         params = t.params.map { |p| resolve_type(p, line, col) }
         ret = resolve_type(t.ret, line, col)
         return "error" if params.include?("error") || ret == "error"
-        bad = params.find { |p| p == "void" || p == "type" || p == "anyerror" }
+        bad = params.find { |p| p == "void" || p == "type" }
         return value_type_error(bad, "a function parameter", line, col) unless bad.nil?
         if ret.start_with?("[]") || ret == "type"
           err("E108", "a function type cannot return #{ret}", line, col)
@@ -704,7 +704,7 @@ module Egg
     end
 
     def storable?(t)
-      !(t == "void" || t == "type" || t == "anyerror" || t.start_with?("[]"))
+      !(t == "void" || t == "type" || t.start_with?("[]"))
     end
 
     # Buf(T): an owned buffer of T. Its elements may be owned too.
@@ -1022,9 +1022,6 @@ module Egg
         elsif ty == "type"
           err("E125", "'#{name}' would hold a type; types exist only at compile time", line, col)
           ty = "error"
-        elsif ty == "anyerror"
-          err("E115", "cannot infer the type of '#{name}'; give it a type such as !i64", line, col)
-          ty = "error"
         elsif ty.start_with?("[]")
           err("E116", "'#{name}' cannot hold a slice; slices exist only as parameters", line, col)
           ty = "error"
@@ -1111,7 +1108,7 @@ module Egg
         end
         t = check_expr(expr)
         if contains_try?(expr)
-          err("E118", "'try' and 'orelse return/break/continue' cannot be used in #{what}: leaving from there would skip the rest", line, col)
+          err("E118", "'try' and 'orelse/catch return/break/continue' cannot be used in #{what}: leaving from there would skip the rest", line, col)
         elsif t != "void" && t != "error"
           err("E113", "#{what} runs an action, which must be void; found #{t}", line, col)
         end
@@ -1130,6 +1127,7 @@ module Egg
     # switch over an enum or a union: every member handled once, or an else.
     def check_switch(stmt, subject, arms, line, col)
       t = check_expr(subject)
+      return check_error_switch(stmt, arms, line, col) if t == "anyerror"
       info = @types[t]
       if t != "error" && (info.nil? || (info.kind != :enum && info.kind != :union))
         err("E127", "switch needs an enum or a union(enum), found #{t}", subject.line, subject.col)
@@ -1148,7 +1146,9 @@ module Egg
           has_else = true
         elsif ok
           arm.names.each do |n|
-            if !members.include?(n)
+            if n.start_with?("error.")
+              err("E127", "#{n} is an error, but this switch is on a #{t}", arm.line, arm.col)
+            elsif !members.include?(n)
               err("E122", "#{t} has no member '#{n}'", arm.line, arm.col)
             elsif seen[n]
               err("E127", "'.#{n}' is handled twice", arm.line, arm.col)
@@ -1186,6 +1186,38 @@ module Egg
       end
       stmt_info = { kind: info.kind, members: members }
       stmt.subject.info[:switch] = stmt_info
+    end
+
+    # switch over an error (e in catch |e|): arms name errors; since error
+    # names are open, an else is required.
+    def check_error_switch(stmt, arms, line, col)
+      seen = {}
+      has_else = false
+      arms.each do |arm|
+        if arm.names.nil?
+          err("E127", "switch has more than one else", arm.line, arm.col) if has_else
+          err("E127", "else must be the last arm of a switch", arm.line, arm.col) unless arm.equal?(arms.last)
+          has_else = true
+        else
+          arm.names.each do |n|
+            if !n.start_with?("error.")
+              err("E127", "a switch on an error has arms such as error.#{n}, not .#{n}", arm.line, arm.col)
+            elsif seen[n]
+              err("E127", "'#{n}' is handled twice", arm.line, arm.col)
+            else
+              error_id(n.delete_prefix("error."))
+            end
+            seen[n] = true
+          end
+        end
+        err("E127", "an error has no payload to capture", arm.line, arm.col) unless arm.capture.nil?
+        @scopes << {}
+        check_block(arm.body)
+        close_scope(@scopes.pop)
+      end
+      err("E127", "a switch on an error needs an else: any error name may reach it", line, col) unless has_else
+      stmt.subject.info ||= {}
+      stmt.subject.info[:switch] = { kind: :error }
     end
 
     def elem_type(t)
@@ -1451,35 +1483,36 @@ module Egg
           err("E118", "'try' can only be used in a function that returns !T; '#{@current.func.name}' returns #{@current.ret}", line, col)
         end
         @types[t].inner
-      in Catch[expr:, fallback:, line:, col:]
+      in Catch[expr:, fallback:, line:, col:, capture:]
         t = check_expr(expr)
-        return "error" if t == "error"
-        unless t.start_with?("!")
-          err("E118", "'catch' needs an error union (!T), found #{t}", line, col)
-          check_expr(fallback)
-          return "error"
+        ok = t != "error" && t.start_with?("!")
+        err("E118", "'catch' needs an error union (!T), found #{t}", line, col) unless ok || t == "error"
+        inner = ok ? @types[t].inner : nil
+        # The error, named by |e|, is in scope only in the fallback.
+        @scopes << {}
+        unless capture.nil? || capture[0] == "_"
+          declare(capture[0], VarInfo.new("anyerror", false, false, false, capture[1], capture[2], false, false))
         end
-        inner = @types[t].inner
-        if inner == "void"
+        if inner == "void" && !fallback_jump?(fallback) && !fallback.is_a?(Block)
           # `f() catch g()`: on error, run g(), which must be void.
           ft = check_expr(fallback)
           if ft != "void" && ft != "error"
             err("E118", "the fallback of a !void catch is an action and must be void, found #{ft}", fallback.line, fallback.col)
           end
-          return "void"
+        else
+          check_orelse_fallback(fallback, inner, "catch", line, col)
         end
-        ft = check_expr(fallback, inner)
-        expect_type(inner, ft, fallback)
-        inner
+        close_scope(@scopes.pop)
+        ok ? inner : "error"
       in Orelse[expr:, fallback:, line:, col:]
         t = check_expr(expr)
         unless @types[t]&.kind == :opt
           err("E118", "'orelse' needs an optional (?T), found #{t}", line, col) unless t == "error"
-          check_orelse_fallback(fallback, nil)
+          check_orelse_fallback(fallback, nil, "orelse", line, col)
           return "error"
         end
         inner = @types[t].inner
-        check_orelse_fallback(fallback, inner)
+        check_orelse_fallback(fallback, inner, "orelse", line, col)
         inner
       in AddrOf[expr: place, line:, col:]
         unless unsafe?
@@ -1627,7 +1660,7 @@ module Egg
     end
 
     def comparable?(t)
-      %w[bool str].include?(t) || num?(t) || [:enum, :ptr, :fn].include?(@types[t]&.kind)
+      %w[bool str anyerror].include?(t) || num?(t) || [:enum, :ptr, :fn].include?(@types[t]&.kind)
     end
 
     def int?(t)
@@ -2163,7 +2196,7 @@ module Egg
       in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
       in AddrOf[expr:] then mentions_path?(expr, path)
       in Try[expr:] then holds?(expr, path)
-      in Catch[expr:, fallback:] then holds?(expr, path) || holds?(fallback, path)
+      in Catch[expr:, fallback:] then holds?(expr, path) || (!(fb = fallback_expr(fallback)).nil? && holds?(fb, path))
       in Orelse[expr:, fallback:] then holds?(expr, path) || (!(fb = fallback_expr(fallback)).nil? && holds?(fb, path))
       else false
       end
@@ -2205,7 +2238,7 @@ module Egg
       in AddrOf[expr:] then collect_paths(expr, out)
       in Deref[expr:] then collect_paths(expr, out)
       in Try[expr:] then collect_paths(expr, out)
-      in Catch[expr:, fallback:] then [expr, fallback].each { |x| collect_paths(x, out) }
+      in Catch[expr:, fallback:] then [expr, fallback_expr(fallback)].compact.each { |x| collect_paths(x, out) }
       in Orelse[expr:, fallback:] then [expr, fallback_expr(fallback)].compact.each { |x| collect_paths(x, out) }
       else nil
       end
@@ -2236,7 +2269,7 @@ module Egg
       in AddrOf[expr:] then mentions?(expr, name)
       in Deref[expr:] then mentions?(expr, name)
       in Try[expr:] then mentions?(expr, name)
-      in Catch[expr:, fallback:] then mentions?(expr, name) || mentions?(fallback, name)
+      in Catch[expr:, fallback:] then mentions?(expr, name) || (!(fb = fallback_expr(fallback)).nil? && mentions?(fb, name))
       in Orelse[expr:, fallback:] then mentions?(expr, name) || (!(fb = fallback_expr(fallback)).nil? && mentions?(fb, name))
       else false
       end
@@ -2259,6 +2292,9 @@ module Egg
       in SliceExpr[obj:, lo:, hi:] then contains_try?(obj) || contains_try?(lo) || (!hi.nil? && contains_try?(hi))
       in StructLit[fields:] then fields.any? { |f| contains_try?(f[1]) }
       in ArrayLit[items:] then items.any? { |i| contains_try?(i) }
+      in Catch[expr:, fallback: Return | Break | Continue] then true
+      in Catch[expr:, fallback: Block => b] then contains_try?(expr) || block_jumps?(b)
+      in Orelse[expr:, fallback: Block => b] then contains_try?(expr) || block_jumps?(b)
       in Catch[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
       in Orelse[expr:, fallback: Return | Break | Continue] then true
       in Orelse[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
@@ -2267,20 +2303,87 @@ module Egg
     end
 
     # The fallback of orelse: a value of the inner type, or a way out.
-    def check_orelse_fallback(f, inner)
+    def check_orelse_fallback(f, inner, what = "orelse", line = nil, col = nil)
       case f
       in Return | Break | Continue then check_stmt(f)
+      in Block
+        check_block(f)
+        unless inner == "void" || block_leaves?(f)
+          err("E118", "the block after #{what} gives no value, so it must leave with return, break or continue (to give a value, call a function: #{what == 'catch' ? 'catch |e| f(e)' : 'orelse f()'})", line, col)
+        end
       else
         ft = check_expr(f, inner)
         expect_type(inner, ft, f) unless inner.nil?
       end
     end
 
-    # The expression in an orelse fallback (a return's value), or nil.
+    def fallback_jump?(f)
+      f.is_a?(Return) || f.is_a?(Break) || f.is_a?(Continue)
+    end
+
+    # Does every path through the block leave it by return, break or
+    # continue?
+    def block_leaves?(block)
+      block.stmts.any? { |s| stmt_leaves?(s) }
+    end
+
+    def stmt_leaves?(stmt)
+      case stmt
+      in Return | Break | Continue then true
+      in Switch[arms:] then arms.all? { |a| block_leaves?(a.body) }
+      in If[then_body:, else_body:]
+        case else_body
+        in nil then false
+        in Block then block_leaves?(then_body) && block_leaves?(else_body)
+        in If then block_leaves?(then_body) && stmt_leaves?(else_body)
+        end
+      else false
+      end
+    end
+
+    # Can this block leave the code around it (return, break, continue or
+    # try anywhere in it)? Not allowed in a defer.
+    def block_jumps?(block)
+      block.stmts.any? do |s|
+        case s
+        in Return | Break | Continue then true
+        in If[cond:, then_body:, else_body:]
+          contains_try?(cond) || block_jumps?(then_body) || (!else_body.nil? && block_jumps?(else_body.is_a?(Block) ? else_body : Block.new([else_body])))
+        in While[cond:, body:] then contains_try?(cond) || block_has_return?(body)
+        in For[iter:, body:] then contains_try?(iter) || block_has_return?(body)
+        in Switch[subject:, arms:] then contains_try?(subject) || arms.any? { |a| block_jumps?(a.body) }
+        in VarDecl[value:] then contains_try?(value)
+        in Assign[value:] then contains_try?(value)
+        in ExprStmt[expr:] then contains_try?(expr)
+        else false
+        end
+      end
+    end
+
+    # Inside a loop's own body break and continue stay inside it.
+    def block_has_return?(block)
+      block.stmts.any? do |s|
+        case s
+        in Return then true
+        in If[then_body:, else_body:] then block_has_return?(then_body) || (!else_body.nil? && block_has_return?(else_body.is_a?(Block) ? else_body : Block.new([else_body])))
+        in While[body:] then block_has_return?(body)
+        in For[body:] then block_has_return?(body)
+        in Switch[arms:] then arms.any? { |a| block_has_return?(a.body) }
+        in VarDecl[value:] then contains_try?(value)
+        in Assign[value:] then contains_try?(value)
+        in ExprStmt[expr:] then contains_try?(expr)
+        else false
+        end
+      end
+    end
+
+    # The expression in an orelse fallback (a return's value), or nil. A
+    # block in a value context always leaves, so the call it is in never
+    # runs after it.
     def fallback_expr(f)
       case f
       in Return[value:] then value
-      in Break | Continue then nil
+      in Break | Continue | Block then nil
       else f
       end
     end
@@ -2470,6 +2573,10 @@ module Egg
         "i64"
       when "typeName"
         e.info[:type] = type_arg(a)
+        "str"
+      when "errorName"
+        t = check_expr(a)
+        err("E103", "@errorName needs an anyerror (error.X, or e in catch |e|), found #{t}", a.line, a.col) unless t == "anyerror" || t == "error"
         "str"
       when "splat"
         info = expected.nil? ? nil : @types[expected]
