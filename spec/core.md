@@ -1201,7 +1201,10 @@ tells the C compiler where to look.
 
 `Buf(T)` is a buffer of T on the heap, with a length fixed until it is
 resized. `a.alloc(n, v)` makes one holding n copies of v (T is v's type,
-or the element type the context expects); `a.free(b)` frees it;
+or the element type the context expects); `a.free(b)` frees it (E103
+for a value that owns nothing, except in a generic instance, where
+freeing a storable value that owns nothing does nothing, so one generic container
+serves owned and plain values alike);
 `a.resize(&b, n, v)` changes its length to n, filling new elements with v.
 A negative length panics with `negative buffer length`. `a.push(&b, v)`
 moves v in at the end, and `a.pop(&b)` moves the last element out as a

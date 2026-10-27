@@ -1294,7 +1294,13 @@ module Egg
              when "Allocator.free"
                t = args[0].ty
                info = @types[t]
-               info.kind == :buf && !@checker.owned?(info.elem) ? "free(#{codes[0]}.ptr)" : "#{drop(t)}(#{codes[0]})"
+               if !@checker.owned?(t)
+                 "((void)#{codes[0]})" # a generic T that owns nothing
+               elsif info.kind == :buf && !@checker.owned?(info.elem)
+                 "free(#{codes[0]}.ptr)"
+               else
+                 "#{drop(t)}(#{codes[0]})"
+               end
              when "Allocator.resize"
                # new elements, if it grows, are copies of v
                buf = args[0].ty
