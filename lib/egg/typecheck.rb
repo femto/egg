@@ -2375,10 +2375,11 @@ module Egg
       block.stmts.any? do |s|
         case s
         in Return then true
-        in If[then_body:, else_body:] then block_has_return?(then_body) || (!else_body.nil? && block_has_return?(else_body.is_a?(Block) ? else_body : Block.new([else_body])))
-        in While[body:] then block_has_return?(body)
-        in For[body:] then block_has_return?(body)
-        in Switch[arms:] then arms.any? { |a| block_has_return?(a.body) }
+        in If[cond:, then_body:, else_body:]
+          contains_try?(cond) || block_has_return?(then_body) || (!else_body.nil? && block_has_return?(else_body.is_a?(Block) ? else_body : Block.new([else_body])))
+        in While[cond:, body:] then contains_try?(cond) || block_has_return?(body)
+        in For[iter:, body:] then contains_try?(iter) || block_has_return?(body)
+        in Switch[subject:, arms:] then contains_try?(subject) || arms.any? { |a| block_has_return?(a.body) }
         in VarDecl[value:] then contains_try?(value)
         in Assign[value:] then contains_try?(value)
         in ExprStmt[expr:] then contains_try?(expr)

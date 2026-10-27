@@ -734,7 +734,7 @@ error (names are global, and need no declaration).
 - `e catch f` unwraps `e: !T`, using `f: T` when `e` is an error. For a
   `!void`, the fallback is an action of type `void`: `check() catch log()`.
 - `e catch |err| f` also names the error, an `anyerror`, for the fallback
-  only. The fallback of a catch may instead leave (`catch return`,
+  only; `|_|` discards it, and an `err` the fallback never uses is E110. The fallback of a catch may instead leave (`catch return`,
   `catch |err| return err`, `catch break`, `catch continue`), or be a
   block. A block for a `!void` runs and then the code after it; for a `!T`
   there is no value it could give, so it must leave with `return`,

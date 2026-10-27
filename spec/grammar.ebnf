@@ -61,7 +61,7 @@ arm         = ( member , { "," , member } | "else" ) , "=>" ,
 member      = "." , IDENT | "error" , "." , IDENT ;   (* error.Name: in a switch on an anyerror *)
 return_stmt = "return" , [ expr ] ;
 
-expr        = or_expr , { "catch" , [ "|" , IDENT , "|" ] , nl , fallback | "orelse" , nl , fallback } ;
+expr        = or_expr , { "catch" , nl , [ "|" , IDENT , "|" , nl ] , fallback | "orelse" , nl , fallback } ;
 fallback    = or_expr | "return" , [ or_expr ] | "break" | "continue" | block ;
 or_expr     = and_expr , { "or" , nl , and_expr } ;
 and_expr    = cmp_expr , { "and" , nl , cmp_expr } ;

@@ -472,6 +472,7 @@ module Egg
             advance
             c = expect(:ident, "error name")
             expect_op("|")
+            skip_nl
             capture = [c.text, c.line, c.col]
           end
           lhs = Catch.new(lhs, parse_orelse_fallback, t.line, t.col, nil, nil, capture)

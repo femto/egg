@@ -323,14 +323,21 @@ module Egg
           walk_expr(inner)
         in Try[expr: inner]
           walk_expr(inner)
-        in Catch[expr: inner, fallback:]
+        in Catch[expr: inner, fallback:, capture:]
           walk_expr(inner)
+          # |e| is in scope only in the fallback.
+          @scopes << {}
+          unless capture.nil? || capture[0] == "_"
+            name, l, c = capture
+            declare(Decl.new(:local, name, l, c, "#{name}: anyerror  (error)", nil, nil))
+          end
           case fallback
           in Return[value:] then walk_expr(value) unless value.nil?
           in Break | Continue then nil
           in Block then walk_block(fallback)
           else walk_expr(fallback)
           end
+          @scopes.pop
         in Orelse[expr: inner, fallback:]
           walk_expr(inner)
           case fallback
