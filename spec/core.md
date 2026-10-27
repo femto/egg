@@ -1254,7 +1254,10 @@ tells the C compiler where to look.
 
 `Buf(T)` is a buffer of T on the heap, with a length fixed until it is
 resized. `a.alloc(n, v)` makes one holding n copies of v (T is v's type,
-or the element type the context expects); `a.free(b)` frees it;
+or the element type the context expects); `a.free(b)` frees it (E103
+for a value that owns nothing, except in a generic instance, where
+freeing a storable value that owns nothing does nothing, so one generic container
+serves owned and plain values alike);
 `a.resize(&b, n, v)` changes its length to n, filling new elements with v.
 A negative length panics with `negative buffer length`. `a.push(&b, v)`
 moves v in at the end, and `a.pop(&b)` moves the last element out as a
@@ -1616,6 +1619,84 @@ fn main(out: Io, a: Allocator) void {
         a.free(b)            // freed on one path only
     }
     out.print(1)
+}
+```
+
+**Pools instead of an arena.** There is no arena allocator that frees
+everything at once: nothing could stop a value allocated from it from
+being used after the arena is gone. Data that is built together and
+dropped together goes in a **pool** instead: a `Buf` of plain records
+that refer to each other by index. The pool is one owned value, so one
+`a.free` releases all of it. An index is a plain `i64`: one from another
+pool, or one left over after a `pop`, reads the wrong record or panics
+with `index out of bounds`, but never touches freed memory (a wrapper such
+as `const NodeId = struct { i: i64 }` keeps indices of different pools
+apart). A record that holds its own `Buf` is freed record by record; to
+keep it at one `free` per pool, put variable-length parts in a shared pool
+too and keep a start and a count, which suits data built once and then
+read, such as a syntax tree:
+
+```egg
+// expect: 0 1 3 4 2 5
+// expect: 20
+uses alloc, io
+
+const Op = enum { num, add, mul }
+
+// A node's children are kids[first_kid .. first_kid + kid_count].
+const Node = struct { op: Op, val: i64, first_kid: i64, kid_count: i64 }
+
+const Tree = struct {
+    nodes: Buf(Node)
+    kids: Buf(i64)
+
+    fn num(inout self: Tree, a: Allocator, v: i64) i64 {
+        a.push(&self.nodes, Node{ .op = .num, .val = v, .first_kid = 0, .kid_count = 0 })
+        return @len(self.nodes) - 1
+    }
+
+    // l and r are built first, so their ids go to the end of kids.
+    fn bin(inout self: Tree, a: Allocator, op: Op, l: i64, r: i64) i64 {
+        const first = @len(self.kids)
+        a.push(&self.kids, l)
+        a.push(&self.kids, r)
+        a.push(&self.nodes, Node{ .op = op, .val = 0, .first_kid = first, .kid_count = 2 })
+        return @len(self.nodes) - 1
+    }
+
+    fn eval(self: Tree, id: i64) i64 {
+        const n = self.nodes[id]
+        if (n.op == .num) {
+            return n.val
+        }
+        var acc: i64 = 0
+        if (n.op == .mul) {
+            acc = 1
+        }
+        for (self.kids[n.first_kid..n.first_kid + n.kid_count]) |k| {
+            if (n.op == .add) {
+                acc = acc + self.eval(k)
+            } else {
+                acc = acc * self.eval(k)
+            }
+        }
+        return acc
+    }
+}
+
+fn main(out: Io, a: Allocator) void {
+    var t = Tree{ .nodes = .empty, .kids = .empty }
+    defer a.free(t)                  // the whole tree: two buffers
+    // (2 + 3) * (4 * 1)
+    const sum = t.bin(a, .add, t.num(a, 2), t.num(a, 3))
+    const prod = t.bin(a, .mul, t.num(a, 4), t.num(a, 1))
+    const root = t.bin(a, .mul, sum, prod)
+    var ids = ""
+    for (t.kids) |k| {
+        ids = a.concat(ids, a.concat(a.int_str(k), " "))
+    }
+    out.print(ids[0..@len(ids) - 1])
+    out.print(t.eval(root))
 }
 ```
 

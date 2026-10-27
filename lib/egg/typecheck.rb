@@ -687,6 +687,12 @@ module Egg
       end
     end
 
+    # Is the function being checked an instance of a generic one (or a
+    # method of a type function's struct), where T may be any type?
+    def generic_instance?
+      !@current.nil? && !@current.tenv.nil? && !@current.tenv.empty?
+    end
+
     # ?T: a T or null.
     def opt_type(inner)
       canon = "?#{inner}"
@@ -1969,7 +1975,11 @@ module Egg
           ret = buf_type([at], a.line, a.col) if name == "alloc"
         elsif pt == "buffer"
           at = check_expr(a)
-          if at != "error" && !owned?(at)
+          if at != "error" && !owned?(at) && generic_instance? && storable?(at)
+            # In a generic instance T may or may not own something: freeing
+            # a T that owns nothing does nothing.
+            nil
+          elsif at != "error" && !owned?(at)
             err("E103", "'#{name}' frees a Buf, or a struct or array holding buffers; found #{at}", a.line, a.col)
           elsif at != "error" && !(r = resource_in(at)).nil?
             held = r == at ? "" : ", which holds a #{r}"
