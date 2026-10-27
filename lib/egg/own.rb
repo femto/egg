@@ -85,6 +85,9 @@ module Egg
     end
 
     def declare(name, kind, line, col, t)
+      # An earlier variable of this name (in a block now left) may have
+      # had another type.
+      @res.delete_if { |k, _| root(k) == name }
       @frames.last.names << name
       @decl[name] = [kind, line, col]
       leaves(name, t).each { |l| @st[l] = [:owned, nil] } unless @st.nil?
@@ -429,8 +432,7 @@ module Egg
         next unless tracked?(n)
         was = entry[n][0] == :owned ? (@res.key?(n) ? "is open" : "owns a buffer") : "has been moved"
         is = now[n][0] == :owned ? (@res.key?(n) ? "is open" : "owns one") : "has been moved"
-        n = shown(n)
-        err("E134", "'#{n}' #{was} when the loop starts but #{is} #{where}; each iteration must leave it as it found it", line, col)
+        err("E134", "'#{shown(n)}' #{was} when the loop starts but #{is} #{where}; each iteration must leave it as it found it", line, col)
         entry[n] = [:poison, nil]
       end
     end

@@ -1094,6 +1094,9 @@ module Egg
         e.ty = info.type
       in Field[obj:, name:, line:, col:]
         t = check_lvalue(obj, verb)
+        if @types[t]&.resource && !own_type?(t)
+          err("E142", "#{t} is an owned struct, so only its own file can change its fields", line, col)
+        end
         e.ty = field_type(t, name, line, col)
         e.info = {}
         e.ty
@@ -2156,6 +2159,7 @@ module Egg
       elem = resolve_type(type.elem, line, col)
       return check_all_error(items) if elem == "error"
       return check_all_error(items) if value_type_error_if(elem, line, col)
+      return check_all_error(items) if resource_elem_error(elem, "an array element", line, col)
       if owned_or_err?(elem)
         owned_place_error(elem, "an array element", line, col)
         return check_all_error(items)

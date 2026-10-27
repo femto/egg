@@ -1,0 +1,21 @@
+// A name reused in a sibling block for a plain owned struct is not taken
+// for the owned struct it named before.
+// expect: -1
+// expect: 3
+uses alloc, io
+
+const conn = @import("lib/conn.egg")
+
+const Plain = struct { data: Buf(i64) }
+
+fn main(out: Io, a: Allocator) void {
+    if (true) {
+        const c = conn.open(1)
+        c.close(out)
+    }
+    if (true) {
+        const c = Plain{ .data = a.alloc(3, 0) }
+        out.print(@len(c.data))
+        a.free(c.data)
+    }
+}

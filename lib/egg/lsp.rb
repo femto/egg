@@ -97,7 +97,7 @@ module Egg
           name_tok = @tokens[i - 2]
           close = closing_brace(i)
           decl = Decl.new(td.kind, td.name, name_tok.line, name_tok.col,
-                          "const #{td.name} = #{td.kind}", close.line, close.col + 1)
+                          "const #{td.name} = #{td.owned ? 'owned ' : ''}#{td.kind}", close.line, close.col + 1)
           @funcs << [decl, name_tok.line, name_tok.col]
           @types[td.name] ||= decl
           ref(decl.line, decl.col, decl)
