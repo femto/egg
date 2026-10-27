@@ -140,9 +140,10 @@ v2:
   path), and only its own file can build one or end one (`@drop(v)`), so
   callers release it only through its API (`db.close()`). With a
   `fn deinit(self: Db) void`, `a.free` ends ones held in a `Buf`, an
-  array or a struct, so a pool is `Buf(Db)` filled with `a.push`
+  array or a struct, so a pool is `Buf(Db)` filled with `a.push(&pool, db)`
 - Optionals `?T`: `null` or a T, unwrapped with `orelse` (a value, or
-  `orelse return` / `break` / `continue`); `a.pop(&b)` returns one
+  `orelse return` / `break` / `continue`); `a.pop(&b)` returns a `?T`,
+  `null` when b is empty
 
 From v1:
 

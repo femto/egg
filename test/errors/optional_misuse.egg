@@ -37,6 +37,16 @@ fn print_opt(out: Io, x: ?i64) void {
     out.print(x)
 }
 
+const Holder = struct {
+    b: Buf(i64)
+}
+
+fn push_struct(a: Allocator) void {
+    var h = Holder{ .b = .empty }
+    a.push(&h, 1)
+    a.free(h)
+}
+
 fn main() void {
 }
 // error: E108 @4
@@ -48,3 +58,4 @@ fn main() void {
 // error: E110 @26
 // error: E113 @32
 // error: E103 @37
+// error: E103 @46

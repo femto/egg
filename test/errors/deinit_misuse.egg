@@ -33,8 +33,14 @@ fn copied_here(a: Allocator) void {
     a.free(b)
 }
 
+fn splatted() void {
+    const xs: [2]Own = @splat(Own{ .data = .empty })
+    _ = xs
+}
+
 fn main() void {
 }
 // error: E143 @10
 // error: E140 @18
 // error: E140 @32
+// error: E140 @37

@@ -469,7 +469,7 @@ module Egg
       t = cur
       if kw?("return")
         advance
-        value = (at?(:nl) || op?("}") || op?(")") || op?(",")) ? nil : parse_or
+        value = (at?(:nl) || op?("}") || op?(")") || op?("]") || op?(",") || op?("..")) ? nil : parse_or
         Return.new(value, t.line, t.col)
       elsif kw?("break")
         advance

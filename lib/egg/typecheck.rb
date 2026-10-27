@@ -1913,8 +1913,8 @@ module Egg
           mark_root_used(a.expr)
           a.ty = at
           return "error" if at == "error"
-          unless owned?(at)
-            err("E103", "'#{name}' resizes a Buf, found #{at}", a.line, a.col)
+          unless @types[at]&.kind == :buf
+            err("E103", "'#{name}' changes the length of a Buf, found #{at}", a.line, a.col)
             return "error"
           end
           elem = @types[at].elem

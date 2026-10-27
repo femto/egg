@@ -1302,7 +1302,7 @@ module Egg
                p = tmp
                line("#{c_type(buf)} *#{p} = #{codes[0]};")
                n = hoist(codes[1], "i64")
-               v = hoist(codes[2], elem)
+               v = hoist(coerce(codes[2], args[2].ty, elem), elem)
                if @checker.owned?(elem)
                  # Elements cut off when it shrinks are freed first.
                  i = tmp
@@ -1319,7 +1319,7 @@ module Egg
                elem = @types[buf].elem
                p = tmp
                line("#{c_type(buf)} *#{p} = #{codes[0]};")
-               v = hoist(codes[1], elem)
+               v = hoist(coerce(codes[1], args[1].ty, elem), elem)
                line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{p}->len + 1, sizeof(#{c_type(elem)}));")
                line("#{p}->ptr[#{p}->len] = #{v};")
                line("#{p}->len++;")

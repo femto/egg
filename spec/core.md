@@ -1201,7 +1201,9 @@ or the element type the context expects); `a.free(b)` frees it;
 A negative length panics with `negative buffer length`. `a.push(&b, v)`
 moves v in at the end, and `a.pop(&b)` moves the last element out as a
 `?T` (`null` when b is empty); a pushed value is not copied, so it may be
-an owned one.
+an owned one. A `Buf(?U)` pops a `??U`, unwrapped with two orelses, the
+outer one for an empty buffer: `(a.pop(&b) orelse 0) orelse -1`. These
+three work only on a `Buf` (E103).
 
 A buffer is used like an array: `b[i]` (bounds-checked; `b[i] = v` needs
 a `var` or an `inout` parameter), `@len(b)`, `for (b)`, and `b[lo..hi]`,
@@ -1290,8 +1292,8 @@ with a deinit may an owned struct, or something holding one, be freed
 with `a.free` or be an element of an array or a `Buf` (E141). Neither
 `a.alloc`, `a.resize` nor `@splat` can copy one into elements (E140):
 fill a `Buf` with `a.push`. A deinit is never called on its own: a local
-must still be ended explicitly (E135), with `x.deinit()` or any other
-method that takes it.
+must still be ended explicitly (E135), with `x.deinit()` (`x.deinit(a)`
+for the form that takes an allocator) or any other method that takes it.
 
 A struct holding an owned struct is owned, and is followed field by
 field as above.
