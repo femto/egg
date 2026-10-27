@@ -1,0 +1,153 @@
+// Shortest paths with Dijkstra's algorithm: a generic binary heap Heap(T)
+// ordered by a function value, and a graph in CSR form (node v's edges
+// are to[start[v] .. start[v + 1]]), all in owned buffers. Weights must
+// not be negative; build rejects them.
+// expect: 0: 0
+// expect: 1: 3
+// expect: 2: 1
+// expect: 3: 4
+// expect: 4: 7
+// expect: NegativeWeight
+uses alloc, io
+
+fn Heap(comptime T: type) type {
+    return struct {
+        items: Buf(T)
+        less: fn(T, T) bool
+
+        fn push(inout self: @This(), a: Allocator, x: T) void {
+            a.push(&self.items, x)
+            var i = @len(self.items) - 1
+            while (i > 0) {
+                const p = (i - 1) / 2
+                if (!self.less(self.items[i], self.items[p])) {
+                    break
+                }
+                const t = self.items[i]
+                self.items[i] = self.items[p]
+                self.items[p] = t
+                i = p
+            }
+        }
+
+        fn pop(inout self: @This(), a: Allocator) ?T {
+            const last = a.pop(&self.items) orelse return null
+            if (@len(self.items) == 0) {
+                return last
+            }
+            const top = self.items[0]
+            self.items[0] = last
+            var i: i64 = 0
+            while (true) {
+                const l = 2 * i + 1
+                const r = l + 1
+                var m = i
+                if (l < @len(self.items) and self.less(self.items[l], self.items[m])) {
+                    m = l
+                }
+                if (r < @len(self.items) and self.less(self.items[r], self.items[m])) {
+                    m = r
+                }
+                if (m == i) {
+                    break
+                }
+                const t = self.items[i]
+                self.items[i] = self.items[m]
+                self.items[m] = t
+                i = m
+            }
+            return top
+        }
+    }
+}
+
+const Item = struct { dist: i64, node: i64 }
+
+fn closer(x: Item, y: Item) bool {
+    return x.dist < y.dist
+}
+
+// Edges in CSR form: node v's edges are to[start[v] .. start[v + 1]].
+const Graph = struct {
+    start: Buf(i64)
+    to: Buf(i64)
+    w: Buf(i64)
+}
+
+// edges: triples (from, to, weight). Dijkstra needs weights >= 0, so a
+// negative one is error.NegativeWeight.
+fn build(a: Allocator, n: i64, edges: []i64) !Graph {
+    var k: i64 = 2
+    while (k < @len(edges)) {
+        if (edges[k] < 0) {
+            return error.NegativeWeight
+        }
+        k = k + 3
+    }
+    var g = Graph{ .start = a.alloc(n + 1, 0), .to = .empty, .w = .empty }
+    var i: i64 = 0
+    while (i < @len(edges)) {
+        g.start[edges[i] + 1] = g.start[edges[i] + 1] + 1
+        i = i + 3
+    }
+    var v: i64 = 0
+    while (v < n) {
+        g.start[v + 1] = g.start[v + 1] + g.start[v]
+        v = v + 1
+    }
+    a.resize(&g.to, @len(edges) / 3, 0)
+    a.resize(&g.w, @len(edges) / 3, 0)
+    var fill = a.alloc(n, 0)
+    defer a.free(fill)
+    i = 0
+    while (i < @len(edges)) {
+        const from = edges[i]
+        const slot = g.start[from] + fill[from]
+        g.to[slot] = edges[i + 1]
+        g.w[slot] = edges[i + 2]
+        fill[from] = fill[from] + 1
+        i = i + 3
+    }
+    return g
+}
+
+fn shortest(a: Allocator, g: Graph, src: i64) Buf(i64) {
+    const n = @len(g.start) - 1
+    var dist = a.alloc(n, -1)
+    var h = Heap(Item){ .items = .empty, .less = closer }
+    defer a.free(h.items)
+    h.push(a, Item{ .dist = 0, .node = src })
+    while (true) {
+        const it = h.pop(a) orelse break
+        if (dist[it.node] != -1) {
+            continue
+        }
+        dist[it.node] = it.dist
+        for (g.to[g.start[it.node]..g.start[it.node + 1]]) |t, k| {
+            if (dist[t] == -1) {
+                h.push(a, Item{ .dist = it.dist + g.w[g.start[it.node] + k], .node = t })
+            }
+        }
+    }
+    return dist
+}
+
+fn main(a: Allocator, out: Io) void {
+    const edges = [_]i64{ 0, 1, 4, 0, 2, 1, 2, 1, 2, 1, 3, 1, 2, 3, 5, 3, 4, 3 }
+    const g = build(a, 5, edges[0..]) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    defer a.free(g)
+    const d = shortest(a, g, 0)
+    defer a.free(d)
+    for (d) |x, v| {
+        out.print(a.concat(a.concat(a.int_str(v), ": "), a.int_str(x)))
+    }
+    const neg = [_]i64{ 0, 1, -2 }
+    const bad = build(a, 2, neg[0..]) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    a.free(bad)
+}

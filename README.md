@@ -208,6 +208,9 @@ spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
 examples/              programs with `// expect:` / `// panic:` / `// fails:` lines
                        (examples/lib/: modules they import)
+                       (examples/complex/: larger programs: a parser, Dijkstra,
+                       a bytecode VM, a CSV report, grouping, a tree rewrite,
+                       resources closed on error paths)
 test/errors/           programs that must fail with `// error: CODE @LINE`
 test/run.rb            test runner, no gems
 ```

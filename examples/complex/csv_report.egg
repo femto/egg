@@ -1,0 +1,130 @@
+// A small report from CSV text: split lines and fields (slices of the
+// text), parse numbers with errors you can name, sort a Buf of records
+// with a generic insertion sort and a comparison function, and total by
+// department.
+// expect: line 4: NotANumber
+// expect: line 6: Overflow
+// expect: cy 150
+// expect: ann 120
+// expect: eve 110
+// expect: bob 90
+// expect:  7
+// expect:  5
+// expect:   cy ann bob eve
+// expect: ops 97
+// expect: eng 385
+uses alloc, io
+
+// Insertion sort of any Buf by a comparison.
+fn sort(comptime T: type, inout xs: Buf(T), less: fn(T, T) bool) void {
+    var i: i64 = 1
+    while (i < @len(xs)) {
+        var j = i
+        while (j > 0 and less(xs[j], xs[j - 1])) {
+            const t = xs[j]
+            xs[j] = xs[j - 1]
+            xs[j - 1] = t
+            j = j - 1
+        }
+        i = i + 1
+    }
+}
+
+const Row = struct { name: str, dept: str, pay: i64 }
+
+fn by_pay(a: Row, b: Row) bool {
+    return a.pay > b.pay
+}
+
+fn by_name(a: Row, b: Row) bool {
+    // shorter first, then by first byte; empty names are equal
+    if (@len(a.name) != @len(b.name)) {
+        return @len(a.name) < @len(b.name)
+    }
+    if (@len(a.name) == 0) {
+        return false
+    }
+    return a.name[0] < b.name[0]
+}
+
+fn split(a: Allocator, s: str, sep: i64) Buf(str) {
+    var out: Buf(str) = .empty
+    var start: i64 = 0
+    for (s) |c, i| {
+        if (c == sep) {
+            a.push(&out, s[start..i])
+            start = i + 1
+        }
+    }
+    a.push(&out, s[start..])
+    return out
+}
+
+fn parse_int(s: str) !i64 {
+    if (@len(s) == 0) {
+        return error.Empty
+    }
+    var n: i64 = 0
+    for (s) |c| {
+        if (c < 48 or c > 57) {
+            return error.NotANumber
+        }
+        if (n > (9223372036854775807 - (c - 48)) / 10) {
+            return error.Overflow
+        }
+        n = n * 10 + c - 48
+    }
+    return n
+}
+
+fn main(a: Allocator, out: Io) void {
+    const text = "ann,eng,120\nbob,ops,90\ncy,eng,150\ndee,ops,x\neve,eng,110\nfay,ops,99999999999999999999\n,eng,5\n,ops,7"
+    var rows: Buf(Row) = .empty
+    defer a.free(rows)
+    const lines = split(a, text, 10)
+    defer a.free(lines)
+    for (lines) |l, n| {
+        const f = split(a, l, 44)
+        defer a.free(f)
+        if (@len(f) != 3) {
+            continue
+        }
+        const pay = parse_int(f[2]) catch |e| {
+            out.print(a.concat(a.concat(a.concat("line ", a.int_str(n + 1)), ": "), @errorName(e)))
+            continue
+        }
+        a.push(&rows, Row{ .name = f[0], .dept = f[1], .pay = pay })
+    }
+    sort(Row, &rows, by_pay)
+    for (rows) |r| {
+        out.print(a.concat(a.concat(r.name, " "), a.int_str(r.pay)))
+    }
+    sort(Row, &rows, by_name)
+    var names = ""
+    for (rows) |r| {
+        names = a.concat(names, a.concat(r.name, " "))
+    }
+    out.print(names[0..@len(names) - 1])
+    // total per dept
+    var depts: Buf(str) = .empty
+    defer a.free(depts)
+    var totals: Buf(i64) = .empty
+    defer a.free(totals)
+    for (rows) |r| {
+        var k: i64 = -1
+        for (depts) |d, i| {
+            if (d == r.dept) {
+                k = i
+            }
+        }
+        if (k == -1) {
+            a.push(&depts, r.dept)
+            a.push(&totals, 0)
+            k = @len(depts) - 1
+        }
+        totals[k] = totals[k] + r.pay
+    }
+    for (depts) |d, i| {
+        out.print(a.concat(a.concat(d, " "), a.int_str(totals[i])))
+    }
+}

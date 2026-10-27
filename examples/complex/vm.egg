@@ -1,0 +1,155 @@
+// A stack bytecode VM: instructions are a union(enum) with payloads,
+// read by switch captures; the program computes 5! with a loop and a
+// jump patched after the loop body is emitted. Popping an empty stack is
+// error.StackUnderflow, running off the end without halt is
+// error.MissingHalt. After 5! and 5! - 20 comes the step count.
+// expect: 120
+// expect: 100
+// expect: 80
+// expect: 7
+// expect: MissingHalt
+// expect: -1
+// expect: StackUnderflow
+uses alloc, io
+
+const Ins = union(enum) {
+    push: i64
+    load: i64        // local slot
+    store: i64
+    add
+    sub
+    mul
+    lt
+    jump: i64        // absolute target
+    jump_if_zero: i64
+    print
+    halt
+}
+
+const Vm = struct {
+    code: Buf(Ins)
+    stack: Buf(i64)
+    locals: [4]i64
+
+    fn pop(inout self: Vm, a: Allocator) !i64 {
+        return a.pop(&self.stack) orelse return error.StackUnderflow
+    }
+
+    fn run(inout self: Vm, a: Allocator, out: Io) !i64 {
+        var pc: i64 = 0
+        var steps: i64 = 0
+        while (pc < @len(self.code)) {
+            steps = steps + 1
+            if (steps > 10000) {
+                return error.TooManySteps
+            }
+            const ins = self.code[pc]
+            pc = pc + 1
+            switch (ins) {
+                .push => |v| { a.push(&self.stack, v) }
+                .load => |s| { a.push(&self.stack, self.locals[s]) }
+                .store => |s| { self.locals[s] = try self.pop(a) }
+                .add => {
+                    const r = try self.pop(a)
+                    const l = try self.pop(a)
+                    a.push(&self.stack, l + r)
+                }
+                .sub => {
+                    const r = try self.pop(a)
+                    const l = try self.pop(a)
+                    a.push(&self.stack, l - r)
+                }
+                .mul => {
+                    const r = try self.pop(a)
+                    const l = try self.pop(a)
+                    a.push(&self.stack, l * r)
+                }
+                .lt => {
+                    const r = try self.pop(a)
+                    const l = try self.pop(a)
+                    var b: i64 = 0
+                    if (l < r) {
+                        b = 1
+                    }
+                    a.push(&self.stack, b)
+                }
+                .jump => |t| { pc = t }
+                .jump_if_zero => |t| {
+                    if ((try self.pop(a)) == 0) {
+                        pc = t
+                    }
+                }
+                .print => { out.print(try self.pop(a)) }
+                .halt => { return steps }
+            }
+        }
+        // halt is the only normal way out
+        return error.MissingHalt
+    }
+}
+
+// Prints the error and gives -1 in place of a step count.
+fn report(out: Io, e: anyerror) i64 {
+    out.print(@errorName(e))
+    return -1
+}
+
+fn emit(a: Allocator, inout code: Buf(Ins), i: Ins) void {
+    a.push(&code, i)
+}
+
+fn main(a: Allocator, out: Io) void {
+    // i = 1; f = 1; while (i < 6) { f = f * i; i = i + 1 }; print f   -> 5! = 120
+    var code: Buf(Ins) = .empty
+    emit(a, &code, Ins{ .push = 1 })
+    emit(a, &code, Ins{ .store = 0 })
+    emit(a, &code, Ins{ .push = 1 })
+    emit(a, &code, Ins{ .store = 1 })
+    const top = @len(code)
+    emit(a, &code, Ins{ .load = 0 })
+    emit(a, &code, Ins{ .push = 6 })
+    emit(a, &code, .lt)
+    const exit_jump = @len(code)
+    emit(a, &code, Ins{ .jump_if_zero = 0 })   // patched below
+    emit(a, &code, Ins{ .load = 1 })
+    emit(a, &code, Ins{ .load = 0 })
+    emit(a, &code, .mul)
+    emit(a, &code, Ins{ .store = 1 })
+    emit(a, &code, Ins{ .load = 0 })
+    emit(a, &code, Ins{ .push = 1 })
+    emit(a, &code, .add)
+    emit(a, &code, Ins{ .store = 0 })
+    emit(a, &code, Ins{ .jump = top })
+    code[exit_jump] = Ins{ .jump_if_zero = @len(code) }
+    emit(a, &code, Ins{ .load = 1 })
+    emit(a, &code, .print)
+    // and 5! - 20
+    emit(a, &code, Ins{ .load = 1 })
+    emit(a, &code, Ins{ .push = 20 })
+    emit(a, &code, .sub)
+    emit(a, &code, .print)
+    emit(a, &code, .halt)
+    var vm = Vm{ .code = code, .stack = .empty, .locals = @splat(0) }
+    defer a.free(vm)
+    const steps = vm.run(a, out) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    out.print(steps)
+    // a program that runs off its end
+    var open_end = Vm{ .code = .empty, .stack = .empty, .locals = @splat(0) }
+    defer a.free(open_end)
+    a.push(&open_end.code, Ins{ .push = 7 })
+    a.push(&open_end.code, .print)
+    const m = open_end.run(a, out) catch |e| report(out, e)
+    out.print(m)
+    // a broken program: add with an empty stack
+    var bad = Vm{ .code = .empty, .stack = .empty, .locals = @splat(0) }
+    defer a.free(bad)
+    a.push(&bad.code, .add)
+    const n = bad.run(a, out) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    out.print(n)
+}

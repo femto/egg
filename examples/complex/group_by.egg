@@ -1,0 +1,59 @@
+// Grouping words by their first letter: a generic Map(V) whose values own
+// buffers (Map(Buf(str))) or nothing (Map(i64)). slot takes a fresh
+// value by sink and frees it when the key exists, which in a generic
+// instance does nothing for a plain V. a.push(&m.vals[i], w) grows an
+// element in place.
+// expect: a: apple avocado apricot
+// expect: b: bob banana
+// expect: c: cat cherry
+uses alloc, io
+
+// A map from str to V, where V may own buffers.
+fn Map(comptime V: type) type {
+    return struct {
+        keys: Buf(str)
+        vals: Buf(V)
+
+        fn find(self: @This(), k: str) ?i64 {
+            for (self.keys) |key, i| {
+                if (key == k) {
+                    return i
+                }
+            }
+            return null
+        }
+
+        // The index of k's value, adding `fresh` if k is new.
+        fn slot(inout self: @This(), a: Allocator, k: str, sink fresh: V) i64 {
+            const i = self.find(k) orelse -1
+            if (i == -1) {
+                a.push(&self.keys, k)
+                a.push(&self.vals, fresh)
+                return @len(self.keys) - 1
+            }
+            a.free(fresh)
+            return i
+        }
+    }
+}
+
+fn main(a: Allocator, out: Io) void {
+    var c = Map(i64){ .keys = .empty, .vals = .empty }
+    defer a.free(c)
+    const j = c.slot(a, "x", 0)
+    c.vals[j] = c.vals[j] + 1
+    const words = [_]str{ "apple", "bob", "avocado", "cat", "banana", "cherry", "apricot" }
+    var m = Map(Buf(str)){ .keys = .empty, .vals = .empty }
+    defer a.free(m)
+    for (words) |w| {
+        const i = m.slot(a, w[0..1], .empty)
+        a.push(&m.vals[i], w)
+    }
+    for (m.keys) |k, i| {
+        var line = a.concat(k, ":")
+        for (m.vals[i]) |w| {
+            line = a.concat(a.concat(line, " "), w)
+        }
+        out.print(line)
+    }
+}

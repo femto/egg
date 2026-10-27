@@ -1,0 +1,33 @@
+uses alloc, io
+
+// A connection that logs when it is opened and closed.
+const Conn = owned struct {
+    id: i64
+    log: Io
+    sent: Buf(str)
+
+    fn send(inout self: Conn, a: Allocator, msg: str) !void {
+        if (@len(msg) == 0) {
+            return error.EmptyMessage
+        }
+        a.push(&self.sent, msg)
+    }
+
+    fn count(self: Conn) i64 {
+        return @len(self.sent)
+    }
+
+    fn deinit(sink self: Conn, a: Allocator) void {
+        self.log.print(a.concat("close ", a.int_str(self.id)))
+        a.free(self.sent)
+        @drop(self)
+    }
+}
+
+fn open(out: Io, a: Allocator, id: i64) !Conn {
+    if (id < 0) {
+        return error.Refused
+    }
+    out.print(a.concat("open ", a.int_str(id)))
+    return Conn{ .id = id, .log = out, .sent = .empty }
+}
