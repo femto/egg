@@ -1,10 +1,13 @@
 # Ownership check (linear buffers).
 #
 # A Buf(T) has exactly one owner, and so does a struct or array holding
-# one (an owned value). Passing it by value, assigning it, returning it or
-# freeing it (`a.free(v)`) moves it: the variable it came from no longer
-# owns anything, and using it again is E136. Indexing, slicing, `@len`,
-# `for`, reading a field and `&v` only borrow it. Every owned value must
+# one (an owned value). Passing it to a `sink` parameter, assigning it,
+# returning it or freeing it (`a.free(v)`) moves it: the variable it came
+# from no longer owns anything, and using it again is E136. Passing it to
+# a plain parameter, indexing, slicing, `@len`, `for`, reading a field and
+# `&v` only borrow it. A plain parameter is itself borrowed: the function
+# reads it but cannot move any of it (E144), and does not have to give it
+# away. Every owned value must
 # be given away before its owner goes out of scope (E135): freed, moved,
 # or returned; an inout parameter must own all of it again whenever the
 # function returns. So a buffer is freed exactly once, and never used
@@ -70,7 +73,7 @@ module Egg
       @frames = [Frame.new([], [])]
       @loops = []
       @st = {}     # path -> [:owned | :moved | :poison, line of the move]
-      @decl = {}   # name -> [:local | :param | :inout | :borrowed, line, col]
+      @decl = {}   # name -> [:local | :param | :bparam | :inout | :borrowed, line, col]
       @defer_ctx = nil
       @iterated = {} # path -> line of the for loop iterating it
       @borrowed = {} # loop variable borrowing an owned element -> its container, as written
@@ -78,7 +81,8 @@ module Egg
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       runtime.each_with_index do |p, i|
         t, mode = sig.params[i]
-        declare(p.name, mode == "inout" ? :inout : :param, p.line, p.col, t) if owned?(t)
+        kind = { "inout" => :inout, "sink" => :param }.fetch(mode, :bparam)
+        declare(p.name, kind, p.line, p.col, t) if owned?(t)
       end
       walk_stmts(sig.func.body.stmts)
       leave(0, false, nil, nil, "when '#{sig.func.name}' ends") unless @st.nil?
@@ -174,7 +178,7 @@ module Egg
 
     def check_released(name, line, col, where)
       kind, dl, dc = @decl[name]
-      return if kind == :borrowed
+      return if kind == :borrowed || kind == :bparam
       l = line || dl
       c = line.nil? ? dc : col
       paths = under(name).select { |k| tracked?(k) }
@@ -497,7 +501,7 @@ module Egg
         else
           walk(rhs)
         end
-      in Call[args:] then walk_args(args)
+      in Call[args:, info:] then walk_args(args, info)
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
@@ -505,10 +509,12 @@ module Egg
             check_iterated(p, obj.line, obj.col, "passed as inout") unless p.nil?
             walk_place(obj)
           else
-            walk(obj)
+            # self is borrowed unless the method takes `sink self`;
+            # Allocator methods (no params) take what they are given.
+            walk(obj, !info.nil? && !info[:params].nil? && !info[:self_sink])
           end
         end
-        walk_args(args)
+        walk_args(args, info)
       in Builtin[name: "drop", args:, line:, col:]
         path = path_of(args[0])
         path.nil? ? walk(args[0]) : drop(path, line, col)
@@ -564,14 +570,18 @@ module Egg
       end
     end
 
-    def walk_args(args)
-      args.each do |a|
+    # A plain parameter borrows its argument, a sink parameter takes it.
+    # Without known parameters (Allocator methods) every argument is taken.
+    def walk_args(args, info = nil)
+      params = info&.[](:params)
+      params = nil unless params.nil? || params.length == args.length
+      args.each_with_index do |a, i|
         if a.is_a?(AddrOf)
           # inout: the callee may replace or resize it
           check_elem_change(a.expr, a.line, a.col, "passed as inout")
           walk_place(a.expr)
         else
-          walk(a)
+          walk(a, !params.nil? && params[i][1].nil?)
         end
       end
     end
@@ -614,6 +624,10 @@ module Egg
         return
       end
       return if borrow
+      if @decl[root(path)][0] == :bparam
+        borrowed_param_error(path, "moved", line, col)
+        return
+      end
       if @decl[root(path)][0] == :borrowed
         c = @borrowed[root(path)]
         err("E139", "'#{path}' only borrows an element of '#{c}' for one iteration; it cannot be moved. Take the element out with @take(&#{c}[i]) or @replace(&#{c}[i], v), looping over an index", line, col)
@@ -632,8 +646,18 @@ module Egg
         @st[leaf] = [:poison, nil]
         return
       end
+      if @decl[root(path)][0] == :bparam
+        borrowed_param_error(path, "dropped", line, col)
+        return
+      end
       check_iterated(path, line, col, "dropped")
       @st[leaf] = [:moved, line]
+    end
+
+    def borrowed_param_error(path, what, line, col)
+      name = root(path)
+      t = @sig.params[@sig.func.params.reject { |p| p.mode == "comptime" }.index { |p| p.name == name }][0]
+      err("E144", "'#{path}' cannot be #{what}: parameter '#{name}' is only borrowed; to take it over, declare it as `sink #{name}: #{t}`", line, col)
     end
 
     # Read a plain field at `path` (v.len): v must not have been moved.

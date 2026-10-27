@@ -7,7 +7,7 @@ const t = @import("../../examples/lib/tracked.egg")
 const Bad = owned struct {
     id: i64
 
-    fn deinit(self: Bad, out: Io) void {
+    fn deinit(sink self: Bad, out: Io) void {
         out.print(self.id)
         @drop(self)
     }
@@ -22,7 +22,7 @@ fn copied(a: Allocator) void {
 const Own = owned struct {
     data: Buf(i64)
 
-    fn deinit(self: Own, a: Allocator) void {
+    fn deinit(sink self: Own, a: Allocator) void {
         a.free(self.data)
         @drop(self)
     }

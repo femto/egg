@@ -1,0 +1,150 @@
+// A plain parameter borrows: Map's read methods take `self`, so
+// m.put(a, w, (m.get(w) orelse 0) + 1) reads m and then changes it. `sink`
+// takes ownership: deinit, and a generic keep, whose T may own nothing.
+// A function value's parameters borrow too.
+// expect: the 4
+// expect: and 2
+// expect: cat 2
+// expect: saw 1
+// expect: bird 1
+// expect: dog 1
+// expect: 11
+// expect: 7
+// expect: 6
+uses alloc, io
+
+fn Map(comptime V: type) type {
+    return struct {
+        keys: Buf(str)
+        vals: Buf(V)
+        used: Buf(bool)
+        count: i64
+
+        fn init(a: Allocator) @This() {
+            return @This(){ .keys = a.alloc(8, ""), .vals = a.alloc(8, 0), .used = a.alloc(8, false), .count = 0 }
+        }
+
+        fn slot(self: @This(), k: str) i64 {
+            var i = hash(k) % @len(self.keys)
+            while (self.used[i] and self.keys[i] != k) {
+                i = (i + 1) % @len(self.keys)
+            }
+            return i
+        }
+
+        fn get(self: @This(), k: str) ?V {
+            const i = self.slot(k)
+            if (self.used[i]) {
+                return self.vals[i]
+            }
+            return null
+        }
+
+        fn put(inout self: @This(), a: Allocator, k: str, v: V) void {
+            if ((self.count + 1) * 2 > @len(self.keys)) {
+                self.grow(a)
+            }
+            const i = self.slot(k)
+            if (!self.used[i]) {
+                self.count = self.count + 1
+            }
+            self.used[i] = true
+            self.keys[i] = k
+            self.vals[i] = v
+        }
+
+        fn grow(inout self: @This(), a: Allocator) void {
+            const n = @len(self.keys) * 2
+            const old_k = @replace(&self.keys, a.alloc(n, ""))
+            const old_v = @replace(&self.vals, a.alloc(n, 0))
+            const old_u = @replace(&self.used, a.alloc(n, false))
+            self.count = 0
+            for (old_u) |u, i| {
+                if (u) {
+                    self.put(a, old_k[i], old_v[i])
+                }
+            }
+            a.free(old_k)
+            a.free(old_v)
+            a.free(old_u)
+        }
+
+        fn deinit(sink self: @This(), a: Allocator) void {
+            a.free(self.keys)
+            a.free(self.vals)
+            a.free(self.used)
+        }
+    }
+}
+
+fn hash(s: str) i64 {
+    var h: i64 = 5381
+    for (s) |c| {
+        h = (h * 33 + c) % 1000000007
+    }
+    return h
+}
+
+const Count = struct {
+    word: str
+    n: i64
+}
+
+fn keep(comptime T: type, sink x: T) T {
+    return x
+}
+
+fn total(m: Map(i64)) i64 {
+    var n: i64 = 0
+    for (m.used) |u, i| {
+        if (u) {
+            n = n + m.vals[i]
+        }
+    }
+    return n
+}
+
+fn main(a: Allocator, out: Io) void {
+    const text = "the cat and the dog and the bird saw the cat"
+    var m = Map(i64).init(a)
+    var start: i64 = 0
+    var i: i64 = 0
+    while (i <= @len(text)) {
+        if (i == @len(text) or text[i] == 32) {
+            if (i > start) {
+                const w = text[start..i]
+                m.put(a, w, (m.get(w) orelse 0) + 1)
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    var list: Buf(Count) = .empty
+    for (m.used) |u, j| {
+        if (u) {
+            a.push(&list, Count{ .word = m.keys[j], .n = m.vals[j] })
+        }
+    }
+    // insertion sort, most frequent first
+    var k: i64 = 1
+    while (k < @len(list)) {
+        var j = k
+        while (j > 0 and list[j - 1].n < list[j].n) {
+            const t = list[j]
+            list[j] = list[j - 1]
+            list[j - 1] = t
+            j = j - 1
+        }
+        k = k + 1
+    }
+    for (list) |c| {
+        out.print(a.concat(a.concat(c.word, " "), a.int_str(c.n)))
+    }
+    const f: fn(Map(i64)) i64 = total
+    out.print(f(m))
+    out.print(keep(i64, 7))
+    const kept = keep(Buf(Count), list)
+    out.print(@len(kept))
+    a.free(kept)
+    m.deinit(a)
+}

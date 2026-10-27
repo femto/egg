@@ -6,9 +6,9 @@ on demand, and there is no GC: heap buffers are managed by ownership (strings, f
 now, live in a program-lifetime arena). See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
-This repository holds **eggc**, the first compiler, now at the end of
-**v2** (modules, capabilities, integer types, pointers, `extern fn` and
-owned buffers): written
+This repository holds **eggc**, the first compiler, with **v2** done
+(modules, capabilities, integer types, pointers, `extern fn` and owned
+buffers) and **v3** (memory without a GC) under way: written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
 compiles), running on CRuby 3.0+, emitting portable C99.
 
@@ -99,7 +99,14 @@ rebuild to switch back.
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
-v2:
+v3 (memory without GC, under way):
+
+- Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
+  owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
+  works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and
+  moving a borrowed parameter is E144
+
+From v2:
 
 - Modules: `const m = @import("m.egg")`, then `m.f()`, `m.Point`,
   `m.Pair(i64)`; each file loaded once, cycles allowed; diagnostics name
@@ -140,7 +147,7 @@ v2:
   checked like a buffer (a copy is a move, it must be ended on every
   path), and only its own file can build one or end one (`@drop(v)`), so
   callers release it only through its API (`db.close()`). With a
-  `fn deinit(self: Db) void`, `a.free` ends ones held in a `Buf`, an
+  `fn deinit(sink self: Db) void`, `a.free` ends ones held in a `Buf`, an
   array or a struct, so a pool is `Buf(Db)` filled with `a.push(&pool, db)`
 - Optionals `?T`: `null` or a T, unwrapped with `orelse` (a value, or
   `orelse return` / `break` / `continue`); `a.pop(&b)` returns a `?T`,

@@ -2,7 +2,7 @@
 // goes away (E135).
 uses alloc, io
 
-fn ignore(b: Buf(i64)) i64 {
+fn ignore(sink b: Buf(i64)) i64 {
     return 1
 }
 

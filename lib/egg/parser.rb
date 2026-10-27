@@ -109,7 +109,7 @@ module Egg
         while true
           skip_nl
           mode = nil
-          if kw?("inout") || kw?("comptime")
+          if kw?("inout") || kw?("sink") || kw?("comptime")
             mode = advance.text
           end
           pname = expect(:ident, "parameter name")

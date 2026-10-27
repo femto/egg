@@ -244,7 +244,7 @@ module Egg
         return
       end
       if f.params.any? { |p| !p.mode.nil? }
-        err("E132", "an extern fn takes its parameters by value; no inout or comptime", f.line, f.col)
+        err("E132", "an extern fn takes its parameters by value; no inout, sink or comptime", f.line, f.col)
         return
       end
       bad = sig.params.map(&:first).find { |t| t != "error" && !c_scalar?(t) }
@@ -412,6 +412,9 @@ module Egg
           elsif owned_err?(t)
             err("E133", "a parameter cannot be a #{t}; unwrap it with #{unwrap_how(t)} and pass the #{@types[t].inner}", p.line, p.col)
             t = "error"
+          elsif p.mode == "sink" && t != "error" && !owned?(t) && (sig.tenv.nil? || sig.tenv.empty?)
+            # In a generic instance T may or may not own something.
+            err("E145", "'sink' takes ownership, but #{t} owns nothing; remove 'sink' (a plain parameter reads it)", p.line, p.col)
           end
           sig.params << [t, p.mode]
         end
@@ -525,11 +528,11 @@ module Egg
       return if m.nil?
       sig = @sigs[method_key(d.name, "deinit")]
       return if sig.nil? || sig.params.nil?
-      ok = sig.ret == "void" && sig.params[0] == [d.name, nil] &&
+      ok = sig.ret == "void" && sig.params[0] == [d.name, "sink"] &&
            (sig.params.length == 1 || (sig.params.length == 2 && sig.params[1] == ["Allocator", nil]))
       unless ok
         in_module(d.mod) do
-          err("E143", "deinit of an owned struct must be fn deinit(self: #{d.name}) void, or take a second parameter a: Allocator: a.free calls it with nothing else", m.line, m.col)
+          err("E143", "deinit of an owned struct must be fn deinit(sink self: #{d.name}) void, or take a second parameter a: Allocator: a.free calls it with nothing else", m.line, m.col)
         end
         return
       end
@@ -757,7 +760,7 @@ module Egg
     # Methods that take an owned struct t by value (self: T): the ways its
     # API ends one, for messages.
     def enders(t)
-      @sigs.values.select { |g| g.owner == t && g.params&.first == [t, nil] }.map(&:name)
+      @sigs.values.select { |g| g.owner == t && g.params&.first == [t, "sink"] }.map(&:name)
     end
     public :enders
 
@@ -1868,11 +1871,14 @@ module Egg
       if self_mode == "inout"
         check_lvalue(obj, "modify")
         mark_root_used(obj)
+      elsif self_mode.nil?
+        check_borrowed(obj, t)
       end
       enqueue(sig)
       record_call(sig, line, col)
       e.info[:c_name] = sig.c_name
       e.info[:self_inout] = self_mode == "inout"
+      e.info[:self_sink] = self_mode == "sink"
       e.info[:args] = args
       e.info[:params] = sig.params.drop(1)
       rest = Sig.new(sig.name, sig.params.drop(1), sig.ret)
@@ -1885,6 +1891,13 @@ module Egg
         clash = path.nil? ? nil : args.find { |a| holds?(a, path) }
         unless clash.nil?
           err("E117", "'#{path}' is passed to '#{name}' as inout self, and this argument borrows from it or moves part of it; copy what you need into a local first", clash.line, clash.col)
+        end
+      elsif self_mode == "sink" && owned?(t)
+        # self is moved into the call, as for a sink argument.
+        path = place_path(obj)
+        clash = path.nil? ? nil : args.find { |a| mentions_path?(a, path) }
+        unless clash.nil?
+          err("E117", "'#{path}' is moved into '#{name}' as sink self and also used by this argument; copy what you need into a local first", clash.line, clash.col)
         end
       end
       sig.ret
@@ -2031,6 +2044,7 @@ module Egg
           check_expr(a.expr)
         else
           at = check_expr(a, pt)
+          check_borrowed(a, at) if mode.nil? && !empty_value?(a)
           if pt.start_with?("[]") && (@types[at]&.kind == :array)
             err("E103", "expected #{pt}, found #{at}; pass a slice of it: x[0..]", a.line, a.col)
           else
@@ -2046,9 +2060,11 @@ module Egg
         next if clash.nil?
         err("E117", "'#{path}' is passed as inout and also used by another argument of the same call", a.line, a.col)
       end
-      # Likewise a buffer moved into the call: another argument must not
-      # borrow from it (a slice of it would outlive a free in the callee).
-      args.each do |a|
+      # Likewise a value moved into the call (sink): another argument must
+      # not borrow from it (a slice of it would outlive a free in the
+      # callee). Several borrows of one value are fine.
+      args.each_with_index do |a, i|
+        next unless sig.params[i][1] == "sink"
         path = place_path(a)
         next if path.nil? || !owned?(a.ty)
         clash = others.find { |o| !o.equal?(a) && mentions_path?(o, path) }
@@ -2137,9 +2153,12 @@ module Egg
       in Builtin[name: "len"] then false
       in Unary[operand:] then holds?(operand, path)
       in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
-      in Call[args:] then args.any? { |x| holds?(x, path) }
+      in Call[args:, info:] then sunk(args, info).any? { |x| holds?(x, path) }
       in Builtin[args:] then args.any? { |x| holds?(x, path) }
-      in MethodCall[obj:, args:] then [obj, *args].any? { |x| holds?(x, path) }
+      in MethodCall[obj:, args:, info:]
+        # A borrowed argument is given back when the call returns.
+        own_obj = info.nil? || info[:params].nil? || info[:self_sink]
+        (own_obj && holds?(obj, path)) || sunk(args, info).any? { |x| holds?(x, path) }
       in StructLit[fields:] then fields.any? { |f| holds?(f[1], path) }
       in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
       in AddrOf[expr:] then mentions_path?(expr, path)
@@ -2148,6 +2167,15 @@ module Egg
       in Orelse[expr:, fallback:] then holds?(expr, path) || (!(fb = fallback_expr(fallback)).nil? && holds?(fb, path))
       else false
       end
+    end
+
+    # The arguments of a call that it takes ownership of: those passed to
+    # sink parameters, or all of them when the parameters are not known
+    # (Allocator methods take what they are given).
+    def sunk(args, info)
+      params = info&.[](:params)
+      return args if params.nil? || params.length != args.length
+      args.each_index.select { |i| params[i][1] == "sink" }.map { |i| args[i] }
     end
 
     # Does e read `path`, a part of it, or something it is part of?

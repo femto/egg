@@ -1,0 +1,50 @@
+// A plain parameter is borrowed: it cannot be moved, freed, returned or
+// dropped, and nothing has to be done with it before returning.
+uses alloc, io
+
+const Res = owned struct {
+    id: i64
+
+    fn close(self: Res) void {
+        @drop(self)
+    }
+}
+
+const List = struct {
+    data: Buf(i64)
+}
+
+fn free_it(a: Allocator, b: Buf(i64)) void {
+    a.free(b)
+}
+
+fn give_back(b: Buf(i64)) Buf(i64) {
+    return b
+}
+
+fn take_field(a: Allocator, l: List) void {
+    a.free(l.data)
+}
+
+fn eat(sink b: Buf(i64), a: Allocator) void {
+    a.free(b)
+}
+
+fn pass_on(a: Allocator, b: Buf(i64)) void {
+    eat(b, a)
+}
+
+fn just_read(b: Buf(i64)) i64 {
+    return @len(b)
+}
+
+fn main(out: Io, a: Allocator) void {
+    const b = a.alloc(1, 0)
+    out.print(just_read(b) + just_read(b))
+    a.free(b)
+}
+// error: E144 @9
+// error: E144 @18
+// error: E144 @22
+// error: E144 @26
+// error: E144 @34

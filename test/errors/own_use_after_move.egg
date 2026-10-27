@@ -2,7 +2,7 @@
 // variable cannot be used after (E136).
 uses alloc, io
 
-fn total(a: Allocator, b: Buf(i64)) i64 {
+fn total(a: Allocator, sink b: Buf(i64)) i64 {
     const n = @len(b)
     a.free(b)
     return n

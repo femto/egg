@@ -8,7 +8,7 @@ fn parse(n: i64) !i64 {
     return n
 }
 
-fn pick(a: Allocator, b: Buf(i64), m: Mode) Buf(i64) {
+fn pick(a: Allocator, sink b: Buf(i64), m: Mode) Buf(i64) {
     switch (m) {
         .keep => {
             return b
@@ -38,7 +38,7 @@ fn rescue(a: Allocator) i64 {
     return n
 }
 
-fn fail(a: Allocator, b: Buf(i64)) i64 {
+fn fail(a: Allocator, sink b: Buf(i64)) i64 {
     a.free(b)
     return 0
 }
