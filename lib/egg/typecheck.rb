@@ -1892,6 +1892,13 @@ module Egg
         unless clash.nil?
           err("E117", "'#{path}' is passed to '#{name}' as inout self, and this argument borrows from it or moves part of it; copy what you need into a local first", clash.line, clash.col)
         end
+      elsif self_mode == "sink" && owned?(t)
+        # self is moved into the call, as for a sink argument.
+        path = place_path(obj)
+        clash = path.nil? ? nil : args.find { |a| mentions_path?(a, path) }
+        unless clash.nil?
+          err("E117", "'#{path}' is moved into '#{name}' as sink self and also used by this argument; copy what you need into a local first", clash.line, clash.col)
+        end
       end
       sig.ret
     end

@@ -200,7 +200,8 @@ fn name(p1: T1, inout p2: T2, sink p3: T3, comptime T: type) R { ... }
   assign it), **`inout`** (section 12), **`sink`** or **`comptime`**
   (section 14). For an owned value (section 21) a plain parameter only
   borrows it, and `sink` takes it over; a `sink` parameter of a type that
-  owns nothing is E145.
+  owns nothing is E145, except in a generic instance, where T may or may
+  not own something.
 - A call must pass exactly as many arguments as there are parameters (E104),
   each of the declared type (E103).
 - **A non-void function must return on every path** (E107). A block returns

@@ -28,6 +28,17 @@ fn out_of(id: i64) void {
     }
 }
 
+const Bag = struct {
+    data: Buf(i64)
+
+    fn consume(sink self: Bag, a: Allocator, xs: []i64) void {
+        a.free(self.data)
+        if (@len(xs) < 0) {
+            return
+        }
+    }
+}
+
 fn make() Res {
     return Res{ .id = 1 }
 }
@@ -37,8 +48,11 @@ fn main(out: Io, a: Allocator) void {
     out.print(count(a.alloc(2, 0)))
     out.print(make().id_of())
     out.print(count(.empty))
+    const bag = Bag{ .data = a.alloc(2, 0) }
+    bag.consume(a, bag.data[0..])
 }
 // error: E145 @5
 // error: E143 @16
-// error: E133 @37
-// error: E133 @38
+// error: E133 @48
+// error: E133 @49
+// error: E117 @52
