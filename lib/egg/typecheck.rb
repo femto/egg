@@ -2270,7 +2270,7 @@ module Egg
       expect_type(t, vt, v)
       root = root_name(a.expr)
       if !root.nil? && mentions?(v, root)
-        err("E117", "'#{root}' is changed by this @replace and also used by its value; compute the value first", v.line, v.col)
+        err("E117", "'#{root}' is changed by this @replace and also used by its value; compute the value into a local first", v.line, v.col)
       end
       t
     end

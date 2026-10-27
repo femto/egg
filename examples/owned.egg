@@ -13,6 +13,8 @@
 // expect: 4
 // expect: 0
 // expect: 11
+// expect: 11
+// expect: 17
 uses alloc, io
 
 // A growable list: its buffer has spare room, `len` of it is in use.
@@ -26,7 +28,7 @@ const List = struct {
 
     fn push(inout self: List, a: Allocator, x: i64) void {
         if (self.len == @len(self.data)) {
-            a.resize(&self.data, 2 * self.len, 0)
+            a.resize(&self.data, 2 * self.len + 1, 0)
         }
         self.data[self.len] = x
         self.len = self.len + 1
@@ -49,6 +51,11 @@ fn into_buf(a: Allocator, l: List) Buf(i64) {
     }
     a.free(l.data)
     return out
+}
+
+fn next_row(a: Allocator, inout k: i64) Buf(u8) {
+    k = k + 1
+    return a.alloc(k, 0)
 }
 
 fn main(out: Io, a: Allocator) !void {
@@ -94,12 +101,25 @@ fn main(out: Io, a: Allocator) !void {
     }
     a.free(@replace(&grid[0], a.alloc(9, 7)))
     out.print(@len(grid[0]))
+    a.free(@replace(&grid[1], a.alloc(5, 1)))
     a.resize(&grid, 1, .empty)
     var pair: [2]Buf(u8) = @splat(Buf(u8).empty)
     a.free(@replace(&pair[1], @take(&grid[0])))
     out.print(@len(grid[0]) + @len(pair[1]) - 5)
     a.free(grid)
-    a.free(pair)
     out.print(0)
     out.print(@len(ll[0].data) + 7)
+
+    // The place is found before the value is computed: k is 0 there.
+    var k = 0
+    a.free(@replace(&pair[k], next_row(a, &k)))
+    out.print(@len(pair[0]) * 10 + k)
+
+    // A list that starts with no room at all.
+    var e = List{ .data = .empty, .len = 0 }
+    e.push(a, 8)
+    e.push(a, 9)
+    out.print(e.sum())
+    a.free(e)
+    a.free(pair)
 }

@@ -1325,11 +1325,11 @@ module Egg
         @need_str = true
         "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
       when "replace", "take"
-        # The value first, then the place, which it cannot change (E117).
+        # The place first, left to right; the value cannot change it (E117).
         t = e.ty
-        v = name == "take" ? empty_buf(t) : hoist(coerce(expr(args[1]), args[1].ty, t), t)
         p = tmp
         line("#{c_type(t)} *#{p} = &#{lvalue(a.expr)};")
+        v = name == "take" ? empty_buf(t) : hoist(coerce(expr(args[1]), args[1].ty, t), t)
         old = tmp
         line("#{c_type(t)} #{old} = *#{p};")
         line("*#{p} = #{v};")

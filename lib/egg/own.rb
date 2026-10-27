@@ -481,9 +481,9 @@ module Egg
         walk_args(args)
       in Builtin[name: "replace" | "take" => name, args:, line:, col:]
         place = args[0].expr
-        walk(args[1]) if name == "replace"
         check_elem_change(place, line, col, name == "take" ? "taken from" : "replaced")
         walk_place(place)
+        walk(args[1]) if name == "replace"
       in Builtin[name:, args:]
         args.each { |a| walk(a, name == "len") }
       in Field[obj:, line:, col:]

@@ -681,7 +681,7 @@ same memory. Places are compared by their fields: `&v.data` and `v.len`
 are separate, `&v` and `v.len` are not. A method's `inout self` is looser,
 since the other arguments are computed before the call: they may read
 plain values of it (`l.push(a, l.len)`), but not take a slice of it or
-move a buffer out of it.
+move an owned value out of it.
 
 ```egg
 // expect: 21
@@ -1186,8 +1186,9 @@ follows every path through each function and checks:
   elements but not move, reassign or resize it, nor pass it as `inout`
   (E137).
 
-A buffer moved into a call may not appear in another argument of it (E117),
-so a slice of it cannot outlive it. Buffers cannot be compared or printed.
+An owned value moved into a call may not appear in another argument of it
+(E117), so a slice of it cannot outlive it. Owned values cannot be compared
+or printed.
 
 **Owned structs and containers.** A struct with a `Buf` field, an array of
 buffers and a buffer of buffers are owned too: they move like a buffer,
@@ -1212,7 +1213,10 @@ assigning over it is E139. Elements are swapped instead:
   elements, which owns no memory and costs nothing to free;
 - `@replace(&p, v)` puts `v` in the place `p` and returns what was there;
   `@take(&p)` is `@replace(&p, Buf(T).empty)` for a buffer place. The
-  value is computed first, and may not use the place's variable (E117).
+  place is found first, then the value is computed. The value may not
+  mention the place's variable at all, not even another field of it
+  (E117): `@replace(&v.data, v.len)` is rejected, unlike the field-by-field
+  rule for `inout` arguments.
 
 `a.alloc`, `a.resize` and `@splat` copy their fill value, so for owned
 elements it must be made of `.empty` buffers (E140): `a.alloc(n,
