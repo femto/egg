@@ -1203,7 +1203,7 @@ tells the C compiler where to look.
 resized. `a.alloc(n, v)` makes one holding n copies of v (T is v's type,
 or the element type the context expects); `a.free(b)` frees it (E103
 for a value that owns nothing, except in a generic instance, where
-freeing a T that owns nothing does nothing, so one generic container
+freeing a storable value that owns nothing does nothing, so one generic container
 serves owned and plain values alike);
 `a.resize(&b, n, v)` changes its length to n, filling new elements with v.
 A negative length panics with `negative buffer length`. `a.push(&b, v)`
