@@ -52,7 +52,7 @@ fn add(a: i64, b: i64) i64 {
 - Source is UTF-8. Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `fn return if else while for break continue switch var const
   true false and or struct enum union try catch error inout comptime uses
-  allow extern null defer errdefer`.
+  allow extern link owned null defer errdefer`.
 - Integer literals are decimal digits, optionally separated by `_`
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
   context (section 7); it must fit that type (E003). `-5` is unary minus
@@ -820,6 +820,7 @@ Builtins start with `@`; any other name is E112.
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
+| `@drop(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 | `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
@@ -1224,6 +1225,73 @@ Buf(u8).empty)`, `List{ .data = .empty, .len = 0 }`. Shrinking a buffer of
 buffers with `a.resize` frees the elements cut off. While `for (xs) |x|`
 iterates over owned elements, `x` only borrows each one (moving it is
 E139), and the body may not swap elements of `xs` (E137).
+
+**Owned structs.** `const Db = owned struct { ... }` declares a struct
+that is owned for itself, with or without buffers: a resource such as an
+open file or a database handle, which must be released exactly once. It
+moves like a buffer, so a copy cannot release it again (E136), and it
+must be given away on every path (E135, E134). Only the file that
+declares it may build one (`Db{ ... }`) or end one with `@drop(v)`, which
+runs nothing (E142); everywhere else a value comes from that file's
+functions and ends by being passed to one that takes it by value, such
+as `fn close(self: Db) void { ...; @drop(self) }`. Methods that only use
+it take `inout self`. `@drop` ends only the struct itself: buffers in its
+fields must still be freed, and it needs a variable or a field of one, not
+a temporary (E133).
+
+a.free cannot release a resource, so neither an owned struct nor a
+struct holding one may be freed with it, nor be an element of an array
+or a `Buf` (E141). A struct holding one is owned, and is followed field by
+field as above.
+
+```egg
+// expect: open 1
+// expect: 101
+// expect: closed 1
+uses io
+
+const File = owned struct {
+    fd: i64
+
+    fn write(inout self: File, out: Io, n: i64) void {
+        out.print(100 * self.fd + n)
+    }
+
+    fn close(self: File, out: Io) void {
+        out.print("closed 1")
+        @drop(self)
+    }
+}
+
+fn open(out: Io) File {
+    out.print("open 1")
+    return File{ .fd = 1 }
+}
+
+fn main(out: Io) void {
+    var f = open(out)
+    defer f.close(out)
+    f.write(out, 1)
+}
+```
+
+```egg
+// error: E135
+uses io
+
+const File = owned struct {
+    fd: i64
+
+    fn close(self: File) void {
+        @drop(self)
+    }
+}
+
+fn main(out: Io) void {
+    const f = File{ .fd = 1 }
+    out.print(f.fd)          // f is never closed
+}
+```
 
 **defer.** `defer e` runs the void expression `e` when its block is left,
 however that happens: at its end, at `return` (after the value is

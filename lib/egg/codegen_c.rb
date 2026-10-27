@@ -1324,6 +1324,7 @@ module Egg
         name = e.info[:type]
         @need_str = true
         "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
+      when "drop" then "((void)#{expr(a)})"
       when "replace", "take"
         # The place first, left to right; the value cannot change it (E117).
         t = e.ty

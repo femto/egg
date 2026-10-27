@@ -35,6 +35,12 @@
 # arrays and buffers, but not in unions or behind pointers (E133); who
 # owns each one at each point is checked afterwards, along every path
 # through each function (own.rb).
+#
+# An `owned struct` (a resource, such as a database handle) is owned even
+# without buffers. Only its own file may build one (Db{ ... }) or end one
+# (@drop(v)), so elsewhere it ends only through its API. a.free cannot end
+# it, so it lives in locals, parameters, results and struct fields, not in
+# arrays or buffers (E141).
 
 module Egg
   VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
@@ -46,7 +52,8 @@ module Egg
   Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls, :unused)
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
   # mod: prefix of the module that declares the type (for #line marks)
-  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod)
+  # resource: an `owned struct`
+  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource)
 
   class TypeChecker
     # Io and Allocator are capability values: opaque, and only `main`
@@ -88,7 +95,7 @@ module Egg
     ORDER_OPS = %w[< <= > >=].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
-                      "replace" => 2, "take" => 1,
+                      "replace" => 2, "take" => 1, "drop" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
@@ -452,6 +459,7 @@ module Egg
       return @types[d.name] if @types.key?(d.name)
       info = register(d.name, d.kind, d.line, d.col)
       info.mod = d.mod || ""
+      info.resource = d.owned == true
       # A type is registered on first use, maybe from another module; its
       # own errors belong to its file.
       in_module(d.mod) { register_members(d, info) }
@@ -559,6 +567,7 @@ module Egg
         return "error" if elem == "error"
         return value_type_error(elem, "an array element", line, col) unless storable?(elem)
         return owned_place_error(elem, "an array element", line, col) if owned_err?(elem)
+        return "error" if resource_elem_error(elem, "an array element", line, col)
         canon = "[#{t.len}]#{elem}"
         info = register(canon, :array, line, col)
         info.elem = elem
@@ -637,6 +646,7 @@ module Egg
       elem = args[0]
       return value_type_error(elem, "a Buf element", line, col) unless storable?(elem)
       return owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
+      return "error" if resource_elem_error(elem, "a Buf element", line, col)
       canon = "Buf(#{elem})"
       register(canon, :buf, line, col).elem = elem
       canon
@@ -650,11 +660,48 @@ module Egg
       case info.kind
       when :buf then true
       when :array then owned?(info.elem)
-      when :struct then (info.fields || []).any? { |_, ft, _| owned?(ft) }
+      when :struct then info.resource || (info.fields || []).any? { |_, ft, _| owned?(ft) }
       else false
       end
     end
     public :owned?
+
+    # The `owned struct` that t is or holds (in a field, at any depth), or nil.
+    def resource_in(t)
+      info = @types[t]
+      return nil if info.nil?
+      case info.kind
+      when :array, :buf then resource_in(info.elem)
+      when :struct
+        return t if info.resource
+        (info.fields || []).each do |_, ft, _|
+          r = resource_in(ft)
+          return r unless r.nil?
+        end
+        nil
+      else nil
+      end
+    end
+
+    # Methods that take an owned struct t by value (self: T): the ways its
+    # API ends one, for messages.
+    def enders(t)
+      @sigs.values.select { |g| g.owner == t && g.params&.first == [t, nil] }.map(&:name)
+    end
+    public :enders
+
+    # Declared in the file being checked?
+    def own_type?(t)
+      (@types[t].mod || "") == (@mod.prefix || "")
+    end
+
+    def resource_elem_error(elem, what, line, col)
+      r = resource_in(elem)
+      return false if r.nil?
+      held = r == elem ? "" : " (it holds a #{r})"
+      err("E141", "#{what} cannot be a #{elem}#{held}: #{r} is an owned struct, which a.free cannot end; keep it in a local or a struct field", line, col)
+      true
+    end
 
     # !T with an owned T: it must be unwrapped right away.
     def owned_err?(t)
@@ -1744,6 +1791,9 @@ module Egg
           at = check_expr(a)
           if at != "error" && !owned?(at)
             err("E103", "'#{name}' frees a Buf, or a struct or array holding buffers; found #{at}", a.line, a.col)
+          elsif at != "error" && !(r = resource_in(at)).nil?
+            held = r == at ? "" : ", which holds a #{r}"
+            err("E141", "a.free cannot end a #{at}#{held}: #{r} is an owned struct; end it with its own API (such as a close method)", a.line, a.col)
           end
         elsif pt == "inout_buffer"
           unless a.is_a?(AddrOf)
@@ -2077,6 +2127,9 @@ module Egg
         err("E123", "#{t} is not a struct", line, col)
         return check_all_error(fields.map { |f| f[1] })
       end
+      if info.resource && !own_type?(t)
+        err("E142", "#{t} is an owned struct, so only its own file can build one; get one from its API", line, col)
+      end
       seen = {}
       fields.each do |fname, value, fl, fc|
         decl = info.fields.find { |n, _| n == fname }
@@ -2240,7 +2293,28 @@ module Egg
         expected
       when "replace", "take"
         check_swap(name, args, line, col)
+      when "drop"
+        check_drop(a)
       end
+    end
+
+    # @drop(v): ends an owned struct without running anything, in the file
+    # that declares it (its API's way to say the resource is released).
+    def check_drop(a)
+      t = check_expr(a)
+      return "void" if t == "error"
+      unless @types[t]&.resource
+        err("E103", "@drop ends an owned struct, found #{t}#{owned?(t) ? '; free buffers with a.free' : ''}", a.line, a.col)
+        return "void"
+      end
+      unless own_type?(t)
+        err("E142", "#{t} is an owned struct, so only its own file can @drop one; end it with its API", a.line, a.col)
+        return "void"
+      end
+      unless a.is_a?(Var) || a.is_a?(Field)
+        err("E133", "@drop needs a variable or a field of one, not a temporary #{t}", a.line, a.col)
+      end
+      "void"
     end
 
     # @replace(&place, v): puts v in the place and gives back what was

@@ -18,12 +18,12 @@ uses io, alloc
 const sql = @import("sqlite3.egg")
 
 // The id of the tag called name, creating it if it is new.
-fn tag_id(db: sql.Db, name: str) !i64 {
-    const ins = try db.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)")
+fn tag_id(inout db: sql.Db, name: str) !i64 {
+    var ins = try db.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)")
     defer ins.finalize()
     try ins.bind(1, name)
     try ins.run()
-    const sel = try db.prepare("SELECT id FROM tags WHERE name = ?")
+    var sel = try db.prepare("SELECT id FROM tags WHERE name = ?")
     defer sel.finalize()
     try sel.bind(1, name)
     if (try sel.next()) {
@@ -32,25 +32,25 @@ fn tag_id(db: sql.Db, name: str) !i64 {
     return error.NoTag
 }
 
-fn add_post(db: sql.Db, title: str, body: str, tags: []str) !i64 {
-    const st = try db.prepare("INSERT INTO posts (title, body) VALUES (?, ?)")
+fn add_post(inout db: sql.Db, title: str, body: str, tags: []str) !i64 {
+    var st = try db.prepare("INSERT INTO posts (title, body) VALUES (?, ?)")
     defer st.finalize()
     try st.bind(1, title)
     try st.bind(2, body)
     try st.run()
     const post = db.last_id()
     for (tags) |t| {
-        const pt = try db.prepare("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)")
+        var pt = try db.prepare("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)")
         defer pt.finalize()
         try pt.bind_int(1, post)
-        try pt.bind_int(2, try tag_id(db, t))
+        try pt.bind_int(2, try tag_id(&db, t))
         try pt.run()
     }
     return post
 }
 
-fn add_comment(db: sql.Db, post: i64, author: str, body: str) !void {
-    const st = try db.prepare("INSERT INTO comments (post_id, author, body) VALUES (?, ?, ?)")
+fn add_comment(inout db: sql.Db, post: i64, author: str, body: str) !void {
+    var st = try db.prepare("INSERT INTO comments (post_id, author, body) VALUES (?, ?, ?)")
     defer st.finalize()
     try st.bind_int(1, post)
     try st.bind(2, author)
@@ -60,7 +60,7 @@ fn add_comment(db: sql.Db, post: i64, author: str, body: str) !void {
 
 fn main(out: Io, a: Allocator) !void {
     // In memory: every run starts fresh.
-    const db = try sql.open(a, ":memory:")
+    var db = try sql.open(a, ":memory:")
     defer db.close()
 
     try db.exec("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL)")
@@ -68,23 +68,23 @@ fn main(out: Io, a: Allocator) !void {
     try db.exec("CREATE TABLE post_tags (post_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (post_id, tag_id))")
     try db.exec("CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL)")
 
-    const p1 = try add_post(db, "Egg learns to call C",
+    const p1 = try add_post(&db, "Egg learns to call C",
         "extern fn and link: now we can drive sqlite3 directly.",
         [3]str{ "egg", "ffi", "sqlite" }[0..])
-    const p2 = try add_post(db, "Tasting o'tea",
+    const p2 = try add_post(&db, "Tasting o'tea",
         "She said it's the best Earl Grey in London.",
         [2]str{ "food", "off-topic" }[0..])
-    const p3 = try add_post(db, "Checked arithmetic is cheap",
+    const p3 = try add_post(&db, "Checked arithmetic is cheap",
         "Overflow checks cost a few percent on the benchmarks.",
         [2]str{ "egg", "perf" }[0..])
 
-    try add_comment(db, p1, "alice", "Wonderful — does it work with libcurl too?")
-    try add_comment(db, p1, "bob", "I tried sqlite3 myself; the bindings are tidy.")
-    try add_comment(db, p2, "carol", "Where's the shop?")
-    try add_comment(db, p3, "dave", "Nice; the overflow builtins really pay off.")
+    try add_comment(&db, p1, "alice", "Wonderful — does it work with libcurl too?")
+    try add_comment(&db, p1, "bob", "I tried sqlite3 myself; the bindings are tidy.")
+    try add_comment(&db, p2, "carol", "Where's the shop?")
+    try add_comment(&db, p3, "dave", "Nice; the overflow builtins really pay off.")
 
     out.print("Posts (with comment + tag counts):")
-    const posts = try db.prepare(
+    var posts = try db.prepare(
         "SELECT p.id, p.title, (SELECT COUNT(*) FROM comments WHERE post_id = p.id), (SELECT COUNT(*) FROM post_tags WHERE post_id = p.id) FROM posts p ORDER BY p.id")
     defer posts.finalize()
     while (try posts.next()) {
@@ -95,7 +95,7 @@ fn main(out: Io, a: Allocator) !void {
 
     out.print("")
     out.print("Posts tagged 'egg':")
-    const tagged = try db.prepare(
+    var tagged = try db.prepare(
         "SELECT p.title FROM posts p JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id WHERE t.name = ? ORDER BY p.id")
     defer tagged.finalize()
     try tagged.bind(1, "egg")
@@ -105,7 +105,7 @@ fn main(out: Io, a: Allocator) !void {
 
     out.print("")
     out.print("Comments on the FFI post:")
-    const comments = try db.prepare("SELECT author, body FROM comments WHERE post_id = ? ORDER BY id")
+    var comments = try db.prepare("SELECT author, body FROM comments WHERE post_id = ? ORDER BY id")
     defer comments.finalize()
     try comments.bind_int(1, p1)
     while (try comments.next()) {

@@ -31,6 +31,11 @@
 # (E137); if its elements own buffers, the body may not replace them
 # either, and the loop variable only borrows each one.
 #
+# An `owned struct` (a resource) is owned for itself, not only for its
+# buffers: its `v.#` path is followed like a buffer, and `@drop(v)` (in its
+# own file) moves just that path, so its buffer fields must still be
+# given away on their own.
+#
 # A path whose state is unknown after an error is "poison": it is not
 # reported again.
 
@@ -69,6 +74,7 @@ module Egg
       @defer_ctx = nil
       @iterated = {} # path -> line of the for loop iterating it
       @borrowed = {} # loop variable borrowing an owned element -> its container, as written
+      @res = {}      # v.# path of an owned struct -> its type
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       runtime.each_with_index do |p, i|
         t, mode = sig.params[i]
@@ -90,8 +96,14 @@ module Egg
     def leaves(path, t)
       info = @types[t]
       return [path] unless info.kind == :struct
+      @res["#{path}.#"] = t if info.resource
       owned_fields = info.fields.select { |_, ft, _| owned?(ft) }
       ["#{path}.#"] + owned_fields.flat_map { |f, ft, _| leaves("#{path}.#{f}", ft) }
+    end
+
+    # A path that must be given away: a buffer, or an owned struct's v.#.
+    def tracked?(leaf)
+      !rest?(leaf) || @res.key?(leaf)
     end
 
     # The kept paths at `path` or inside it.
@@ -162,12 +174,15 @@ module Egg
       return if kind == :borrowed
       l = line || dl
       c = line.nil? ? dc : col
-      paths = under(name).reject { |k| rest?(k) }
+      paths = under(name).select { |k| tracked?(k) }
       if kind == :inout
         moved = paths.find { |k| @st[k][0] == :moved }
         return if moved.nil?
         at = @st[moved][1]
-        if moved == name
+        if @res.key?(moved)
+          m = shown(moved)
+          err("E135", "inout parameter '#{name}' must hold a #{@res[moved]} again #{where}, but #{m == name ? 'it' : "'#{m}'"} was moved on line #{at}; give it a new one (#{m} = ...)", l, c)
+        elsif moved == name
           err("E135", "inout parameter '#{name}' was moved on line #{at} and must own a buffer again #{where}; give it a new one (#{name} = ...)", l, c)
         else
           err("E135", "inout parameter '#{name}' must own all its buffers again #{where}, but '#{moved}' was moved on line #{at}; give it a new one (#{moved} = ...)", l, c)
@@ -176,6 +191,15 @@ module Egg
       end
       owned = paths.select { |k| @st[k][0] == :owned }
       return if owned.empty?
+      res = owned.find { |k| @res.key?(k) }
+      unless res.nil?
+        it = shown(res)
+        what = kind == :param && it == name ? "parameter '#{name}'" : "'#{it}'"
+        ends = @checker.enders(@res[res]).map { |m| "#{it}.#{m}()" }
+        how = ends.empty? ? "end it with its API" : "end it with #{ends.join(' or ')}"
+        err("E135", "#{what} is a #{@res[res]} that is still open #{where}; #{how}, return it or pass it on", l, c)
+        return
+      end
       # All of it, or the first part still owned.
       it = owned.length == paths.length ? name : owned[0]
       what = kind == :param && it == name ? "parameter '#{name}'" : "'#{it}'"
@@ -322,8 +346,11 @@ module Egg
           return
         end
       end
-      owned = under(path).reject { |k| rest?(k) }.find { |k| @st[k][0] == :owned }
-      unless owned.nil?
+      owned = under(path).select { |k| tracked?(k) }.find { |k| @st[k][0] == :owned }
+      if !owned.nil? && @res.key?(owned)
+        where = shown(owned) == path ? "it holds" : "in '#{shown(owned)}'"
+        err("E135", "assigning to '#{path}' would lose the open #{@res[owned]} #{where}; end it first", line, col)
+      elsif !owned.nil?
         lost = owned == path ? "the buffer it owns" : "the buffer in '#{owned}'"
         err("E135", "assigning to '#{path}' would lose #{lost}; free it first (a.free(#{owned}))", line, col)
       end
@@ -399,9 +426,10 @@ module Egg
     # as the loop found it.
     def loop_mismatch(entry, now, line, col, where)
       differing(entry, now).each do |n|
-        next if rest?(n)
-        was = entry[n][0] == :owned ? "owns a buffer" : "has been moved"
-        is = now[n][0] == :owned ? "owns one" : "has been moved"
+        next unless tracked?(n)
+        was = entry[n][0] == :owned ? (@res.key?(n) ? "is open" : "owns a buffer") : "has been moved"
+        is = now[n][0] == :owned ? (@res.key?(n) ? "is open" : "owns one") : "has been moved"
+        n = shown(n)
         err("E134", "'#{n}' #{was} when the loop starts but #{is} #{where}; each iteration must leave it as it found it", line, col)
         entry[n] = [:poison, nil]
       end
@@ -426,12 +454,12 @@ module Egg
         syms = live.map { |s| s[n][0] }
         if syms.include?(:poison)
           out[n] = [:poison, nil]
-        elsif syms.uniq.length > 1 && rest?(n)
+        elsif syms.uniq.length > 1 && !tracked?(n)
           # Moved whole on one path, field by field on another: either way
           # nothing is owned; the rest of it can no longer be used.
           out[n] = live.find { |s| s[n][0] == :moved }[n]
         elsif syms.uniq.length > 1
-          err("E134", "'#{n}' is moved on some paths through #{what} but not on others; move or free it on every path, or on none", line, col)
+          err("E134", "'#{shown(n)}' is moved on some paths through #{what} but not on others; move or free it on every path, or on none", line, col)
           out[n] = [:poison, nil]
         else
           moved = live.find { |s| s[n][0] == :moved }
@@ -479,6 +507,9 @@ module Egg
           end
         end
         walk_args(args)
+      in Builtin[name: "drop", args:, line:, col:]
+        path = path_of(args[0])
+        path.nil? ? walk(args[0]) : drop(path, line, col)
       in Builtin[name: "replace" | "take" => name, args:, line:, col:]
         place = args[0].expr
         check_elem_change(place, line, col, name == "take" ? "taken from" : "replaced")
@@ -581,6 +612,19 @@ module Egg
       paths.each { |k| @st[k] = [:moved, line] }
     end
 
+    # @drop(v): moves only v.#, the owned struct itself.
+    def drop(path, line, col)
+      leaf = "#{path}.#"
+      return if @st[leaf].nil? || @st[leaf][0] == :poison
+      if @st[leaf][0] == :moved
+        moved_error(path, leaf, line, col)
+        @st[leaf] = [:poison, nil]
+        return
+      end
+      check_iterated(path, line, col, "dropped")
+      @st[leaf] = [:moved, line]
+    end
+
     # Read a plain field at `path` (v.len): v must not have been moved.
     def read(path, line, col)
       p = path
@@ -597,7 +641,8 @@ module Egg
     def moved_error(path, moved, line, col)
       at = @st[moved][1]
       m = shown(moved)
-      what = if m == path then "'#{path}' was moved on line #{at} and no longer owns a buffer"
+      what = if m == path && @res.key?(moved) then "'#{path}' was moved or dropped on line #{at}"
+             elsif m == path then "'#{path}' was moved on line #{at} and no longer owns a buffer"
              elsif path.start_with?("#{m}.") then "'#{m}' was moved on line #{at}"
              else "'#{m}' was moved on line #{at}, so '#{path}' does not own all its buffers"
              end

@@ -1,0 +1,23 @@
+// @drop ends only the owned struct: its buffers must be freed on their
+// own, and an inout one must hold a value again.
+uses alloc, io
+
+const Cache = owned struct {
+    data: Buf(i64)
+
+    fn close(self: Cache) void {
+        @drop(self)
+    }
+
+    fn reset(inout self: Cache, a: Allocator) void {
+        a.free(self.data)
+        @drop(self)
+    }
+}
+
+fn main(a: Allocator) void {
+    const c = Cache{ .data = a.alloc(2, 0) }
+    c.close()
+}
+// error: E135 @8
+// error: E135 @12

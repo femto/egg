@@ -186,6 +186,7 @@ module Egg
     end
 
     # const Name = struct { field: T, fn method(...) R { ... } }
+    # const Name = owned struct { ... }
     # const Name = enum { a, b, c }
     # const name = @import("file.egg")
     def parse_type_decl
@@ -199,10 +200,12 @@ module Egg
         expect_op(")")
         end_stmt
         ImportDecl.new(name.text, path.text, name.line, name.col)
-      elsif kw?("struct")
+      elsif kw?("struct") || kw?("owned")
         t = advance
+        owned = t.text == "owned"
+        expect_kw("struct") if owned
         members, methods = parse_struct_body(name.text)
-        TypeDecl.new(name.text, :struct, members, methods, t.line, t.col)
+        TypeDecl.new(name.text, :struct, members, methods, t.line, t.col, nil, owned)
       elsif kw?("union")
         t = advance
         expect_op("(")
