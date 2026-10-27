@@ -11,7 +11,7 @@ const Conn = owned struct {
     }
 
     // Taking self by value moves it in; @drop ends it.
-    fn close(self: Conn, out: Io) void {
+    fn close(sink self: Conn, out: Io) void {
         out.print(-self.id)
         @drop(self)
     }

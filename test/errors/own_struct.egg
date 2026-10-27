@@ -6,7 +6,7 @@ const List = struct {
     len: i64
 }
 
-fn give(a: Allocator, l: List) void {
+fn give(a: Allocator, sink l: List) void {
     a.free(l)
 }
 

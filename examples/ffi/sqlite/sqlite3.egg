@@ -45,7 +45,7 @@ const Db = owned struct {
     // Close the database. close_v2 waits for any statement not yet
     // finalized: the connection is freed when the last one is, so closing
     // first neither fails nor leaks.
-    fn close(self: Db) void {
+    fn close(sink self: Db) void {
         ignore(sqlite3_close_v2(self.handle))
         @drop(self)
     }
@@ -128,7 +128,7 @@ const Stmt = owned struct {
         return a.str_from_c(p)
     }
 
-    fn finalize(self: Stmt) void {
+    fn finalize(sink self: Stmt) void {
         ignore(sqlite3_finalize(self.handle))
         @drop(self)
     }

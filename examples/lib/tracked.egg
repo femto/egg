@@ -12,7 +12,7 @@ const Res = owned struct {
     data: Buf(i64)
 
     // a.free calls this: it must end everything the Res holds.
-    fn deinit(self: Res, a: Allocator) void {
+    fn deinit(sink self: Res, a: Allocator) void {
         self.log.*.n = self.log.*.n * 10 + self.id
         a.free(self.data)
         @drop(self)

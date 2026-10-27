@@ -44,7 +44,7 @@ const List = struct {
 }
 
 // Takes the list apart: its buffer goes on, the rest is plain data.
-fn into_buf(a: Allocator, l: List) Buf(i64) {
+fn into_buf(a: Allocator, sink l: List) Buf(i64) {
     var out = a.alloc(l.len, 0)
     for (l.data[0..l.len]) |x, i| {
         out[i] = x

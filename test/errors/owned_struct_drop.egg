@@ -5,7 +5,7 @@ uses alloc, io
 const Cache = owned struct {
     data: Buf(i64)
 
-    fn close(self: Cache) void {
+    fn close(sink self: Cache) void {
         @drop(self)
     }
 

@@ -22,7 +22,7 @@ fn sum(xs: []i64) i64 {
 }
 
 // Takes ownership and gives it back: the caller owns the result.
-fn doubled(a: Allocator, b: Buf(i64)) Buf(i64) {
+fn doubled(a: Allocator, sink b: Buf(i64)) Buf(i64) {
     var out = a.alloc(@len(b), 0)
     for (b) |x, i| {
         out[i] = 2 * x

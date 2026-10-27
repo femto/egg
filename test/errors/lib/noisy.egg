@@ -4,7 +4,7 @@ allow unsafe
 extern fn getpid() i32 uses io
 const N = owned struct {
     id: i64
-    fn deinit(self: N) void {
+    fn deinit(sink self: N) void {
         if (getpid() < 0) {
         }
         @drop(self)

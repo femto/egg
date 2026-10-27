@@ -11,7 +11,7 @@ fn sum(xs: []i64, n: i64) i64 {
     return n
 }
 
-fn keep(b: Buf(i64), n: i64) void {
+fn keep(sink b: Buf(i64), n: i64) void {
 }
 
 fn main(out: Io, a: Allocator) void {

@@ -140,11 +140,15 @@ v2:
   checked like a buffer (a copy is a move, it must be ended on every
   path), and only its own file can build one or end one (`@drop(v)`), so
   callers release it only through its API (`db.close()`). With a
-  `fn deinit(self: Db) void`, `a.free` ends ones held in a `Buf`, an
+  `fn deinit(sink self: Db) void`, `a.free` ends ones held in a `Buf`, an
   array or a struct, so a pool is `Buf(Db)` filled with `a.push(&pool, db)`
 - Optionals `?T`: `null` or a T, unwrapped with `orelse` (a value, or
   `orelse return` / `break` / `continue`); `a.pop(&b)` returns a `?T`,
   `null` when b is empty
+- Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
+  owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
+  works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and
+  moving a borrowed parameter is E144
 
 From v1:
 

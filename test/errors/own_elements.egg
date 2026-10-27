@@ -7,7 +7,7 @@ const List = struct {
     len: i64
 }
 
-fn give(a: Allocator, b: Buf(u8)) void {
+fn give(a: Allocator, sink b: Buf(u8)) void {
     a.free(b)
 }
 

@@ -19,7 +19,7 @@ const Session = struct {
 }
 
 // Takes the Conn: it must end it or pass it on.
-fn finish(c: conn.Conn, out: Io) void {
+fn finish(sink c: conn.Conn, out: Io) void {
     c.close(out)
 }
 

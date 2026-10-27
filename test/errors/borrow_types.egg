@@ -1,0 +1,44 @@
+// sink only on what owns something; a borrowed temporary would never be
+// freed; deinit must take self by sink.
+uses alloc, io
+
+fn twice(sink n: i64) i64 {
+    return 2 * n
+}
+
+fn count(b: Buf(i64)) i64 {
+    return @len(b)
+}
+
+const Res = owned struct {
+    id: i64
+
+    fn deinit(self: Res) void {
+        out_of(self.id)
+    }
+
+    fn id_of(self: Res) i64 {
+        return self.id
+    }
+}
+
+fn out_of(id: i64) void {
+    if (id < 0) {
+        return
+    }
+}
+
+fn make() Res {
+    return Res{ .id = 1 }
+}
+
+fn main(out: Io, a: Allocator) void {
+    out.print(twice(2))
+    out.print(count(a.alloc(2, 0)))
+    out.print(make().id_of())
+    out.print(count(.empty))
+}
+// error: E145 @5
+// error: E143 @16
+// error: E133 @37
+// error: E133 @38

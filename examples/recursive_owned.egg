@@ -8,7 +8,7 @@ const Node = owned struct {
     val: i64
     kids: Buf(Node)
 
-    fn deinit(self: Node, a: Allocator) void {
+    fn deinit(sink self: Node, a: Allocator) void {
         a.free(self.kids)
         @drop(self)
     }

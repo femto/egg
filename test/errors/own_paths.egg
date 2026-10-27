@@ -2,7 +2,7 @@
 // iteration of a loop must leave it as the loop found it (E134).
 uses alloc, io
 
-fn maybe_free(a: Allocator, b: Buf(i64), yes: bool) void {
+fn maybe_free(a: Allocator, sink b: Buf(i64), yes: bool) void {
     if (yes) {
         a.free(b)
     }

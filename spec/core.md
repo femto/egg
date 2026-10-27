@@ -51,7 +51,7 @@ fn add(a: i64, b: i64) i64 {
 
 - Source is UTF-8. Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `fn return if else while for break continue switch var const
-  true false and or struct enum union try catch orelse error inout comptime uses
+  true false and or struct enum union try catch orelse error inout sink comptime uses
   allow extern link owned null defer errdefer`.
 - Integer literals are decimal digits, optionally separated by `_`
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
@@ -193,11 +193,14 @@ fn main(out: Io) void {
 ## 5. Functions
 
 ```
-fn name(p1: T1, inout p2: T2, comptime T: type) R { ... }
+fn name(p1: T1, inout p2: T2, sink p3: T3, comptime T: type) R { ... }
 ```
 
-- A parameter is passed **by value** (a copy the function cannot assign),
-  **`inout`** (section 12) or **`comptime`** (section 14).
+- A parameter is passed **by value** (the function reads it and cannot
+  assign it), **`inout`** (section 12), **`sink`** or **`comptime`**
+  (section 14). For an owned value (section 21) a plain parameter only
+  borrows it, and `sink` takes it over; a `sink` parameter of a type that
+  owns nothing is E145.
 - A call must pass exactly as many arguments as there are parameters (E104),
   each of the declared type (E103).
 - **A non-void function must return on every path** (E107). A block returns
@@ -489,7 +492,8 @@ const Point = struct {
   `p` is mutable.
 - A function inside a struct is a method if its first parameter has the
   struct's type: `p.len2()` passes `p` by value; `p.move(1)` passes it as
-  `inout`, so `p` must be a `var` or an `inout` parameter. Any function inside the struct can be
+  `inout`, so `p` must be a `var` or an `inout` parameter; a `sink self`
+  method takes `p` over (section 21). Any function inside the struct can be
   called as `Point.origin()` or `Point.len2(p)`.
 - A struct cannot contain itself by value (E119).
 - Field types may be anything except `void`, `type` and slices (E116).
@@ -1207,8 +1211,61 @@ three work only on a `Buf` (E103).
 
 A buffer is used like an array: `b[i]` (bounds-checked; `b[i] = v` needs
 a `var` or an `inout` parameter), `@len(b)`, `for (b)`, and `b[lo..hi]`,
-a slice of it. These **borrow** it. Everything else **moves** it:
-assigning it, passing it by value, returning it, and `a.free(b)`.
+a slice of it. These **borrow** it, and so does passing it to a plain
+parameter. Everything else **moves** it: assigning it, passing it to a
+`sink` parameter, returning it, `a.free(b)` and `a.push(&bs, b)`.
+
+**Borrowed and sink parameters.** A plain parameter of an owned type
+borrows the caller's value for the call: the function may read it, index
+it, slice it, loop over it, copy plain fields out of it and pass it on to
+another plain parameter, but not move any of it (free it, return it,
+assign it, pass it to `sink`, `@drop` it; E144), and it does not have to
+give it away. Like a slice, a borrow cannot outlive the call. A `sink`
+parameter takes the value over: the caller's variable is moved, and the
+function must give it away on every path (E135). The call is written the
+same either way, `f(b)`. One value may be borrowed by several arguments
+of a call; it may not be both borrowed and passed as `inout` (E117), and
+a value moved into a `sink` parameter may not appear in another argument.
+A borrowed temporary would never be freed, so `count(a.alloc(2, 0))` is
+E133 unless `count` takes it by `sink`; `.empty` may be borrowed. The
+parameters of a function type (`fn(Buf(i64)) i64`) are plain, so a
+function value borrows its owned arguments.
+
+```egg
+// expect: 3
+// expect: 3
+uses alloc, io
+
+fn count(b: Buf(i64)) i64 {
+    return @len(b)
+}
+
+fn eat(a: Allocator, sink b: Buf(i64)) void {
+    a.free(b)
+}
+
+fn main(out: Io, a: Allocator) void {
+    const b = a.alloc(3, 0)
+    out.print(count(b))       // borrowed: b is still owned here
+    out.print(count(b))
+    eat(a, b)                 // moved
+}
+```
+
+```egg
+// error: E144
+uses alloc
+
+fn eat(a: Allocator, b: Buf(i64)) void {
+    a.free(b)                 // b is only borrowed: declare it sink b
+}
+
+fn main(a: Allocator) void {
+    const b = a.alloc(3, 0)
+    eat(a, b)
+    a.free(b)
+}
+```
 
 **Each buffer has one owner.** A move hands it on, and the variable it
 came from owns nothing until it is assigned a new buffer. The compiler
@@ -1276,16 +1333,18 @@ moves like a buffer, so a copy cannot release it again (E136), and it
 must be given away on every path (E135, E134). Only the file that
 declares it may build one (`Db{ ... }`) or end one with `@drop(v)`, which
 runs nothing (E142); everywhere else a value comes from that file's
-functions and ends by being passed to one that takes it by value, such
-as `fn close(self: Db) void { ...; @drop(self) }`. Methods that only use
-it take `inout self`; only its file may change its fields (assign them,
+functions and ends by being passed to one that takes it by `sink`, such
+as `fn close(sink self: Db) void { ...; @drop(self) }`. Methods that only
+read it take `self`, methods that change it `inout self`; only its file
+may change its fields (assign them,
 pass them as `inout`, `@replace` them; E142), though any file may read
 them. `@drop` ends only the struct itself: buffers in its fields must
 still be freed, and it needs a variable or a field of one, not a
 temporary (E133).
 
-An owned struct may have a **deinit**: `fn deinit(self: T) void`, or
-`fn deinit(self: T, a: Allocator) void` (E143 for any other shape). It is
+An owned struct may have a **deinit**: `fn deinit(sink self: T) void`,
+or `fn deinit(sink self: T, a: Allocator) void` (E143 for any other
+shape). It is
 what `a.free` calls to end one, so it must end everything the struct
 holds, and a struct holding owned structs ends each by its deinit. Only
 with a deinit may an owned struct, or something holding one, be freed
@@ -1293,7 +1352,7 @@ with `a.free` or be an element of an array or a `Buf` (E141). Neither
 `a.alloc`, `a.resize` nor `@splat` can copy one into elements (E140):
 fill a `Buf` with `a.push`. A deinit is never called on its own: a local
 must still be ended explicitly (E135), with `x.deinit()` (`x.deinit(a)`
-for the form that takes an allocator) or any other method that takes it.
+for the form that takes an allocator) or any other `sink self` method.
 
 A struct holding an owned struct is owned, and is followed field by
 field as above.
@@ -1311,7 +1370,7 @@ const File = owned struct {
         out.print(100 * self.fd + n)
     }
 
-    fn close(self: File, out: Io) void {
+    fn close(sink self: File, out: Io) void {
         out.print("closed 1")
         @drop(self)
     }
@@ -1336,7 +1395,7 @@ uses io
 const File = owned struct {
     fd: i64
 
-    fn close(self: File) void {
+    fn close(sink self: File) void {
         @drop(self)
     }
 }
@@ -1356,7 +1415,7 @@ uses alloc, io
 const Conn = owned struct {
     id: i64
 
-    fn deinit(self: Conn) void {
+    fn deinit(sink self: Conn) void {
         @drop(self)
     }
 }
@@ -1401,7 +1460,7 @@ fn sum(xs: []i64) i64 {
 }
 
 // Takes the buffer, frees it, and returns a new one.
-fn doubled(a: Allocator, b: Buf(i64)) Buf(i64) {
+fn doubled(a: Allocator, sink b: Buf(i64)) Buf(i64) {
     var out = a.alloc(@len(b), 0)
     for (b) |x, i| {
         out[i] = 2 * x
