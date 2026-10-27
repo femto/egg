@@ -1,8 +1,9 @@
-// A Buf lives only in locals, parameters and results (E133).
+// Where a Buf may not live (E133), and fill values that would copy one (E140).
 uses alloc, io
 
-const Holder = struct {
-    data: Buf(i64)
+const Holder = union(enum) {
+    data: Buf(i64),
+    none
 }
 
 fn make(a: Allocator) Buf(i64) {
@@ -26,10 +27,10 @@ fn main(out: Io, a: Allocator) !void {
 }
 
 // error: E133 @5
-// error: E133 @16
-// error: E133 @20
+// error: E133 @17
 // error: E133 @21
 // error: E133 @22
-// error: E133 @23
+// error: E140 @23
 // error: E133 @24
-// error: E133 @25
+// error: E140 @25
+// error: E133 @26

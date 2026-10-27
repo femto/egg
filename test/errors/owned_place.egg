@@ -1,0 +1,43 @@
+// Where owned values may live, and how they may be copied.
+uses alloc, io
+
+const Shape = union(enum) { pts: Buf(i64), none }
+
+const List = struct {
+    data: Buf(i64)
+    len: i64
+
+    fn grow(inout self: List, a: Allocator, xs: []i64) void {
+        a.resize(&self.data, @len(xs), 0)
+    }
+}
+
+fn mk(a: Allocator) List {
+    return List{ .data = a.alloc(1, 0), .len = 0 }
+}
+
+fn main(out: Io, a: Allocator) void {
+    var k = mk(a)
+    k.grow(a, k.data[0..])
+    k.grow(a, k.data[k.len..@len(k.data)])
+    const ls = a.alloc(2, mk(a))
+    a.free(ls)
+    out.print(mk(a).len)
+    a.free(@take(&k.len))
+    a.free(@replace(k.data, Buf(i64).empty))
+    a.free(@replace(&k.data, Buf(u8).empty))
+    out.print(@len(Buf(i64).nothing))
+    out.print(k == k)
+    a.free(k)
+}
+
+// error: E133 @4
+// error: E117 @21
+// error: E117 @22
+// error: E140 @23
+// error: E133 @25
+// error: E103 @26
+// error: E121 @27
+// error: E103 @28
+// error: E122 @29
+// error: E103 @30

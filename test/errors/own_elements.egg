@@ -1,0 +1,41 @@
+// Elements that own buffers are borrowed in place; they come out only
+// through @take/@replace.
+uses alloc, io
+
+const List = struct {
+    data: Buf(i64)
+    len: i64
+}
+
+fn give(a: Allocator, b: Buf(u8)) void {
+    a.free(b)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var bs = a.alloc(2, Buf(u8).empty)
+    defer a.free(bs)
+    give(a, bs[0])
+    bs[1] = a.alloc(3, 0)
+    const first = bs[0]
+    out.print(@len(bs[0]) + @len(first))
+    a.free(first)
+    for (bs) |b, i| {
+        give(a, b)
+        a.free(@take(&bs[i]))
+    }
+    var ls: [2]List = @splat(List{ .data = Buf(i64).empty, .len = 0 })
+    defer a.free(ls)
+    const d = ls[0].data
+    out.print(@len(d))
+    a.free(d)
+    ls[1].data = a.alloc(1, 0)
+    ls[1].len = 1
+}
+
+// error: E139 @17
+// error: E139 @18
+// error: E139 @19
+// error: E139 @23
+// error: E137 @24
+// error: E139 @28
+// error: E139 @31

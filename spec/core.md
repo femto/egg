@@ -675,9 +675,13 @@ field or element of it) must be a `var` or an `inout` parameter, and `&`
 is allowed nowhere else (E121). Inside the function, the parameter reads
 and assigns like a local.
 
-**Exclusivity** (E117): a variable passed as `inout` may not appear in any
+**Exclusivity** (E117): a place passed as `inout` may not appear in any
 other argument of the same call, so a function never sees two views of the
-same memory.
+same memory. Places are compared by their fields: `&v.data` and `v.len`
+are separate, `&v` and `v.len` are not. A method's `inout self` is looser,
+since the other arguments are computed before the call: they may read
+plain values of it (`l.push(a, l.len)`), but not take a slice of it or
+move an owned value out of it.
 
 ```egg
 // expect: 21
@@ -814,6 +818,8 @@ Builtins start with `@`; any other name is E112.
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
+| `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
+| `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 | `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
@@ -1180,12 +1186,44 @@ follows every path through each function and checks:
   elements but not move, reassign or resize it, nor pass it as `inout`
   (E137).
 
-A buffer lives only in a local, a parameter or a result: not in a field,
-an array, another buffer or behind a pointer, and a `!Buf(T)` must be
-unwrapped with `try` or `catch` right away (E133). Borrowing from a
-temporary, as in `@len(make(a))`, is E133 too: nothing could free it. A
-buffer moved into a call may not appear in another argument of it (E117),
-so a slice of it cannot outlive it. Buffers cannot be compared or printed.
+An owned value moved into a call may not appear in another argument of it
+(E117), so a slice of it cannot outlive it. Owned values cannot be compared
+or printed.
+
+**Owned structs and containers.** A struct with a `Buf` field, an array of
+buffers and a buffer of buffers are owned too: they move like a buffer,
+and `a.free(v)` frees everything they hold, deepest first. A `!T` of one
+must be unwrapped with `try` or `catch` right away; one cannot be a union
+member or a pointer's target (E133). Borrowing from a temporary, as in
+`@len(make(a))` or `make_list(a).len`, is E133 too: nothing could free it.
+
+The fields of a struct variable are followed one by one. Moving `v.data`
+(freeing it, passing it on) leaves `v` **partly moved**: its other fields
+can still be used, but `v` as a whole cannot (E136) until `v.data = ...`
+gives it a buffer again. When `v` goes away, every buffer field must have
+been moved (E135). An `inout` struct parameter must own all its buffers
+again when the function returns, so a method `fn push(inout self: List,
+...)` may resize `self.data` in place.
+
+Elements of arrays and buffers are not followed: `xs[i]` can be borrowed
+(`xs[i][j]`, `@len(xs[i])`, `xs[i].len`, `&xs[i]`), but moving it out or
+assigning over it is E139. Elements are swapped instead:
+
+- `Buf(T).empty` (or `.empty` where the type is known) is a buffer with no
+  elements, which owns no memory and costs nothing to free;
+- `@replace(&p, v)` puts `v` in the place `p` and returns what was there;
+  `@take(&p)` is `@replace(&p, Buf(T).empty)` for a buffer place. The
+  place is found first, then the value is computed. The value may not
+  mention the place's variable at all, not even another field of it
+  (E117): `@replace(&v.data, v.len)` is rejected, unlike the field-by-field
+  rule for `inout` arguments.
+
+`a.alloc`, `a.resize` and `@splat` copy their fill value, so for owned
+elements it must be made of `.empty` buffers (E140): `a.alloc(n,
+Buf(u8).empty)`, `List{ .data = .empty, .len = 0 }`. Shrinking a buffer of
+buffers with `a.resize` frees the elements cut off. While `for (xs) |x|`
+iterates over owned elements, `x` only borrows each one (moving it is
+E139), and the body may not swap elements of `xs` (E137).
 
 **defer.** `defer e` runs the void expression `e` when its block is left,
 however that happens: at its end, at `return` (after the value is
@@ -1241,6 +1279,43 @@ fn main(out: Io, a: Allocator) !void {
     out.print(sum(b[0..]))
     a.resize(&b, 5, 0)
     out.print(@len(b))
+}
+```
+
+```egg
+// expect: 3
+// expect: 33
+// expect: 2
+uses alloc, io
+
+const List = struct {
+    data: Buf(i64)
+    len: i64
+
+    fn push(inout self: List, a: Allocator, x: i64) void {
+        if (self.len == @len(self.data)) {
+            a.resize(&self.data, 2 * self.len + 1, 0)
+        }
+        self.data[self.len] = x
+        self.len = self.len + 1
+    }
+}
+
+fn main(out: Io, a: Allocator) void {
+    var l = List{ .data = .empty, .len = 0 }
+    l.push(a, 1)
+    l.push(a, 2)
+    l.push(a, 30)
+    out.print(l.len)
+    out.print(l.data[0] + l.data[1] + l.data[2])
+    a.free(l)                // frees l.data
+
+    var rows = a.alloc(2, Buf(u8).empty)
+    defer a.free(rows)       // frees each row, then rows
+    a.free(@replace(&rows[1], a.alloc(2, 7)))
+    const row = @take(&rows[1])
+    out.print(@len(row))
+    a.free(row)
 }
 ```
 
