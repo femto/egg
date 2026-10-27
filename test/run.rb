@@ -160,6 +160,41 @@ def lsp_session(messages)
   [replies, diags, status, err]
 end
 
+# catch |e|: the error's name is declared for the fallback.
+def check_lsp_catch
+  uri = "file:///t/c.egg"
+  src = <<~EGG
+    uses io
+
+    fn f() !i64 { return error.Bad }
+
+    fn main(out: Io) void {
+        const v = f() catch |e| {
+            out.print(@errorName(e))
+            return
+        }
+        out.print(v)
+    }
+  EGG
+  doc = { "uri" => uri }
+  at = ->(line, ch) { { "textDocument" => doc, "position" => { "line" => line, "character" => ch } } }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/definition", "params" => at.(6, 29) },  # e in @errorName(e)
+    { "id" => 3, "method" => "textDocument/hover", "params" => at.(6, 29) },
+    { "id" => 5, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, diags, status, err = lsp_session(req)
+  start = ->(id) { r = replies.dig(id, "result", "range", "start"); r && [r["line"], r["character"]] }
+  hover = replies.dig(3, "result", "contents", "value").to_s
+  report(diags.first == [], "lsp catch source has no errors", diags.first.inspect)
+  report(start.(2) == [5, 25], "lsp definition of a catch capture is its name", start.(2).inspect)
+  report(hover.include?("anyerror"), "lsp hover on a catch capture shows anyerror", hover)
+  report(status.success? && err.empty?, "lsp catch session ends cleanly", err)
+end
+
 # v1 syntax: types and methods in the outline, method and type navigation.
 def check_lsp_v1
   uri = "file:///t/b.egg"
@@ -516,6 +551,7 @@ Dir.mktmpdir do |dir|
   check_lsp
   check_lsp_generics
   check_lsp_v1
+  check_lsp_catch
   check_lsp_modules
   check_lsp_extern
   check_lsp_pointers

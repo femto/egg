@@ -403,7 +403,7 @@ module Egg
     def return_paths(value)
       return [false] unless @sig.ret.start_with?("!")
       return [false] if value.nil?
-      return [true] if value.is_a?(ErrorLit)
+      return [true] if value.is_a?(ErrorLit) || value.ty == "anyerror"
       value.ty.to_s.start_with?("!") ? [false, true] : [false]
     end
 
@@ -554,7 +554,11 @@ module Egg
         walk(inner)
         start = @st
         @st = dup(start)
-        walk(fallback)
+        case fallback
+        in Return | Break | Continue then walk_stmt(fallback)
+        in Block then walk_block(fallback)
+        else walk(fallback)
+        end
         merge([start, @st], line, col, "this catch")
       in Orelse[expr: inner, fallback:, line:, col:]
         walk(inner)
@@ -562,6 +566,7 @@ module Egg
         @st = dup(start)
         case fallback
         in Return | Break | Continue then walk_stmt(fallback)
+        in Block then walk_block(fallback)
         else walk(fallback)
         end
         merge([start, @st], line, col, "this orelse")

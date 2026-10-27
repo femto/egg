@@ -1,0 +1,81 @@
+// catch |e| names the error, an anyerror: compare it with ==, switch on it,
+// name it with @errorName, pass it on, store it, or return it. The fallback
+// of catch or orelse may be a value, return/break/continue, or a block; a
+// block that gives no value must leave.
+// expect: 10 / 2 = 5
+// expect: 0: Zero
+// expect: -3: negative
+// expect: 99: too big (TooBig)
+// expect: 4 / 2 = 2
+// expect: codes 0 -1 -2
+// expect: last error: TooBig
+// expect: found 3
+uses alloc, io
+
+fn check(x: i64) !i64 {
+    if (x == 0) {
+        return error.Zero
+    }
+    if (x < 0) {
+        return error.Neg
+    }
+    if (x > 50) {
+        return error.TooBig
+    }
+    return x
+}
+
+fn half(x: i64) !i64 {
+    const v = check(x) catch |e| return e
+    return v / 2
+}
+
+fn explain(a: Allocator, e: anyerror) str {
+    switch (e) {
+        error.Neg => { return "negative" }
+        error.TooBig => { return a.concat("too big (", a.concat(@errorName(e), ")")) }
+        else => { return @errorName(e) }
+    }
+}
+
+fn code(e: anyerror) i64 {
+    if (e == error.Zero) {
+        return 0
+    }
+    if (e == error.Neg) {
+        return -1
+    }
+    return -2
+}
+
+fn find(xs: []i64, want: i64) ?i64 {
+    for (xs) |x, i| {
+        if (x == want) {
+            return i
+        }
+    }
+    return null
+}
+
+fn main(out: Io, a: Allocator) void {
+    const xs = [_]i64{ 10, 0, -3, 99, 4 }
+    var last: anyerror = error.None
+    for (xs) |x| {
+        const v = half(x) catch |e| {
+            out.print(a.concat(a.concat(a.int_str(x), ": "), explain(a, e)))
+            last = e
+            continue
+        }
+        out.print(a.concat(a.concat(a.int_str(x), " / 2 = "), a.int_str(v)))
+    }
+    const c0 = half(0) catch |e| code(e)
+    const c1 = half(-1) catch |e| code(e)
+    const c2 = half(51) catch |e| code(e)
+    out.print(a.concat("codes ", a.concat(a.int_str(c0), a.concat(" ", a.concat(a.int_str(c1), a.concat(" ", a.int_str(c2)))))))
+    out.print(a.concat("last error: ", @errorName(last)))
+    const i = find(xs[0..], 99) orelse {
+        out.print("not found")
+        return
+    }
+    out.print(a.concat("found ", a.int_str(i)))
+}

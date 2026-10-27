@@ -430,8 +430,15 @@ module Egg
         else
           names = []
           while true
-            expect_op(".")
-            names << expect(:ident, "member name").text
+            if kw?("error")
+              # error.Name, in a switch on an error
+              advance
+              expect_op(".")
+              names << "error.#{expect(:ident, "error name").text}"
+            else
+              expect_op(".")
+              names << expect(:ident, "member name").text
+            end
             break unless op?(",")
             advance
             skip_nl
@@ -459,14 +466,28 @@ module Egg
       while kw?("catch") || kw?("orelse")
         t = advance
         skip_nl
-        lhs = t.text == "catch" ? Catch.new(lhs, parse_or, t.line, t.col) : Orelse.new(lhs, parse_orelse_fallback, t.line, t.col)
+        if t.text == "catch"
+          capture = nil
+          if op?("|")
+            advance
+            c = expect(:ident, "error name")
+            expect_op("|")
+            skip_nl
+            capture = [c.text, c.line, c.col]
+          end
+          lhs = Catch.new(lhs, parse_orelse_fallback, t.line, t.col, nil, nil, capture)
+        else
+          lhs = Orelse.new(lhs, parse_orelse_fallback, t.line, t.col)
+        end
       end
       lhs
     end
 
-    # After orelse: a value, or `return [e]`, `break`, `continue`.
+    # After orelse or catch: a value, `return [e]`, `break`, `continue`, or a
+    # block.
     def parse_orelse_fallback
       t = cur
+      return parse_block if op?("{")
       if kw?("return")
         advance
         value = (at?(:nl) || op?("}") || op?(")") || op?("]") || op?(",") || op?("..")) ? nil : parse_or

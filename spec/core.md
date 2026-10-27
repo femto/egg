@@ -113,6 +113,7 @@ fn main(out: Io) void {
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
 | `[]T` | a read-only view of consecutive T | parameters only; section 11 |
 | `!T` | a T or an error | section 13 |
+| `anyerror` | an error: `error.Name` | compared with `==`, switched on, named with `@errorName`; section 13 |
 | `?T` | a T or `null` | section 13 |
 | `*T` | the address of a T, or `null` | using one needs `allow unsafe`; section 18 |
 | `fn(T, U) R` | a function | section 19 |
@@ -732,7 +733,57 @@ error (names are global, and need no declaration).
   error at once. It is allowed only in a function that returns `!U` (E118).
 - `e catch f` unwraps `e: !T`, using `f: T` when `e` is an error. For a
   `!void`, the fallback is an action of type `void`: `check() catch log()`.
+- `e catch |err| f` also names the error, an `anyerror`, for the fallback
+  only; `|_|` discards it, and an `err` the fallback never uses is E110. The fallback of a catch may instead leave (`catch return`,
+  `catch |err| return err`, `catch break`, `catch continue`), or be a
+  block. A block for a `!void` runs and then the code after it; for a `!T`
+  there is no value it could give, so it must leave with `return`,
+  `break` or `continue` on every path (E118); to give a value per error,
+  call a function: `catch |err| fallback_for(err)`. None of these may be
+  inside a `defer` (E118).
 - A `!T` result cannot be ignored (E113): `try` it or `catch` it.
+- `anyerror` is the type of an error. It is an ordinary value type: it
+  can be stored, passed and returned (`var last: anyerror =
+  error.None`), and it fits where a `!T` is expected, so `return err`
+  returns it. Errors compare with `==` and `!=`; `@errorName(err)` is
+  the name, such as `"NotFound"`. `switch (err)` has arms
+  `error.Name => { ... }`, and since error names are open it must have
+  an `else` (E127); an error arm has no payload.
+
+```egg
+// expect: 0: Zero
+// expect: -3: negative
+// expect: 4 = 4
+uses alloc, io
+
+fn check(x: i64) !i64 {
+    if (x == 0) {
+        return error.Zero
+    }
+    if (x < 0) {
+        return error.Neg
+    }
+    return x
+}
+
+fn explain(e: anyerror) str {
+    switch (e) {
+        error.Neg => { return "negative" }
+        else => { return @errorName(e) }
+    }
+}
+
+fn main(out: Io, a: Allocator) void {
+    const xs = [_]i64{ 0, -3, 4 }
+    for (xs) |x| {
+        const v = check(x) catch |e| {
+            out.print(a.concat(a.concat(a.int_str(x), ": "), explain(e)))
+            continue
+        }
+        out.print(a.concat(a.concat(a.int_str(x), " = "), a.int_str(v)))
+    }
+}
+```
 
 `?T` holds either a `T` or `null`, as in Zig. T may be any value type but
 a pointer (which can already be null), `!U` or `?U` (E108).
@@ -741,8 +792,9 @@ a pointer (which can already be null), `!U` or `?U` (E108).
   then `best = 7`.
 - `e orelse f` unwraps `e: ?T`, giving `f: T` when `e` is null (E118 if
   `e` is not an optional). The fallback may instead leave: `orelse return`
-  (or `return v`), `orelse break`, `orelse continue`; not inside a `defer`
-  (E118).
+  (or `return v`), `orelse break`, `orelse continue`, or be a block that
+  leaves on every path (`orelse { log(); return }`, E118); not inside a
+  `defer` (E118).
 - A `?T` cannot be printed or compared, and a `?T` result cannot be
   ignored (E113). An owned one (`?Buf(u8)`, `?Db`) must be unwrapped
   right away, like an owned `!T` (E133).
@@ -858,6 +910,7 @@ Builtins start with `@`; any other name is E112.
 | `@len(x)` | length of an array, a slice, a `Buf` or a `str`, as `i64` |
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
+| `@errorName(e)` | the name of the error `e: anyerror`, without `error.`, as a `str` (section 13) |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |

@@ -99,12 +99,16 @@ rebuild to switch back.
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
-v3 (memory without GC, under way):
+v3 (memory without GC, and what realistic programs needed; under way):
 
 - Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
   owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
   works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and
   moving a borrowed parameter is E144
+- Errors you can tell apart: `catch |e|` names the error, an `anyerror`
+  that compares with `==`, switches (`error.Name => ...`, with an `else`)
+  and prints with `@errorName(e)`; `catch` and `orelse` may fall back to
+  `return` / `break` / `continue` or to a block that leaves
 
 From v2:
 

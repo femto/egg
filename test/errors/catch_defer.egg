@@ -1,0 +1,27 @@
+// A try nested in a loop of a catch block cannot hide in a defer; a
+// newline may follow |e|; an unused |e| is E110, |_| is not.
+uses io
+fn f(x: i64) !i64 {
+    if (x == 0) { return error.Zero }
+    return x
+}
+fn g() !void {
+    return
+}
+fn h(out: Io) !void {
+    defer g() catch {
+        while ((try f(1)) > 5) {
+            out.print(1)
+        }
+    }
+    const v = f(2) catch |e|
+        0
+    out.print(v)
+}
+fn main(out: Io) void {
+    h(out) catch |_| {
+        out.print(0)
+    }
+}
+// error: E118 @12
+// error: E110 @17
