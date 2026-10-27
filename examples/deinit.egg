@@ -1,0 +1,42 @@
+// a.free calls deinit on every owned struct it frees: one on its own, the
+// elements of a Buf, and struct fields (the last declared first). push
+// moves a value in, pop moves the last one out as a ?T. The log holds the
+// ids of the ones ended, as digits, oldest first.
+// expect: 3
+// expect: 3
+// expect: 3
+// expect: 312
+// expect: 31276
+// expect: 0
+uses alloc, io
+
+const t = @import("lib/tracked.egg")
+
+const Pair = struct {
+    first: t.Res
+    second: t.Res
+}
+
+fn main(out: Io, a: Allocator) void {
+    const log = t.new_log(a)
+
+    var pool: Buf(t.Res) = .empty
+    a.push(&pool, t.make(a, log, 1))
+    a.push(&pool, t.make(a, log, 2))
+    a.push(&pool, t.make(a, log, 3))
+    out.print(@len(pool))
+    const last = a.pop(&pool) orelse t.make(a, log, 0)
+    out.print(last.id)
+    a.free(last)
+    out.print(t.read(log))
+    a.free(pool)
+    out.print(t.read(log))
+
+    const p = Pair{ .first = t.make(a, log, 6), .second = t.make(a, log, 7) }
+    a.free(p)
+    out.print(t.read(log))
+
+    var none: Buf(i64) = .empty
+    out.print(a.pop(&none) orelse 0)
+    a.free(none)
+}

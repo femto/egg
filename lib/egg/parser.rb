@@ -133,6 +133,10 @@ module Egg
         advance
         return ErrType.new(parse_type)
       end
+      if op?("?")
+        advance
+        return OptType.new(parse_type)
+      end
       if op?("*")
         advance
         return PtrType.new(parse_type)
@@ -452,12 +456,30 @@ module Egg
 
     def parse_expr
       lhs = parse_or
-      while kw?("catch")
+      while kw?("catch") || kw?("orelse")
         t = advance
         skip_nl
-        lhs = Catch.new(lhs, parse_or, t.line, t.col)
+        lhs = t.text == "catch" ? Catch.new(lhs, parse_or, t.line, t.col) : Orelse.new(lhs, parse_orelse_fallback, t.line, t.col)
       end
       lhs
+    end
+
+    # After orelse: a value, or `return [e]`, `break`, `continue`.
+    def parse_orelse_fallback
+      t = cur
+      if kw?("return")
+        advance
+        value = (at?(:nl) || op?("}") || op?(")") || op?("]") || op?(",") || op?("..")) ? nil : parse_or
+        Return.new(value, t.line, t.col)
+      elsif kw?("break")
+        advance
+        Break.new(t.line, t.col)
+      elsif kw?("continue")
+        advance
+        Continue.new(t.line, t.col)
+      else
+        parse_or
+      end
     end
 
     def parse_or

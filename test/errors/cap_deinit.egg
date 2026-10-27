@@ -1,0 +1,9 @@
+// a.free runs deinit, so it uses what deinit uses.
+// error: E130 @8
+uses alloc
+const noisy = @import("lib/noisy.egg")
+fn main(a: Allocator) void {
+    var b: Buf(noisy.N) = .empty
+    a.push(&b, noisy.make())
+    a.free(b)
+}
