@@ -82,7 +82,7 @@ module Egg
       i < @src.length && digit?(@src[i])
     end
 
-    # "..." on one line, with escapes \n \t \\ \" \0.
+    # "..." on one line, with escapes \n \r \t \\ \" \0.
     def lex_string
       line = @line
       col = @col
@@ -101,6 +101,7 @@ module Egg
           advance
           e = @pos < @src.length ? @src[@pos] : ""
           if e == "n" then out << "\n"
+          elsif e == "r" then out << "\r"
           elsif e == "t" then out << "\t"
           elsif e == "\\" then out << "\\"
           elsif e == "\"" then out << "\""

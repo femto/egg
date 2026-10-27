@@ -156,6 +156,6 @@ fn main(a: Allocator, out: Io) void {
         }
         out.print(a.concat(a.concat(s, " = "), a.int_str(v)))
     }
-    // tabs and newlines separate tokens too
-    out.print(run(a, "\t1\n+\t2") catch -1)
+    // tabs, carriage returns and newlines separate tokens too
+    out.print(run(a, "\t1\r\n+\t2") catch -1)
 }
