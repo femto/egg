@@ -467,13 +467,13 @@ module Egg
         info.member_lines = d.members.map(&:line)
       elsif d.kind == :union
         with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members, true) }
-        d.methods.each do |m|
+        d.fns.each do |m|
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
         end
       else
         with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members) }
-        d.methods.each do |m|
+        d.fns.each do |m|
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
         end
@@ -754,7 +754,7 @@ module Egg
       info.return_line = body[0].line
       with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) }
       in_module(f.mod) do
-        st.methods.each do |m|
+        st.fns.each do |m|
           m.owner = canon
           add_method(canon, m, tenv, canon, false)
         end

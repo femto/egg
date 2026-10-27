@@ -95,7 +95,7 @@ module Egg
       prog.types.each do |d|
         d.name = Egg.qualify(mod, d.name)
         d.mod = prefix
-        d.methods.each { |m| m.mod = prefix }
+        d.fns.each { |m| m.mod = prefix }
         @types << d
       end
       prog.funcs.each do |f|
@@ -103,7 +103,7 @@ module Egg
         f.mod = prefix
         # Methods of a type function's struct.
         st = !f.body.nil? && f.body.stmts.length == 1 && f.body.stmts[0].is_a?(Return) ? f.body.stmts[0].value : nil
-        st.methods.each { |m| m.mod = prefix } if st.is_a?(StructTypeExpr)
+        st.fns.each { |m| m.mod = prefix } if st.is_a?(StructTypeExpr)
         @funcs << f
       end
       mod

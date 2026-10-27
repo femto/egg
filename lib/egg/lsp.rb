@@ -101,7 +101,7 @@ module Egg
           @funcs << [decl, name_tok.line, name_tok.col]
           @types[td.name] ||= decl
           ref(decl.line, decl.col, decl)
-          td.methods.each { |m| add_method(td.name, m, bodies) }
+          td.fns.each { |m| add_method(td.name, m, bodies) }
         end
         program.funcs.each do |f|
           decl = func_decl(f, f.name)
@@ -111,7 +111,7 @@ module Egg
           bodies << [f, decl, first]
           # A type function's methods, under the generic name: Pair.swap.
           st = type_fn_struct(f)
-          st.methods.each { |m| add_method(f.name, m, bodies) } unless st.nil?
+          st.fns.each { |m| add_method(f.name, m, bodies) } unless st.nil?
         end
         @funcs.sort_by! { |_, l, c| [l, c] }
         @globals = globals
