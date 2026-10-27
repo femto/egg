@@ -352,7 +352,6 @@ module Egg
         out << HELPERS[name] << "\n"
       end
       @int_helpers.each_value { |text| out << text << "\n" }
-      emit_drops(out)
       @enum_names.each_key do |canon|
         info = @types[canon]
         names = info.members.map { |m| c_string(m) }.join(", ")
@@ -366,21 +365,25 @@ module Egg
       # One prototype per C function, however many files declare it.
       @checker.externs.uniq(&:c_name).each { |sig| out << extern_prototype(sig) << ";\n" }
       @checker.concrete.each { |sig| out << signature(sig) << ";\n" }
-      out << "\n" << body
+      out << "\n"
+      # After the prototypes: an owned struct's drop calls its deinit.
+      emit_drops(out)
+      out << body
       out
     end
 
     private
 
     # Deep free of an owned value: a buffer's elements, then the buffer; a
-    # struct's buffer fields; an array's elements. Returns the function.
+    # struct's owned fields, last declared first; an array's elements; an
+    # owned struct, by its deinit. Returns the function.
     def drop(t)
       return @drops[t] if @drops.key?(t)
       @drops[t] = "egg_drop_#{@types[t].c_name}"
       info = @types[t]
       case info.kind
       when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
-      when :struct then info.fields.each { |_, ft, _| drop(ft) if @checker.owned?(ft) }
+      when :struct then info.fields.each { |_, ft, _| drop(ft) if @checker.owned?(ft) } if info.deinit.nil?
       end
       @drops[t]
     end
@@ -397,7 +400,14 @@ module Egg
                when :array
                  "    for (int64_t i = 0; i < #{info.len}; i++) #{drop(info.elem)}(v.a[i]);\n"
                when :struct
-                 info.fields.select { |_, ft, _| @checker.owned?(ft) }.map { |f, ft, _| "    #{drop(ft)}(v.f_#{f});\n" }.join
+                 if !info.deinit.nil?
+                   # Its deinit ends it, fields and all.
+                   a = info.deinit.params.length == 2 ? ", (egg_allocator){ 0 }" : ""
+                   "    #{info.deinit.c_name}(v#{a});\n"
+                 else
+                   # Fields last declared first, as they may depend on earlier ones.
+                   info.fields.select { |_, ft, _| @checker.owned?(ft) }.reverse.map { |f, ft, _| "    #{drop(ft)}(v.f_#{f});\n" }.join
+                 end
                end
         out << "static void #{name}(#{c_type(t)} v) {\n#{body}}\n"
       end
@@ -634,6 +644,9 @@ module Egg
         else
           @out << "typedef struct { #{c_type(info.inner)} value; int32_t err; } #{info.c_name};\n"
         end
+      when :opt
+        emit_type(info.inner, done)
+        @out << "typedef struct { #{c_type(info.inner)} value; bool has; } #{info.c_name};\n"
       when :slice
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
@@ -1047,7 +1060,9 @@ module Egg
 
     # Wrap a value for a !T slot: T -> { value, 0 }, error.X -> { .err = X }.
     def coerce(code, from, to)
-      return code if to.nil? || from == to || !to.start_with?("!")
+      return code if to.nil? || from == to
+      return "((#{c_type(to)}){ .value = #{code}, .has = true })" if to.start_with?("?")
+      return code unless to.start_with?("!")
       if from == "anyerror"
         "((#{c_type(to)}){ .err = #{code} })"
       else
@@ -1130,7 +1145,7 @@ module Egg
       in ErrorLit[info:]
         info[:error_id].to_s
       in NullLit
-        "((#{c_type(e.ty)})0)"
+        @types[e.ty].kind == :opt ? "((#{c_type(e.ty)}){ .has = false })" : "((#{c_type(e.ty)})0)"
       in AddrOf[expr: place]
         "(&#{lvalue(place)})"
       in Deref
@@ -1148,6 +1163,21 @@ module Egg
           line("if (#{r}.err) return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
         end
         e.ty == "void" ? "" : "#{r}.value"
+      in Orelse[expr: inner, fallback:]
+        r = hoist(expr(inner), inner.ty)
+        out = tmp
+        line("#{c_type(e.ty)} #{out};")
+        line("if (!#{r}.has) {")
+        @indent += 1
+        case fallback
+        in Return | Break | Continue then gen_stmt(fallback)
+        else line("#{out} = #{coerce(expr(fallback), fallback.ty, e.ty)};")
+        end
+        @indent -= 1
+        line("} else {")
+        line("    #{out} = #{r}.value;")
+        line("}")
+        out
       in Catch[expr: inner, fallback:]
         r = hoist(expr(inner), inner.ty)
         if e.ty == "void"
@@ -1283,6 +1313,26 @@ module Egg
                line("for (int64_t #{i} = #{p}->len; #{i} < #{n}; #{i}++) #{p}->ptr[#{i}] = #{v};")
                line("#{p}->len = #{n};")
                "((void)0)"
+             when "Allocator.push"
+               # moved in at the end, one more element
+               buf = args[0].ty
+               elem = @types[buf].elem
+               p = tmp
+               line("#{c_type(buf)} *#{p} = #{codes[0]};")
+               v = hoist(codes[1], elem)
+               line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{p}->len + 1, sizeof(#{c_type(elem)}));")
+               line("#{p}->ptr[#{p}->len] = #{v};")
+               line("#{p}->len++;")
+               "((void)0)"
+             when "Allocator.pop"
+               # the last element moved out, or null; the memory stays
+               buf = args[0].ty
+               p = tmp
+               line("#{c_type(buf)} *#{p} = #{codes[0]};")
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .has = false };")
+               line("if (#{p}->len > 0) { #{p}->len--; #{r}.value = #{p}->ptr[#{p}->len]; #{r}.has = true; }")
+               r
              when "Allocator.concat" then "#{helper('egg_concat')}(#{codes[0]}, #{codes[1]})"
              when "Allocator.int_str"
                if args[0].ty.start_with?("i")

@@ -1,0 +1,50 @@
+// Misusing optionals and orelse.
+uses alloc, io
+
+fn bad_ptr(p: ?*i64) void {
+}
+
+fn nested(x: ??i64) void {
+}
+
+fn not_opt(out: Io) void {
+    const n = 3
+    out.print(n orelse 4)
+}
+
+fn wrong_fallback(x: ?i64) i64 {
+    return x orelse true
+}
+
+fn in_defer(out: Io, x: ?i64) void {
+    defer out.print(x orelse return)
+    out.print(1)
+}
+
+fn owned_local(a: Allocator) void {
+    var b: Buf(Buf(i64)) = .empty
+    const top: ?Buf(i64) = a.pop(&b)
+    a.free(b)
+}
+
+fn ignored(a: Allocator) void {
+    var b: Buf(i64) = .empty
+    a.pop(&b)
+    a.free(b)
+}
+
+fn print_opt(out: Io, x: ?i64) void {
+    out.print(x)
+}
+
+fn main() void {
+}
+// error: E108 @4
+// error: E108 @7
+// error: E118 @12
+// error: E103 @16
+// error: E118 @20
+// error: E133 @26
+// error: E110 @26
+// error: E113 @32
+// error: E103 @37

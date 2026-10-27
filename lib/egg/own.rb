@@ -550,6 +550,15 @@ module Egg
         @st = dup(start)
         walk(fallback)
         merge([start, @st], line, col, "this catch")
+      in Orelse[expr: inner, fallback:, line:, col:]
+        walk(inner)
+        start = @st
+        @st = dup(start)
+        case fallback
+        in Return | Break | Continue then walk_stmt(fallback)
+        else walk(fallback)
+        end
+        merge([start, @st], line, col, "this orelse")
       else
         raise "own: unhandled expression #{e.class}"
       end

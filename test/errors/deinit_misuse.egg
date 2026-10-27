@@ -1,0 +1,40 @@
+// deinit must have the shape a.free can call, and a.alloc or @splat
+// cannot copy an owned struct, not even one of empty buffers.
+uses alloc, io
+
+const t = @import("../../examples/lib/tracked.egg")
+
+const Bad = owned struct {
+    id: i64
+
+    fn deinit(self: Bad, out: Io) void {
+        out.print(self.id)
+        @drop(self)
+    }
+}
+
+fn copied(a: Allocator) void {
+    const log = t.new_log(a)
+    const b = a.alloc(2, t.make(a, log, 1))
+    a.free(b)
+}
+
+const Own = owned struct {
+    data: Buf(i64)
+
+    fn deinit(self: Own, a: Allocator) void {
+        a.free(self.data)
+        @drop(self)
+    }
+}
+
+fn copied_here(a: Allocator) void {
+    const b = a.alloc(2, Own{ .data = .empty })
+    a.free(b)
+}
+
+fn main() void {
+}
+// error: E143 @10
+// error: E140 @18
+// error: E140 @32

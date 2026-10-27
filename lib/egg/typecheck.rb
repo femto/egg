@@ -38,9 +38,13 @@
 #
 # An `owned struct` (a resource, such as a database handle) is owned even
 # without buffers. Only its own file may build one (Db{ ... }) or end one
-# (@drop(v)), so elsewhere it ends only through its API. a.free cannot end
-# it, so it lives in locals, parameters, results and struct fields, not in
-# arrays or buffers (E141).
+# (@drop(v)), so elsewhere it ends only through its API. Without a
+# `deinit` a.free cannot end it, so it lives in locals, parameters, results
+# and struct fields, not in arrays or buffers (E141); with one, a.free
+# calls it, and those are allowed.
+#
+# ?T is a T or null, unwrapped with `orelse`; an owned ?T, like an owned
+# !T, must be unwrapped right away.
 
 module Egg
   VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
@@ -52,8 +56,8 @@ module Egg
   Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls, :unused)
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
   # mod: prefix of the module that declares the type (for #line marks)
-  # resource: an `owned struct`
-  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource)
+  # resource: an `owned struct`; deinit: its deinit method's Sig, if any
+  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource, :deinit)
 
   class TypeChecker
     # Io and Allocator are capability values: opaque, and only `main`
@@ -87,7 +91,8 @@ module Egg
                        "cstr" => [["str"], "*u8"], "str_from_c" => [["cstring"], "str"],
                        "create" => [["value"], "pointer to the value"],
                        "alloc" => [%w[i64 element], "Buf(T)"], "free" => [["buffer"], "void"],
-                       "resize" => [%w[inout_buffer i64 element], "void"] }
+                       "resize" => [%w[inout_buffer i64 element], "void"],
+                       "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
     RESERVED_TYPES = (PRIMS + ["Buf"]).freeze
@@ -402,8 +407,8 @@ module Egg
           if t == "void" || t == "type"
             err("E108", t == "void" ? "a value cannot have type void" : "only a comptime parameter can have type 'type'", p.line, p.col)
             t = "error"
-          elsif t.start_with?("!") && owned?(@types[t].inner)
-            err("E133", "a parameter cannot be a #{t}; unwrap it with try or catch and pass the #{@types[t].inner}", p.line, p.col)
+          elsif owned_err?(t)
+            err("E133", "a parameter cannot be a #{t}; unwrap it with #{unwrap_how(t)} and pass the #{@types[t].inner}", p.line, p.col)
             t = "error"
           end
           sig.params << [t, p.mode]
@@ -485,7 +490,26 @@ module Egg
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
         end
+        set_deinit(d, info) if info.resource
       end
+    end
+
+    # An owned struct's `deinit`, which a.free calls: fn deinit(self: T)
+    # void, or with a second parameter `a: Allocator`.
+    def set_deinit(d, info)
+      m = d.fns.find { |f| f.name == "deinit" }
+      return if m.nil?
+      sig = @sigs[method_key(d.name, "deinit")]
+      return if sig.nil? || sig.params.nil?
+      ok = sig.ret == "void" && sig.params[0] == [d.name, nil] &&
+           (sig.params.length == 1 || (sig.params.length == 2 && sig.params[1] == ["Allocator", nil]))
+      unless ok
+        in_module(d.mod) do
+          err("E143", "deinit of an owned struct must be fn deinit(self: #{d.name}) void, or take a second parameter a: Allocator: a.free calls it with nothing else", m.line, m.col)
+        end
+        return
+      end
+      info.deinit = sig
     end
 
     # Methods of plain types are checked eagerly; methods of a generic
@@ -524,7 +548,7 @@ module Egg
           err("E116", "a struct cannot hold a slice; slices exist only as parameters", f.line, f.col)
           t = "error"
         elsif owned_err?(t)
-          err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with try or catch and store the #{@types[t].inner}", f.line, f.col)
+          err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
           t = "error"
         elsif union && owned?(t)
           err("E133", "a union cannot hold a #{t}: only one member is live at a time, so its buffers could not be followed; use a struct", f.line, f.col)
@@ -593,6 +617,18 @@ module Egg
         info = register(canon, :err, line, col)
         info.inner = inner
         canon
+      when OptType
+        inner = resolve_type(t.inner, line, col)
+        return "error" if inner == "error"
+        unless storable?(inner) && !inner.start_with?("!") && !inner.start_with?("?")
+          err("E108", "?#{inner} is not a valid optional", line, col)
+          return "error"
+        end
+        unless pointee(inner).nil?
+          err("E108", "?#{inner} is not needed: a pointer can already be null", line, col)
+          return "error"
+        end
+        opt_type(inner)
       when GenericType
         args = t.args.map { |a| resolve_type(a, line, col) }
         return "error" if args.include?("error")
@@ -622,6 +658,13 @@ module Egg
       else
         raise "typecheck: unknown type node #{t.inspect}"
       end
+    end
+
+    # ?T: a T or null.
+    def opt_type(inner)
+      canon = "?#{inner}"
+      register(canon, :opt, nil, nil).inner = inner
+      canon
     end
 
     # "fn(i64, bool) i64", registered: params in fields, result in inner.
@@ -666,14 +709,16 @@ module Egg
     end
     public :owned?
 
-    # The `owned struct` that t is or holds (in a field, at any depth), or nil.
+    # The `owned struct` without a deinit that t is or holds (in a field
+    # or element, at any depth), or nil: what a.free cannot end. One with a
+    # deinit ends its own fields.
     def resource_in(t)
       info = @types[t]
       return nil if info.nil?
       case info.kind
       when :array, :buf then resource_in(info.elem)
       when :struct
-        return t if info.resource
+        return(info.deinit.nil? ? t : nil) if info.resource
         (info.fields || []).each do |_, ft, _|
           r = resource_in(ft)
           return r unless r.nil?
@@ -690,6 +735,40 @@ module Egg
     end
     public :enders
 
+    # The owned struct, with a deinit or not, that t is or holds, or nil.
+    def any_resource(t, seen = {})
+      return nil if seen[t]
+      seen[t] = true
+      info = @types[t]
+      case info&.kind
+      when :array, :buf then any_resource(info.elem, seen)
+      when :struct
+        return t if info.resource
+        info.fields.each do |_, ft, _|
+          r = any_resource(ft, seen)
+          return r unless r.nil?
+        end
+        nil
+      end
+    end
+
+    # The deinit methods a.free runs to free a value of type t.
+    def deinits(t, out = [], seen = {})
+      return out if seen[t]
+      seen[t] = true
+      info = @types[t]
+      case info&.kind
+      when :array, :buf then deinits(info.elem, out, seen)
+      when :struct
+        if info.resource
+          out << info.deinit unless info.deinit.nil?
+        else
+          info.fields.each { |_, ft, _| deinits(ft, out, seen) }
+        end
+      end
+      out
+    end
+
     # Declared in the file being checked?
     def own_type?(t)
       (@types[t].mod || "") == (@mod.prefix || "")
@@ -699,14 +778,18 @@ module Egg
       r = resource_in(elem)
       return false if r.nil?
       held = r == elem ? "" : " (it holds a #{r})"
-      err("E141", "#{what} cannot be a #{elem}#{held}: #{r} is an owned struct, which a.free cannot end; keep it in a local or a struct field", line, col)
+      err("E141", "#{what} cannot be a #{elem}#{held}: #{r} is an owned struct without a deinit, so a.free could not end it; give #{r} a deinit method, or keep it in a local or a struct field", line, col)
       true
     end
 
-    # !T with an owned T: it must be unwrapped right away.
+    # !T or ?T with an owned T: it must be unwrapped right away.
     def owned_err?(t)
       info = @types[t]
-      info&.kind == :err && owned?(info.inner)
+      %i[err opt].include?(info&.kind) && owned?(info.inner)
+    end
+
+    def unwrap_how(t)
+      @types[t].kind == :opt ? "orelse" : "try or catch"
     end
 
     def owned_or_err?(t)
@@ -740,6 +823,7 @@ module Egg
     # copy their fill value, which is safe only for these.
     def empty_value?(e)
       return true unless owned?(e.ty)
+      return false unless any_resource(e.ty).nil?
       case e
       in Field[info: { buf_empty: true }] | EnumLit[info: { buf_empty: true }] then true
       in StructLit[fields:] then fields.all? { |f| empty_value?(f[1]) }
@@ -751,6 +835,11 @@ module Egg
 
     def check_empty_fill(a, what)
       return if a.ty.nil? || a.ty == "error" || empty_value?(a)
+      r = any_resource(a.ty)
+      unless r.nil?
+        err("E140", "#{what} would copy this #{a.ty} into every element, but #{r} is an owned struct and cannot be copied; start from .empty and a.push each one", a.line, a.col)
+        return
+      end
       err("E140", "#{what} copies this #{a.ty} into every element, but it owns buffers; fill with #{empty_hint(a.ty)} and put values in with @replace", a.line, a.col)
     end
 
@@ -835,7 +924,7 @@ module Egg
       when :struct then (info.fields || []).map { |_, t| t }
       when :union then (info.fields || []).map { |_, t| t }.reject { |t| t == "void" }
       when :array then [info.elem]
-      when :err then [info.inner]
+      when :err, :opt then [info.inner]
       else []
       end
     end
@@ -906,8 +995,8 @@ module Egg
         elsif ty.start_with?("[]")
           err("E116", "'#{name}' cannot hold a slice; slices exist only as parameters", line, col)
           ty = "error"
-        elsif ty.start_with?("!") && owned?(@types[ty].inner)
-          err("E133", "'#{name}' cannot hold a #{ty}; unwrap it right away with try or catch", line, col)
+        elsif owned_err?(ty)
+          err("E133", "'#{name}' cannot hold a #{ty}; unwrap it right away with #{unwrap_how(ty)}", line, col)
           ty = "error"
         end
         stmt.ty = ty
@@ -989,7 +1078,7 @@ module Egg
         end
         t = check_expr(expr)
         if contains_try?(expr)
-          err("E118", "'try' cannot be used in #{what}: leaving the function from there would skip the rest", line, col)
+          err("E118", "'try' and 'orelse return/break/continue' cannot be used in #{what}: leaving from there would skip the rest", line, col)
         elsif t != "void" && t != "error"
           err("E113", "#{what} runs an action, which must be void; found #{t}", line, col)
         end
@@ -1349,6 +1438,16 @@ module Egg
         ft = check_expr(fallback, inner)
         expect_type(inner, ft, fallback)
         inner
+      in Orelse[expr:, fallback:, line:, col:]
+        t = check_expr(expr)
+        unless @types[t]&.kind == :opt
+          err("E118", "'orelse' needs an optional (?T), found #{t}", line, col) unless t == "error"
+          check_orelse_fallback(fallback, nil)
+          return "error"
+        end
+        inner = @types[t].inner
+        check_orelse_fallback(fallback, inner)
+        inner
       in AddrOf[expr: place, line:, col:]
         unless unsafe?
           err("E121", "'&' marks an inout argument; it is only allowed directly in a call (taking an address needs `allow unsafe`)", line, col)
@@ -1367,6 +1466,7 @@ module Egg
       in NullLit[line:, col:]
         t = expected
         t = @types[t].inner if !t.nil? && @types[t]&.kind == :err
+        return t if @types[t]&.kind == :opt
         if t.nil? || pointee(t).nil?
           err("E115", "cannot infer the pointer type of null; give it a type such as *i64", line, col) unless expected == "error"
           return "error"
@@ -1771,6 +1871,7 @@ module Egg
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"]
       params, ret = m
       ret = ptr_type("u8") if ret == "*u8"
+      pop = ret == "?T"
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
@@ -1788,7 +1889,7 @@ module Egg
           expect_type(elem, at, a) unless elem.nil?
           return value_type_error(at, "a Buf element", a.line, a.col) unless storable?(at)
           return owned_place_error(at, "a Buf element", a.line, a.col) if owned_err?(at)
-          check_empty_fill(a, "a.#{name}")
+          check_empty_fill(a, "a.#{name}") unless name == "push"
           ret = buf_type([at], a.line, a.col) if name == "alloc"
         elsif pt == "buffer"
           at = check_expr(a)
@@ -1796,7 +1897,10 @@ module Egg
             err("E103", "'#{name}' frees a Buf, or a struct or array holding buffers; found #{at}", a.line, a.col)
           elsif at != "error" && !(r = resource_in(at)).nil?
             held = r == at ? "" : ", which holds a #{r}"
-            err("E141", "a.free cannot end a #{at}#{held}: #{r} is an owned struct; end it with its own API (such as a close method)", a.line, a.col)
+            err("E141", "a.free cannot end a #{at}#{held}: #{r} is an owned struct without a deinit; end it with its own API (such as a close method)", a.line, a.col)
+          elsif at != "error"
+            # a.free calls the deinit of each owned struct it frees.
+            deinits(at).each { |g| @current.calls << [g, line, col] }
           end
         elsif pt == "inout_buffer"
           unless a.is_a?(AddrOf)
@@ -1814,6 +1918,7 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
+          ret = opt_type(elem) if pop
           path = inout_path(a.expr)
           clash = args.find { |o| !o.equal?(a) && !path.nil? && mentions_path?(o, path) }
           unless clash.nil?
@@ -2010,6 +2115,7 @@ module Egg
       in AddrOf[expr:] then mentions_path?(expr, path)
       in Try[expr:] then holds?(expr, path)
       in Catch[expr:, fallback:] then holds?(expr, path) || holds?(fallback, path)
+      in Orelse[expr:, fallback:] then holds?(expr, path) || (!(fb = fallback_expr(fallback)).nil? && holds?(fb, path))
       else false
       end
     end
@@ -2042,6 +2148,7 @@ module Egg
       in Deref[expr:] then collect_paths(expr, out)
       in Try[expr:] then collect_paths(expr, out)
       in Catch[expr:, fallback:] then [expr, fallback].each { |x| collect_paths(x, out) }
+      in Orelse[expr:, fallback:] then [expr, fallback_expr(fallback)].compact.each { |x| collect_paths(x, out) }
       else nil
       end
       out
@@ -2072,6 +2179,7 @@ module Egg
       in Deref[expr:] then mentions?(expr, name)
       in Try[expr:] then mentions?(expr, name)
       in Catch[expr:, fallback:] then mentions?(expr, name) || mentions?(fallback, name)
+      in Orelse[expr:, fallback:] then mentions?(expr, name) || (!(fb = fallback_expr(fallback)).nil? && mentions?(fb, name))
       else false
       end
     end
@@ -2094,7 +2202,28 @@ module Egg
       in StructLit[fields:] then fields.any? { |f| contains_try?(f[1]) }
       in ArrayLit[items:] then items.any? { |i| contains_try?(i) }
       in Catch[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
+      in Orelse[expr:, fallback: Return | Break | Continue] then true
+      in Orelse[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
       else false
+      end
+    end
+
+    # The fallback of orelse: a value of the inner type, or a way out.
+    def check_orelse_fallback(f, inner)
+      case f
+      in Return | Break | Continue then check_stmt(f)
+      else
+        ft = check_expr(f, inner)
+        expect_type(inner, ft, f) unless inner.nil?
+      end
+    end
+
+    # The expression in an orelse fallback (a return's value), or nil.
+    def fallback_expr(f)
+      case f
+      in Return[value:] then value
+      in Break | Continue then nil
+      else f
       end
     end
 
@@ -2363,6 +2492,7 @@ module Egg
         return true if got == "anyerror"
         return true if @types[want].inner == got
       end
+      return true if want.start_with?("?") && @types[want].inner == got
       false
     end
 

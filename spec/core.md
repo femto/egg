@@ -51,7 +51,7 @@ fn add(a: i64, b: i64) i64 {
 
 - Source is UTF-8. Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `fn return if else while for break continue switch var const
-  true false and or struct enum union try catch error inout comptime uses
+  true false and or struct enum union try catch orelse error inout comptime uses
   allow extern link owned null defer errdefer`.
 - Integer literals are decimal digits, optionally separated by `_`
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
@@ -113,6 +113,7 @@ fn main(out: Io) void {
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
 | `[]T` | a read-only view of consecutive T | parameters only; section 11 |
 | `!T` | a T or an error | section 13 |
+| `?T` | a T or `null` | section 13 |
 | `*T` | the address of a T, or `null` | using one needs `allow unsafe`; section 18 |
 | `fn(T, U) R` | a function | section 19 |
 | `type` | a type, at compile time only | `comptime` parameters; section 14 |
@@ -124,8 +125,8 @@ Every type that has runtime values, except slices and buffers, is a **value type
 assignment, passing and returning copy the value (`void` and `type` have
 no runtime values). There are **no implicit conversions**. Every
 operator and every assignment, argument and return requires exactly the
-expected type (E103), with two exceptions: a `T` fits where `!T` is
-expected, and `error.X` fits any `!T`. Integers are not booleans: `if (1)`
+expected type (E103), with these exceptions: a `T` fits where `!T` or
+`?T` is expected, `error.X` fits any `!T`, and `null` any `?T`. Integers are not booleans: `if (1)`
 is an error.
 
 ```egg
@@ -268,7 +269,7 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 
 | Level | Operators | Operand types | Result |
 | --- | --- | --- | --- |
-| 1 | `e catch f` | `!T`, fallback `T` | `T` (section 13) |
+| 1 | `e catch f`, `e orelse f` | `!T` / `?T`, fallback `T` | `T` (section 13) |
 | 2 | `or` | bool | bool |
 | 3 | `and` | bool | bool |
 | 4 | `==` `!=` | both the same number type, bool, str, enum, pointer or function type | bool |
@@ -728,6 +729,41 @@ error (names are global, and need no declaration).
   `!void`, the fallback is an action of type `void`: `check() catch log()`.
 - A `!T` result cannot be ignored (E113): `try` it or `catch` it.
 
+`?T` holds either a `T` or `null`, as in Zig. T may be any value type but
+a pointer (which can already be null), `!U` or `?U` (E108).
+
+- A `T` or `null` fits where a `?T` is expected: `var best: ?i64 = null`,
+  then `best = 7`.
+- `e orelse f` unwraps `e: ?T`, giving `f: T` when `e` is null (E118 if
+  `e` is not an optional). The fallback may instead leave: `orelse return`
+  (or `return v`), `orelse break`, `orelse continue`; not inside a `defer`
+  (E118).
+- A `?T` cannot be printed or compared, and a `?T` result cannot be
+  ignored (E113). An owned one (`?Buf(u8)`, `?Db`) must be unwrapped
+  right away, like an owned `!T` (E133).
+
+```egg
+// expect: 4
+// expect: -1
+// expect: 9
+uses io
+
+fn first(xs: []i64) ?i64 {
+    if (@len(xs) == 0) {
+        return null
+    }
+    return xs[0]
+}
+
+fn main(out: Io) void {
+    out.print(first([2]i64{ 4, 5 }[0..]) orelse -1)
+    var best: ?i64 = null
+    out.print(best orelse -1)
+    best = 9
+    out.print(best orelse -1)
+}
+```
+
 ```egg
 // expect: 42
 // expect: -1
@@ -905,7 +941,7 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `out.print(x)`: prints an integer, a float, `bool`, `str` or enum and a newline to standard output |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
@@ -1162,7 +1198,10 @@ tells the C compiler where to look.
 resized. `a.alloc(n, v)` makes one holding n copies of v (T is v's type,
 or the element type the context expects); `a.free(b)` frees it;
 `a.resize(&b, n, v)` changes its length to n, filling new elements with v.
-A negative length panics with `negative buffer length`.
+A negative length panics with `negative buffer length`. `a.push(&b, v)`
+moves v in at the end, and `a.pop(&b)` moves the last element out as a
+`?T` (`null` when b is empty); a pushed value is not copied, so it may be
+an owned one.
 
 A buffer is used like an array: `b[i]` (bounds-checked; `b[i] = v` needs
 a `var` or an `inout` parameter), `@len(b)`, `for (b)`, and `b[lo..hi]`,
@@ -1193,8 +1232,10 @@ or printed.
 
 **Owned structs and containers.** A struct with a `Buf` field, an array of
 buffers and a buffer of buffers are owned too: they move like a buffer,
-and `a.free(v)` frees everything they hold, deepest first. A `!T` of one
-must be unwrapped with `try` or `catch` right away; one cannot be a union
+and `a.free(v)` frees everything they hold, the elements of an array or
+buffer in order and a struct's fields last declared first (they may
+depend on earlier ones). A `!T` or `?T` of one
+must be unwrapped right away (`try`, `catch`, `orelse`); one cannot be a union
 member or a pointer's target (E133). Borrowing from a temporary, as in
 `@len(make(a))` or `make_list(a).len`, is E133 too: nothing could free it.
 
@@ -1235,13 +1276,24 @@ declares it may build one (`Db{ ... }`) or end one with `@drop(v)`, which
 runs nothing (E142); everywhere else a value comes from that file's
 functions and ends by being passed to one that takes it by value, such
 as `fn close(self: Db) void { ...; @drop(self) }`. Methods that only use
-it take `inout self`. `@drop` ends only the struct itself: buffers in its
-fields must still be freed, and it needs a variable or a field of one, not
-a temporary (E133).
+it take `inout self`; only its file may change its fields (assign them,
+pass them as `inout`, `@replace` them; E142), though any file may read
+them. `@drop` ends only the struct itself: buffers in its fields must
+still be freed, and it needs a variable or a field of one, not a
+temporary (E133).
 
-a.free cannot release a resource, so neither an owned struct nor a
-struct holding one may be freed with it, nor be an element of an array
-or a `Buf` (E141). A struct holding one is owned, and is followed field by
+An owned struct may have a **deinit**: `fn deinit(self: T) void`, or
+`fn deinit(self: T, a: Allocator) void` (E143 for any other shape). It is
+what `a.free` calls to end one, so it must end everything the struct
+holds, and a struct holding owned structs ends each by its deinit. Only
+with a deinit may an owned struct, or something holding one, be freed
+with `a.free` or be an element of an array or a `Buf` (E141). Neither
+`a.alloc`, `a.resize` nor `@splat` can copy one into elements (E140):
+fill a `Buf` with `a.push`. A deinit is never called on its own: a local
+must still be ended explicitly (E135), with `x.deinit()` or any other
+method that takes it.
+
+A struct holding an owned struct is owned, and is followed field by
 field as above.
 
 ```egg
@@ -1290,6 +1342,37 @@ const File = owned struct {
 fn main(out: Io) void {
     const f = File{ .fd = 1 }
     out.print(f.fd)          // f is never closed
+}
+```
+
+```egg
+// expect: 2
+// expect: 1
+// expect: 2
+uses alloc, io
+
+const Conn = owned struct {
+    id: i64
+
+    fn deinit(self: Conn) void {
+        @drop(self)
+    }
+}
+
+fn open(id: i64) Conn {
+    return Conn{ .id = id }
+}
+
+fn main(out: Io, a: Allocator) void {
+    var pool: Buf(Conn) = .empty
+    defer a.free(pool)               // deinit on each one left
+    a.push(&pool, open(1))
+    a.push(&pool, open(2))
+    out.print(@len(pool))
+    const c = a.pop(&pool) orelse return
+    out.print(@len(pool))
+    out.print(c.id)
+    c.deinit()
 }
 ```
 
@@ -1423,8 +1506,9 @@ fn main(out: Io, a: Allocator) void {
 
 ## 22. Not yet
 
-Closures, optional types
-(`?*T`) and many-item pointers, reflection beyond
+Closures, unwrapping an optional by capture (`if (x) |v|`, `while (x)
+|v|`) or `x.?`, optional owned fields (`?Db` in a struct), many-item
+pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, and capabilities other
 than `io` and `alloc`. See the design document's roadmap for when each
 arrives.

@@ -1,0 +1,25 @@
+// A value pushed is moved; one popped must be ended.
+uses alloc, io
+
+const t = @import("../../examples/lib/tracked.egg")
+
+fn moved(a: Allocator) void {
+    const log = t.new_log(a)
+    var p: Buf(t.Res) = .empty
+    const r = t.make(a, log, 1)
+    a.push(&p, r)
+    a.free(r)
+    a.free(p)
+}
+
+fn popped(out: Io, a: Allocator) void {
+    var p: Buf(t.Res) = .empty
+    defer a.free(p)
+    const r = a.pop(&p) orelse return
+    out.print(r.id)
+}
+
+fn main() void {
+}
+// error: E136 @11
+// error: E135 @18

@@ -138,7 +138,11 @@ v2:
 - Owned structs for resources: `const Db = owned struct { ... }` is
   checked like a buffer (a copy is a move, it must be ended on every
   path), and only its own file can build one or end one (`@drop(v)`), so
-  callers release it only through its API (`db.close()`)
+  callers release it only through its API (`db.close()`). With a
+  `fn deinit(self: Db) void`, `a.free` ends ones held in a `Buf`, an
+  array or a struct, so a pool is `Buf(Db)` filled with `a.push`
+- Optionals `?T`: `null` or a T, unwrapped with `orelse` (a value, or
+  `orelse return` / `break` / `continue`); `a.pop(&b)` returns one
 
 From v1:
 
