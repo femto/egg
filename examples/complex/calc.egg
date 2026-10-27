@@ -1,7 +1,10 @@
 // A recursive-descent calculator: a Parser with inout self methods builds
 // an AST in a pool (nodes refer to each other by index), eval walks it,
 // and errors (a missing paren, division by zero, a stray character) are
-// told apart with catch |e| and @errorName.
+// told apart with catch |e| and @errorName. A number too big for i64 is
+// error.TooBig; overflow while evaluating (9223372036854775807 + 1) is not
+// caught here and panics with `integer overflow`, as all Egg arithmetic
+// does.
 // expect: 1 + 2 * 3 = 7
 // expect: (1 + 2) * 3 = 9
 // expect: -(4 - 10) / 2 = 3
