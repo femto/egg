@@ -50,7 +50,7 @@ Kept out of the core on purpose:
 - Operator overloading and implicit conversions: mildly annoying for people, clearer for AI and reviewers
 - Closures: capturing an environment usually means allocating, so it belongs to a capability
 - Exceptions, heap allocation, IO: all capability modules
-- Garbage collection: not in the language at all. Memory is managed only by ownership (one owner, checked on every path), so freeing is explicit and costs nothing at run time
+- Garbage collection: not in the language at all. Heap memory is managed only by ownership (one owner, checked on every path): freeing is explicit, and neither a collector nor the ownership check runs at run time. Until v3, strings and `a.create` live in a program-lifetime arena instead
 
 Errors as values are in the core because they are just a return value plus a tag. Exceptions need stack unwinding, so they are not.
 
