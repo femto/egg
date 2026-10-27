@@ -2286,28 +2286,35 @@ module Egg
     end
 
     # Does expression e contain a `try`?
-    def contains_try?(e)
+    # in_loop: e is inside a loop of the code being checked, where break and
+    # continue stay in that loop and do not leave.
+    def contains_try?(e, in_loop = false)
       case e
       in Try then true
       in Var | IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit then false
-      in Unary[operand:] then contains_try?(operand)
-      in Binary[lhs:, rhs:] then contains_try?(lhs) || contains_try?(rhs)
-      in Call[args:] then args.any? { |a| contains_try?(a) }
-      in Builtin[args:] then args.any? { |a| contains_try?(a) }
-      in MethodCall[obj:, args:] then contains_try?(obj) || args.any? { |a| contains_try?(a) }
-      in Field[obj:] then contains_try?(obj)
-      in AddrOf[expr:] then contains_try?(expr)
-      in Deref[expr:] then contains_try?(expr)
-      in Index[obj:, index:] then contains_try?(obj) || contains_try?(index)
-      in SliceExpr[obj:, lo:, hi:] then contains_try?(obj) || contains_try?(lo) || (!hi.nil? && contains_try?(hi))
-      in StructLit[fields:] then fields.any? { |f| contains_try?(f[1]) }
-      in ArrayLit[items:] then items.any? { |i| contains_try?(i) }
-      in Catch[expr:, fallback: Return | Break | Continue] then true
-      in Catch[expr:, fallback: Block => b] then contains_try?(expr) || block_jumps?(b)
-      in Orelse[expr:, fallback: Block => b] then contains_try?(expr) || block_jumps?(b)
-      in Catch[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
-      in Orelse[expr:, fallback: Return | Break | Continue] then true
-      in Orelse[expr:, fallback:] then contains_try?(expr) || contains_try?(fallback)
+      in Unary[operand:] then contains_try?(operand, in_loop)
+      in Binary[lhs:, rhs:] then contains_try?(lhs, in_loop) || contains_try?(rhs, in_loop)
+      in Call[args:] then args.any? { |a| contains_try?(a, in_loop) }
+      in Builtin[args:] then args.any? { |a| contains_try?(a, in_loop) }
+      in MethodCall[obj:, args:] then contains_try?(obj, in_loop) || args.any? { |a| contains_try?(a, in_loop) }
+      in Field[obj:] then contains_try?(obj, in_loop)
+      in AddrOf[expr:] then contains_try?(expr, in_loop)
+      in Deref[expr:] then contains_try?(expr, in_loop)
+      in Index[obj:, index:] then contains_try?(obj, in_loop) || contains_try?(index, in_loop)
+      in SliceExpr[obj:, lo:, hi:] then contains_try?(obj, in_loop) || contains_try?(lo, in_loop) || (!hi.nil? && contains_try?(hi, in_loop))
+      in StructLit[fields:] then fields.any? { |f| contains_try?(f[1], in_loop) }
+      in ArrayLit[items:] then items.any? { |i| contains_try?(i, in_loop) }
+      in Catch | Orelse
+        # A fallback that leaves: return always does; break and continue
+        # only when not inside a loop of their own.
+        f = e.fallback
+        contains_try?(e.expr, in_loop) ||
+          case f
+          in Return then true
+          in Break | Continue then !in_loop
+          in Block then in_loop ? block_has_return?(f) : block_jumps?(f)
+          else contains_try?(f, in_loop)
+          end
       else false
       end
     end
@@ -2376,13 +2383,13 @@ module Egg
         case s
         in Return then true
         in If[cond:, then_body:, else_body:]
-          contains_try?(cond) || block_has_return?(then_body) || (!else_body.nil? && block_has_return?(else_body.is_a?(Block) ? else_body : Block.new([else_body])))
-        in While[cond:, body:] then contains_try?(cond) || block_has_return?(body)
-        in For[iter:, body:] then contains_try?(iter) || block_has_return?(body)
-        in Switch[subject:, arms:] then contains_try?(subject) || arms.any? { |a| block_has_return?(a.body) }
-        in VarDecl[value:] then contains_try?(value)
-        in Assign[value:] then contains_try?(value)
-        in ExprStmt[expr:] then contains_try?(expr)
+          contains_try?(cond, true) || block_has_return?(then_body) || (!else_body.nil? && block_has_return?(else_body.is_a?(Block) ? else_body : Block.new([else_body])))
+        in While[cond:, body:] then contains_try?(cond, true) || block_has_return?(body)
+        in For[iter:, body:] then contains_try?(iter, true) || block_has_return?(body)
+        in Switch[subject:, arms:] then contains_try?(subject, true) || arms.any? { |a| block_has_return?(a.body) }
+        in VarDecl[value:] then contains_try?(value, true)
+        in Assign[value:] then contains_try?(value, true)
+        in ExprStmt[expr:] then contains_try?(expr, true)
         else false
         end
       end
