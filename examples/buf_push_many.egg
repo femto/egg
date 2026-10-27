@@ -1,0 +1,25 @@
+// a.push doubles a Buf's capacity when it runs out, so a million pushes
+// cost amortized O(1) each; a.pop keeps the memory for later pushes.
+// expect: 1000000
+// expect: 499999500000
+// expect: 999999
+uses alloc, io
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(i64) = .empty
+    defer a.free(b)
+    var i: i64 = 0
+    while (i < 1000000) {
+        a.push(&b, i)
+        i = i + 1
+    }
+    out.print(@len(b))
+    var sum: i64 = 0
+    for (b) |x| {
+        sum = sum + x
+    }
+    out.print(sum)
+    const last = a.pop(&b) orelse -1
+    a.push(&b, last)
+    out.print(b[@len(b) - 1])
+}
