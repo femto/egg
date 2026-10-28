@@ -116,7 +116,10 @@ def bad_line_marks(c_source, src, path)
     # `uses`, `allow`, `@import` and `extern fn` lines declare, and
     # generate no code (an extern fn only a prototype).
     declares = text.match?(/\A(uses|allow|extern|link)\s/) || text.match?(/\Aconst \w+ = @import\(/)
-    code << i + 1 unless continued || declares || text.match?(/\A\}( else \{)?\z/)
+    # An else-if comparing types (K == i64) is decided at compile time, and
+    # @compileError stands only in a branch that is never generated.
+    comptime = text.match?(/\A\} else if \((\s*!?[A-Z]\w* [!=]= [\w.]+\s*(and|or)?)+\) \{\z/) || text.start_with?("@compileError(")
+    code << i + 1 unless continued || declares || comptime || text.match?(/\A\}( else \{)?\z/)
     prev = text
   end
   (marked - code) + (code - marked)

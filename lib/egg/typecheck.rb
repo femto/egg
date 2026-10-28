@@ -100,7 +100,7 @@ module Egg
     ORDER_OPS = %w[< <= > >=].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
-                      "replace" => 2, "take" => 1, "drop" => 1, "errorName" => 1,
+                      "replace" => 2, "take" => 1, "drop" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
@@ -1059,6 +1059,11 @@ module Egg
           expect_type(t, vt, value)
         end
       in If[cond:, then_body:, else_body:]
+        if fold_comptime_if(stmt)
+          # Only the branch the types choose is checked (and generated).
+          check_block(stmt.then_body)
+          return
+        end
         expect_type("bool", check_expr(cond), cond)
         check_block(then_body)
         case else_body
@@ -1649,7 +1654,9 @@ module Egg
         return arith ? (num?(lt) ? lt : "error") : "bool"
       elsif op == "==" || op == "!="
         if lt != "error" && rt != "error"
-          if lt != rt
+          if lt == "type" || rt == "type"
+            err("E103", "types are compared only in an if condition, which is decided at compile time: if (K == str) { ... }", line, col)
+          elsif lt != rt
             err("E103", "cannot compare #{lt} with #{rt}", line, col)
           elsif owned?(lt)
             err("E103", "cannot compare #{lt} with #{op}: it owns buffers; compare their elements", line, col)
@@ -2334,6 +2341,80 @@ module Egg
       end
     end
 
+    # `if (K == str) {...} else if (...) {...} else {...}` whose conditions
+    # compare types is decided at compile time: the If becomes
+    # `if (true) { chosen branch }` (an empty block when none is chosen),
+    # so the other branches are never checked, which lets one generic
+    # function do different things per type. Instances are copies, so
+    # rewriting the AST is safe. Returns whether it folded.
+    def fold_comptime_if(stmt)
+      return false if comptime_cond(stmt.cond).nil?
+      chosen = nil
+      s = stmt
+      while true
+        c = comptime_cond(s.cond)
+        if c.nil?
+          # A runtime condition after comptime ones: keep it as it is.
+          chosen = Block.new([s])
+          break
+        elsif c
+          chosen = s.then_body
+          break
+        end
+        case s.else_body
+        in nil then break
+        in Block
+          chosen = s.else_body
+          break
+        in If then s = s.else_body
+        end
+      end
+      stmt.cond = BoolLit.new(true, stmt.cond.line, stmt.cond.col)
+      stmt.then_body = chosen || Block.new([])
+      stmt.else_body = nil
+      true
+    end
+
+    # true/false for a condition made of type comparisons (K == str,
+    # K != i64, joined by and / or / !), nil for anything else.
+    def comptime_cond(e)
+      case e
+      in Binary[op: ("==" | "!=") => op, lhs:, rhs:]
+        l = comptime_type(lhs)
+        r = l.nil? ? nil : comptime_type(rhs)
+        return nil if r.nil?
+        op == "==" ? l == r : l != r
+      in Binary[op: ("and" | "or") => op, lhs:, rhs:]
+        l = comptime_cond(lhs)
+        r = l.nil? ? nil : comptime_cond(rhs)
+        return nil if r.nil?
+        op == "and" ? (l && r) : (l || r)
+      in Unary[op: "!", operand:]
+        c = comptime_cond(operand)
+        c.nil? ? nil : !c
+      else nil
+      end
+    end
+
+    # The type an expression names (K, str, i64, Point, m.Point), or nil
+    # when it is not a type; reports nothing.
+    def comptime_type(e)
+      name = case e
+             in Var[name:] then name
+             in Field[obj: Var[name: m], name:] then "#{m}.#{name}"
+             else return nil
+             end
+      return @tenv[name] if @tenv.key?(name)
+      return nil if lookup(name) # a variable
+      before = @diagnostics.length
+      t = resolve_type(name, e.line, e.col)
+      if @diagnostics.length > before || t == "error"
+        @diagnostics.slice!(before..)
+        return nil
+      end
+      t
+    end
+
     def fallback_jump?(f)
       f.is_a?(Return) || f.is_a?(Break) || f.is_a?(Continue)
     end
@@ -2347,6 +2428,8 @@ module Egg
     def stmt_leaves?(stmt)
       case stmt
       in Return | Break | Continue then true
+      in ExprStmt[expr: Builtin[name: "compileError"]] then true
+      in If[cond: BoolLit[value: true], then_body:, else_body: nil] then block_leaves?(then_body)
       in Switch[arms:] then arms.all? { |a| block_leaves?(a.body) }
       in If[then_body:, else_body:]
         case else_body
@@ -2592,6 +2675,15 @@ module Egg
       when "typeName"
         e.info[:type] = type_arg(a)
         "str"
+      when "compileError"
+        # Reached only in a branch that is checked: a comptime if keeps
+        # just the branch its types choose.
+        if a.is_a?(StrLit)
+          err("E146", a.value, line, col)
+        else
+          err("E146", "@compileError needs a string literal", a.line, a.col)
+        end
+        "void"
       when "errorName"
         t = check_expr(a)
         err("E103", "@errorName needs an anyerror (error.X, or e in catch |e|), found #{t}", a.line, a.col) unless t == "anyerror" || t == "error"
@@ -2698,6 +2790,8 @@ module Egg
     def stmt_returns?(stmt)
       case stmt
       in Return then true
+      in ExprStmt[expr: Builtin[name: "compileError"]] then true
+      in If[cond: BoolLit[value: true], then_body:, else_body: nil] then block_returns?(then_body)
       in Switch[arms:] then arms.all? { |a| block_returns?(a.body) }
       in If[then_body:, else_body:]
         case else_body

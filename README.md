@@ -109,6 +109,9 @@ v3 (memory without GC, and what realistic programs needed; under way):
   that compares with `==`, switches (`error.Name => ...`, with an `else`)
   and prints with `@errorName(e)`; `catch` and `orelse` may fall back to
   `return` / `break` / `continue` or to a block that leaves
+- Choosing by type in generic code: `if (K == str) { ... } else if (K == i64)
+  { ... } else { @compileError("...") }` is decided at compile time, and
+  only the chosen branch is checked
 
 From v2:
 
