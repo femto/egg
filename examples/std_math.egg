@@ -1,0 +1,18 @@
+// A module of the standard library is imported by name, without .egg:
+// @import("std/math") is std/math.egg next to the compiler.
+// expect: 2
+// expect: 9
+// expect: 7
+// expect: 10
+// expect: 1.5
+uses io
+
+const math = @import("std/math")
+
+fn main(out: Io) void {
+    out.print(math.min(i64, 2, 9))
+    out.print(math.max(i64, 2, 9))
+    out.print(math.abs(i64, -7))
+    out.print(math.clamp(i64, 42, 0, 10))
+    out.print(math.abs(f64, -1.5))
+}

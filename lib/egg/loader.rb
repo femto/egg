@@ -2,7 +2,11 @@
 # Program for the checker.
 #
 # `const m = @import("m.egg")` names another file, relative to the
-# importing one. Each file is loaded once however often it is imported,
+# importing one; `@import("std/map")`, without `.egg`, names a module:
+# std/map.egg in the standard library's directory. A file import may not
+# leave its module's root: the root file's directory for the program, the
+# library's directory for std files, so a module is a self-contained tree
+# (as in Zig). Each file is loaded once however often it is imported,
 # and imports may form cycles (names are resolved after everything is
 # loaded, as in Zig).
 #
@@ -18,8 +22,12 @@ module Egg
   # file: path shown in diagnostics (nil for the root); uses: UsesItem list;
   # aliases: import name -> prefix of the module it names;
   # names: top-level names declared in the module (unqualified);
-  # allows: UsesItem list from `allow unsafe`; links: from `link "name"`
-  ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows, :links)
+  # allows: UsesItem list from `allow unsafe`; links: from `link "name"`;
+  # root: the directory its file imports must stay inside
+  ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows, :links, :root)
+
+  # The standard library: EGG_STD, or std/ next to the compiler's lib/.
+  STD_ROOT = ENV["EGG_STD"] || File.expand_path("../../std", __dir__)
 
   # The global name of `name` declared in module `mod`.
   def self.qualify(mod, name)
@@ -42,7 +50,7 @@ module Egg
 
     def load
       root_prog = @root || Parser.new(Lexer.new(@src).tokenize).parse_program
-      root = add_module("", @path, nil, root_prog)
+      root = add_module("", @path, nil, root_prog, @path.nil? ? Dir.pwd : File.dirname(@path))
       queue = [[root, root_prog]]
       until queue.empty?
         mod, prog = queue.shift
@@ -60,17 +68,23 @@ module Egg
     private
 
     def resolve_import(mod, imp, queue)
-      unless imp.path.end_with?(".egg")
-        fail_at(mod, imp, "E129", "an import names an .egg file, found \"#{imp.path}\"")
+      if imp.path.end_with?(".egg")
+        # A file of the same module, relative to the importing file.
+        base_dir = mod.path.nil? ? Dir.pwd : File.dirname(mod.path)
+        abs = File.expand_path(imp.path, base_dir)
+        root = mod.root
+        unless abs.start_with?("#{root}/")
+          fail_at(mod, imp, "E129", "\"#{imp.path}\" is outside this module's root (#{root}); a file can import only files under it, and other modules by name, such as @import(\"std/map\")")
+        end
+        file = display_path(mod, imp.path)
+      else
+        abs, root, file = module_path(mod, imp)
       end
-      base_dir = mod.path.nil? ? Dir.pwd : File.dirname(mod.path)
-      abs = File.expand_path(imp.path, base_dir)
       found = @by_path[abs]
       return found unless found.nil?
       unless File.file?(abs)
         fail_at(mod, imp, "E129", "cannot find \"#{imp.path}\" (looked for #{abs})")
       end
-      file = display_path(mod, imp.path)
       src = begin
         File.read(abs)
       rescue SystemCallError => e
@@ -82,14 +96,14 @@ module Egg
         e.diagnostic.file = file
         raise e
       end
-      target = add_module(unique_prefix(abs), abs, file, prog)
+      target = add_module(unique_prefix(abs), abs, file, prog, root)
       queue << [target, prog]
       target
     end
 
-    def add_module(prefix, path, file, prog)
+    def add_module(prefix, path, file, prog, root)
       names = prog.funcs.map(&:name) + prog.types.map(&:name)
-      mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports, prog.allows || [], prog.links || [])
+      mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports, prog.allows || [], prog.links || [], root)
       @modules[prefix] = mod
       @by_path[path] = mod unless path.nil?
       prog.types.each do |d|
@@ -107,6 +121,21 @@ module Egg
         @funcs << f
       end
       mod
+    end
+
+    # "std/map" -> the file std/map.egg of the library, its root, and the
+    # path shown in diagnostics; "std" alone is std/std.egg. Only std is
+    # known so far.
+    def module_path(mod, imp)
+      parts = imp.path.split("/")
+      if parts.empty? || parts.any? { |p| !p.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) }
+        fail_at(mod, imp, "E129", "\"#{imp.path}\" is neither a file (name.egg) nor a module name such as \"std/map\"")
+      end
+      unless parts[0] == "std"
+        fail_at(mod, imp, "E129", "unknown module '#{parts[0]}': the modules are std and its parts (\"std/map\"); a file of this program ends in .egg")
+      end
+      rest = parts.length == 1 ? ["std"] : parts.drop(1)
+      [File.join(STD_ROOT, *rest) + ".egg", STD_ROOT, "std/#{rest.join('/')}.egg"]
     end
 
     def unique_prefix(abs)

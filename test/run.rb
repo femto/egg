@@ -345,10 +345,21 @@ def check_lsp_modules
 end
 
 # Imports by absolute path, unreadable imports, and debug without a path.
+# A file import stays inside its module's root; other modules go by name.
 def check_loader(dir)
+  inner = File.join(dir, "app", "main.egg")
+  r = Egg.compile_to_c("const m = @import(\"../loader_lib.egg\")\nfn main() void {\n}\n", inner)
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("outside this module's root"), "a file import cannot leave the module's root", d&.to_text("main.egg"))
+  r = Egg.compile_to_c("const m = @import(\"nope/x\")\nfn main() void {\n}\n", inner)
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("unknown module 'nope'"), "an unknown module is E129", d&.to_text("main.egg"))
+  r = Egg.compile_to_c("const m = @import(\"std/../x\")\nfn main() void {\n}\n", inner)
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("neither a file"), "a module path has only names", d&.to_text("main.egg"))
   lib = File.join(dir, "loader_lib.egg")
   File.write(lib, "fn f() void {\n    const x =\n}\n")
-  r = Egg.compile_to_c("const m = @import(\"#{lib}\")\nfn main() void {\n}\n", File.join(dir, "sub", "main.egg"))
+  r = Egg.compile_to_c("const m = @import(\"#{lib}\")\nfn main() void {\n}\n", File.join(dir, "main.egg"))
   d = r.diagnostics.first
   report(d && d.code == "E002" && d.file == lib, "an absolute import keeps its path in diagnostics", d&.to_text("main.egg"))
   locked = File.join(dir, "locked.egg")
@@ -359,7 +370,7 @@ def check_loader(dir)
       # Permissions do not apply (running as root): nothing to check.
       puts "  skip  an unreadable import is E129 (the file is readable anyway)"
     else
-      r = Egg.compile_to_c("const m = @import(\"#{locked}\")\nfn main() void {\n}\n")
+      r = Egg.compile_to_c("const m = @import(\"#{locked}\")\nfn main() void {\n}\n", File.join(dir, "main.egg"))
       d = r.diagnostics.first
       report(d && d.code == "E129" && d.message.include?("cannot read"), "an unreadable import is E129", d&.to_text("main.egg"))
     end

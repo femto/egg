@@ -2,7 +2,7 @@
 // field by field, freed or kept in an array or buffer.
 uses alloc, io
 
-const conn = @import("../../examples/lib/conn.egg")
+const conn = @import("lib/conn.egg")
 
 const Pair = struct { c: conn.Conn, n: i64 }
 

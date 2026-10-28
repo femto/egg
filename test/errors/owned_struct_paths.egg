@@ -1,7 +1,7 @@
 // An owned struct must be ended exactly once, on every path.
 uses alloc, io
 
-const conn = @import("../../examples/lib/conn.egg")
+const conn = @import("lib/conn.egg")
 
 fn leak(out: Io) void {
     var c = conn.open(1)

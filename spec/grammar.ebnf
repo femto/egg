@@ -14,6 +14,8 @@ link        = "link" , STRING , NL ;                           (* C library; nee
 extern_fn   = "extern" , "fn" , IDENT , params , type ,
               [ "uses" , IDENT , { "," , IDENT } ] , NL ;      (* needs allow unsafe *)
 import      = "const" , IDENT , "=" , "@import" , "(" , STRING , ")" , NL ;
+                                                     (* "path.egg": a file under the module's root;
+                                                        "std/name": a module of the standard library *)
 
 func        = "fn" , IDENT , params , type , block ;
 params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;

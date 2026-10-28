@@ -1,0 +1,28 @@
+// std/math: small numeric helpers for any number type.
+// const math = @import("std/math")
+
+fn min(comptime T: type, a: T, b: T) T {
+    if (a < b) {
+        return a
+    }
+    return b
+}
+
+fn max(comptime T: type, a: T, b: T) T {
+    if (a > b) {
+        return a
+    }
+    return b
+}
+
+fn abs(comptime T: type, x: T) T {
+    if (x < 0) {
+        return -x
+    }
+    return x
+}
+
+// a clamped into [lo, hi]
+fn clamp(comptime T: type, x: T, lo: T, hi: T) T {
+    return min(T, max(T, x, lo), hi)
+}
