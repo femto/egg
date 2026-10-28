@@ -1,0 +1,7 @@
+// error: E001 @6
+// A character of several UTF-8 bytes is not one byte.
+uses io
+
+fn main(out: Io) void {
+    out.print('é')
+}

@@ -67,6 +67,7 @@ module Egg
         return 1 if @tokens.nil?
         t = @tokens.find { |tok| tok.line == line && tok.col == col && tok.kind != :nl && tok.kind != :eof }
         return 1 if t.nil?
+        return t.len unless t.len.nil?
         t.kind == :builtin ? t.text.length + 1 : [t.text.length, 1].max
       end
 

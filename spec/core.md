@@ -58,6 +58,11 @@ fn add(a: i64, b: i64) i64 {
   context (section 7); it must fit that type (E003). `-5` is unary minus
   applied to `5`, but checked as one literal, so `-128` fits `i8`.
 - String literals are `"..."` on one line, with escapes `\n \r \t \\ \" \0`.
+- Character literals are one byte in single quotes, `'a'`, with escapes
+  `\n \r \t \\ \' \" \0` and `\xNN` (two hex digits). One is an integer
+  literal, `'a'` is `97`, so its type comes from the context like any
+  other: `s[i] == 'a'` compares a byte, and `const c: u8 = 'z'` is a u8.
+  A character of several UTF-8 bytes (`'é'`), `''` and `'ab'` are E001.
 - `//` starts a comment that runs to the end of the line.
 - **Newlines end statements.** A newline may also appear after a binary
   operator, after `(` `[` `{` or `,`, before `)` `]` `}`, and before `else`.
@@ -501,7 +506,8 @@ a string built with an `Allocator` (section 17). None of them is ever
 freed, so a `str` is always valid.
 
 - `@len(s)` is its length in bytes; `s[i]` is the byte at `i` as an `i64`
-  (0 to 255); `s[lo..hi]` and `s[lo..]` are `str`s.
+  (0 to 255), compared with a character literal as `s[i] == 'h'`;
+  `s[lo..hi]` and `s[lo..]` are `str`s.
 - `==` compares contents. `for (s) |b|` visits each byte.
 - Building a string allocates, so it needs the alloc capability:
   `a.concat(s, t)` and `a.int_str(n)` (section 17).

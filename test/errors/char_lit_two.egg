@@ -1,0 +1,7 @@
+// error: E001 @6
+// A character literal holds one byte: 'ab' is two.
+uses io
+
+fn main(out: Io) void {
+    out.print('ab')
+}

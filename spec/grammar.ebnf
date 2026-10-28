@@ -80,7 +80,7 @@ postfix     = primary , { "." , IDENT , [ args ]            (* field, method cal
                         | "[" , nl , expr , nl , ".." , nl , [ expr , nl ] , "]"    (* slice *)
                         | struct_lit } ;                    (* after a capitalised type: Point, m.Point, Pair(i64) *)
 struct_lit  = "{" , { NL } , { "." , IDENT , "=" , expr , [ "," ] , { NL } } , "}" ;
-primary     = INT | FLOAT | STRING | "true" | "false" | "null"
+primary     = INT | FLOAT | STRING | CHAR | "true" | "false" | "null"
             | "*" , type | fn_type                  (* a type as a value: @ptrCast( *u8, p) *)
             | IDENT , [ args ]                      (* variable, call, type name *)
             | BUILTIN , args                        (* @len(...) ... *)
@@ -102,6 +102,9 @@ INT         = digit , { digit | "_" } ;            (* at most u64's maximum; mus
 FLOAT       = INT , ( "." , INT , [ exponent ] | exponent ) ;  (* f64, or f32 from context *)
 exponent    = ( "e" | "E" ) , [ "+" | "-" ] , INT ;
 STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \r \t \\ \" \0 *)
+CHAR        = "'" , ( byte | escape | "\x" , hex , hex ) , "'" ;  (* an INT: 'a' is 97; byte: one ASCII character
+                                                       but ' \ and newline, so 'é' (two UTF-8 bytes) is E001;
+                                                       escapes \n \r \t \\ \' \" \0 *)
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;
 KEYWORDS    = fn return if else while for break continue switch var const
