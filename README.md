@@ -101,7 +101,7 @@ The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
 v3 (memory without GC, and what realistic programs needed; under way):
 
-- A standard library in `std/`, imported by module name without `.egg`:
+- A standard library in `lib/std/`, imported by module name without `.egg`:
   `const math = @import("std/math")`; a file import (`"lib/x.egg"`) may
   not leave its module's root. `std/map` has `HashMap(K, V)`, keeping
   insertion order, for str and integer keys or keys with your own hash
@@ -210,11 +210,11 @@ lib/egg/caps.rb        capability check along the call graph
 lib/egg/own.rb         ownership check of buffers, along every path
 lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
 lib/egg/lsp.rb         language server (a tool: uses the json and uri stdlib, not Spinel)
+lib/std/               the standard library: @import("std/math") is lib/std/math.egg
+                       (math: min, max, abs, clamp; map: HashMap(K, V))
 spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
-std/                   the standard library: @import("std/math") is std/math.egg
-                       (math: min, max, abs, clamp; map: HashMap(K, V))
 examples/              programs with `// expect:` / `// panic:` / `// fails:` lines
                        (examples/lib/: modules they import)
                        (examples/complex/: larger programs: a parser, Dijkstra,
