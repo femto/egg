@@ -1190,17 +1190,12 @@ module Egg
         out = tmp
         line("#{c_type(e.ty)} #{out};")
         line("if (#{test}) {")
-        @indent += 1
-        a, pre_a = capture { coerce(expr(then_expr), then_expr.ty, e.ty) }
-        emit_raw(pre_a)
-        line("#{out} = #{a};")
-        @indent -= 1
+        # Each branch's lines, captured above, go one level in.
+        emit_raw(pre_a.gsub(/^(?=.)/, "    "))
+        line("    #{out} = #{a};")
         line("} else {")
-        @indent += 1
-        b, pre_b = capture { coerce(expr(else_expr), else_expr.ty, e.ty) }
-        emit_raw(pre_b)
-        line("#{out} = #{b};")
-        @indent -= 1
+        emit_raw(pre_b.gsub(/^(?=.)/, "    "))
+        line("    #{out} = #{b};")
         line("}")
         out
       in Orelse[expr: inner, fallback:]

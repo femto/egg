@@ -114,7 +114,9 @@ def bad_line_marks(c_source, src, path)
     # when it is a `.field = value` line of a multi-line struct literal.
     continued = prev.match?(/(,|\(|\[|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/)
     # An if with a value split over lines: its branches and its else.
-    continued ||= (prev.match?(/\bif \(.*\)\z/) && !prev.include?(" else ")) || prev == "else" || text == "else"
+    # (String literals are blanked first, so a " else " in one does not count.)
+    bare = prev.gsub(/"(?:\\.|[^"\\])*"/, '""')
+    continued ||= (bare.match?(/\bif \(.*\)\z/) && !bare.include?(" else ")) || prev == "else" || text == "else" || text.start_with?("else if (")
     # `uses`, `allow`, `@import` and `extern fn` lines declare, and
     # generate no code (an extern fn only a prototype).
     declares = text.match?(/\A(uses|allow|extern|link)\s/) || text.match?(/\Aconst \w+ = @import\(/)

@@ -48,6 +48,8 @@ block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}"
 
 stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
             | "break" | "continue" | return_stmt | defer_stmt | expr ;
+                                                     (* an expr statement does not start with "if":
+                                                        a leading if is always if_stmt *)
 defer_stmt  = ( "defer" | "errdefer" ) , expr ;          (* a void expression without try *)
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
 assign      = place , "=" , expr ;

@@ -301,8 +301,9 @@ reaches as far as an expression goes, as in Zig: `if (c) 1 else 2 + 3`
 is `if (c) 1 else (2 + 3)`.
 
 The branches have one type: the type the context expects, or else the
-first branch's; a literal (`5`, `.red`, `null`) takes the other branch's
-type, so `if (c) 1 else x` is x's type (E103 when they differ). The
+first branch's; a literal (`5`, `.red`) takes the other branch's type, so
+`if (c) 1 else x` is x's type (E103 when they differ). `null` still needs
+a `?T` or pointer from the context: `const m: ?i64 = if (c) x else null`. The
 result must be a value: not `void`, a type or a slice (E103).
 
 An owned value moves out of the branch that makes or names it, and the

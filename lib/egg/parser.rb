@@ -733,10 +733,10 @@ module Egg
       cond = parse_expr
       skip_nl
       expect_op(")")
+      skip_nl
       if op?("{")
         error_here("an if with a value takes expressions, not blocks: if (c) a else b (an if statement starts a line)")
       end
-      skip_nl
       then_expr = parse_expr
       skip_nl
       error_here("an if with a value needs an else: if (c) a else b") unless kw?("else")
