@@ -1,0 +1,12 @@
+// HashMap(K, V).init() takes str or integer keys; others need init_with.
+uses alloc
+
+const map = @import("std/map")
+
+const Point = struct { x: i64, y: i64 }
+
+fn main(a: Allocator) void {
+    const m = map.HashMap(Point, i64).init()
+    a.free(m)
+}
+// error: E146 @std/map.egg:43

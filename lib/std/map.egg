@@ -1,0 +1,233 @@
+// std/map: HashMap(K, V), a hash map whose entries are in insertion order
+// until the first remove (remove moves the last entry into the gap).
+// const map = @import("std/map")
+//
+//     var m = map.HashMap(str, i64).init()
+//     defer a.free(m)
+//     m.put(a, "apple", 3)
+//     const n = m.get("apple") orelse 0
+//     for (m.entries) |e| { ... e.key ... e.val ... }
+//
+// Keys of type str or any integer type hash and compare by themselves;
+// for other keys pass the functions: HashMap(Point, V).init_with(hash, eq),
+// with hash returning any i64. Keys and values may own buffers: put and
+// remove free what they replace or drop, and a.free(m) frees everything.
+//
+// The pairs live in `entries`, in the order they were added (a removal
+// moves the last pair into the gap); `index` is an open-addressing table of
+// positions in `entries`, so a map never needs an empty value of V.
+
+uses alloc
+
+fn Entry(comptime K: type, comptime V: type) type {
+    return struct {
+        key: K
+        val: V
+    }
+}
+
+fn HashMap(comptime K: type, comptime V: type) type {
+    return struct {
+        entries: Buf(Entry(K, V))
+        // -1: empty slot; -2: a removed pair was here; else a position
+        index: Buf(i64)
+        dead: i64
+        hash: ?fn(K) i64
+        eq: ?fn(K, K) bool
+
+        // A map with str or integer keys.
+        fn init() @This() {
+            if (K == str or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
+                return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = null, .eq = null }
+            } else {
+                @compileError("HashMap(K, V).init() needs str or integer keys; for other keys use init_with(hash, eq)")
+            }
+        }
+
+        // A map whose keys hash and compare with these functions.
+        fn init_with(hash: fn(K) i64, eq: fn(K, K) bool) @This() {
+            return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = hash, .eq = eq }
+        }
+
+        fn count(self: @This()) i64 {
+            return @len(self.entries)
+        }
+
+        // The position of k's pair in entries, or null.
+        fn find(self: @This(), k: K) ?i64 {
+            const n = @len(self.index)
+            if (n == 0) {
+                return null
+            }
+            var s = self.slot_of(k)
+            while (true) {
+                const p = self.index[s]
+                if (p == -1) {
+                    return null
+                }
+                if (p >= 0 and self.same(self.entries[p].key, k)) {
+                    return p
+                }
+                s = (s + 1) % n
+            }
+            return null
+        }
+
+        fn contains(self: @This(), k: K) bool {
+            const p = self.find(k) orelse return false
+            return p >= 0
+        }
+
+        // A copy of k's value, for values that own nothing; for others,
+        // find(k) and read m.entries[i].val in place.
+        fn get(self: @This(), k: K) ?V {
+            const p = self.find(k) orelse return null
+            return self.entries[p].val
+        }
+
+        // Sets k's value: replaces (and frees) the old one, or adds the pair.
+        fn put(inout self: @This(), a: Allocator, sink k: K, sink v: V) void {
+            const found = self.find(k) orelse -1
+            if (found >= 0) {
+                a.free(@replace(&self.entries[found].val, v))
+                a.free(k)
+                return
+            }
+            self.make_room(a)
+            const s = self.free_slot(k)
+            a.push(&self.entries, Entry(K, V){ .key = k, .val = v })
+            if (self.index[s] == -2) {
+                self.dead = self.dead - 1
+            }
+            self.index[s] = @len(self.entries) - 1
+        }
+
+        // The position of k's pair, adding (k, fresh) first if k is new;
+        // otherwise k and fresh are freed. For values changed in place:
+        //     const i = m.get_or_put(a, k, .empty)
+        //     a.push(&m.entries[i].val, x)
+        fn get_or_put(inout self: @This(), a: Allocator, sink k: K, sink fresh: V) i64 {
+            const found = self.find(k) orelse -1
+            if (found >= 0) {
+                a.free(k)
+                a.free(fresh)
+                return found
+            }
+            self.put(a, k, fresh)
+            return @len(self.entries) - 1
+        }
+
+        // Removes k's pair, freeing it; false if k is not there.
+        fn remove(inout self: @This(), a: Allocator, k: K) bool {
+            const p = self.find(k) orelse return false
+            self.index[self.slot_holding(p)] = -2
+            self.dead = self.dead + 1
+            const last = @len(self.entries) - 1
+            // The last pair fills the gap; its slot follows it (found
+            // while the pair is still there).
+            var last_slot: i64 = -1
+            if (p != last) {
+                last_slot = self.slot_holding(last)
+            }
+            const moved = a.pop(&self.entries) orelse return false
+            if (p == last) {
+                a.free(moved)
+                return true
+            }
+            self.index[last_slot] = p
+            a.free(@replace(&self.entries[p], moved))
+            return true
+        }
+
+        // ---- the index ----
+
+        fn slot_of(self: @This(), k: K) i64 {
+            const n = @len(self.index)
+            var h = self.hash_of(k) % n
+            if (h < 0) {
+                h = h + n
+            }
+            return h
+        }
+
+        // The slot that holds position p (p is in the map).
+        fn slot_holding(self: @This(), p: i64) i64 {
+            var s = self.slot_of(self.entries[p].key)
+            while (self.index[s] != p) {
+                s = (s + 1) % @len(self.index)
+            }
+            return s
+        }
+
+        // An empty or removed slot for a key that is not in the map.
+        fn free_slot(self: @This(), k: K) i64 {
+            var s = self.slot_of(k)
+            while (self.index[s] >= 0) {
+                s = (s + 1) % @len(self.index)
+            }
+            return s
+        }
+
+        // Keeps used and removed slots under half the table, rebuilding
+        // it (twice as large when the pairs need it) otherwise.
+        fn make_room(inout self: @This(), a: Allocator) void {
+            const n = @len(self.index)
+            if ((@len(self.entries) + self.dead + 1) * 2 <= n) {
+                return
+            }
+            var size: i64 = 8
+            while (size < (@len(self.entries) + 1) * 4) {
+                size = size * 2
+            }
+            a.free(@replace(&self.index, a.alloc(size, -1)))
+            self.dead = 0
+            for (self.entries) |e, p| {
+                self.index[self.free_slot(e.key)] = p
+            }
+        }
+
+        fn hash_of(self: @This(), k: K) i64 {
+            const f = self.hash orelse return default_hash(K, k)
+            return f(k)
+        }
+
+        fn same(self: @This(), x: K, y: K) bool {
+            if (K == str or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
+                const f = self.eq orelse return x == y
+                return f(x, y)
+            } else {
+                const f = self.eq orelse return false
+                return f(x, y)
+            }
+        }
+    }
+}
+
+// A hash of a str or an integer, in [0, 1000000007).
+fn default_hash(comptime K: type, k: K) i64 {
+    if (K == str) {
+        return hash_str(k)
+    } else if (K == u64 or K == usize) {
+        return @as(i64, k % 1000000007)
+    } else if (K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32) {
+        const p: i64 = 1000000007
+        var h = @as(i64, k) % p
+        if (h < 0) {
+            h = h + p
+        }
+        return h
+    } else {
+        // Not reached: init() takes only these keys, and init_with sets
+        // the hash.
+        return 0
+    }
+}
+
+// A polynomial hash of the bytes of s, in [0, 1000000007).
+fn hash_str(s: str) i64 {
+    var h: i64 = 7
+    for (s) |c| {
+        h = (h * 31 + c) % 1000000007
+    }
+    return h
+}
