@@ -357,6 +357,18 @@ def check_loader(dir)
   r = Egg.compile_to_c("const m = @import(\"std/../x\")\nfn main() void {\n}\n", inner)
   d = r.diagnostics.first
   report(d && d.code == "E129" && d.message.include?("neither a file"), "a module path has only names", d&.to_text("main.egg"))
+  r = Egg.compile_to_c("const m = @import(\"std/\")\nfn main() void {\n}\n", inner)
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("neither a file"), "a module path cannot end in /", d&.to_text("main.egg"))
+  # A symlink inside the root that leads out of it.
+  app = File.join(dir, "linked")
+  FileUtils.mkdir_p(app)
+  File.write(File.join(dir, "secret.egg"), "fn f() void {\n}\n")
+  link = File.join(app, "escape.egg")
+  File.symlink(File.join(dir, "secret.egg"), link) unless File.symlink?(link)
+  r = Egg.compile_to_c("const m = @import(\"escape.egg\")\nfn main() void {\n}\n", File.join(app, "main.egg"))
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("outside this module's root"), "a symlink cannot lead an import out of the root", d&.to_text("main.egg"))
   lib = File.join(dir, "loader_lib.egg")
   File.write(lib, "fn f() void {\n    const x =\n}\n")
   r = Egg.compile_to_c("const m = @import(\"#{lib}\")\nfn main() void {\n}\n", File.join(dir, "main.egg"))
