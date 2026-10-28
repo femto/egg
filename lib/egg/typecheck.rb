@@ -81,13 +81,16 @@ module Egg
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc" }.freeze
     CAPABILITIES = %w[alloc io].freeze
     # Methods of capability values: name -> [parameter types, result]
-    # ("printable" accepts numbers, bool, str and enums; "integer" any
+    # ("printable" accepts numbers, bool, text and enums; "text" a str, a
+    # []u8 or a Buf(u8), borrowed; "integer" any
     # integer type, "float" f32 or f64, "cstring" a *u8 to 0-terminated
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
-      "Allocator" => { "concat" => [%w[str str], "str"], "int_str" => [["integer"], "str"],
+      "Allocator" => { "concat" => [%w[text text], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
+                       "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
+                       "append_float" => [%w[inout_buffer float], "void"],
                        "cstr" => [["str"], "*u8"], "str_from_c" => [["cstring"], "str"],
                        "create" => [["value"], "pointer to the value"],
                        "alloc" => [%w[i64 element], "Buf(T)"], "free" => [["buffer"], "void"],
@@ -1652,12 +1655,18 @@ module Egg
       hint = arith ? num_target(expected) : nil
       # The typed side goes first and types the literal; of two literals,
       # a float one does (2 * 1.5 is f64).
+      # A slice may be compared directly (b[0..3] == "row"): it lives only
+      # as long as the comparison.
+      operand = lambda do |x, want|
+        op_eq = op == "==" || op == "!="
+        op_eq && x.is_a?(SliceExpr) ? check_slice_arg(x, nil) : check_expr(x, want)
+      end
       if typed_by_other && untyped_lit?(lhs) && (!untyped_lit?(rhs) || (float_lit?(rhs) && !float_lit?(lhs)))
-        rt = check_expr(rhs, hint)
+        rt = operand.(rhs, hint)
         lt = check_expr(lhs, rt)
       else
-        lt = check_expr(lhs, hint)
-        rt = check_expr(rhs, typed_by_other ? lt : nil)
+        lt = operand.(lhs, hint)
+        rt = operand.(rhs, typed_by_other ? lt : nil)
       end
       if op == "%"
         # No float remainder: C's fmod (libm) is one extern fn away.
@@ -1682,6 +1691,11 @@ module Egg
         if lt != "error" && rt != "error"
           if lt == "type" || rt == "type"
             err("E103", "types are compared only in an if condition, which is decided at compile time: if (K == str) { ... }", line, col)
+          elsif text?(lt) && text?(rt)
+            # Text compares by its bytes, whichever kind each side is; a
+            # Buf(u8) is only looked at.
+            check_borrowed(lhs, lt)
+            check_borrowed(rhs, rt)
           elsif lt != rt
             err("E103", "cannot compare #{lt} with #{rt}", line, col)
           elsif owned?(lt)
@@ -1763,7 +1777,18 @@ module Egg
     end
 
     def printable?(t)
-      %w[bool str].include?(t) || num?(t) || @types[t]&.kind == :enum
+      %w[bool str].include?(t) || num?(t) || @types[t]&.kind == :enum || text?(t)
+    end
+
+    # A Buf(u8): text that can be freed.
+    def bytes_buf?(t)
+      info = @types[t]
+      !info.nil? && info.kind == :buf && info.elem == "u8"
+    end
+
+    # Bytes that read as text: a str, a []u8, or a Buf(u8).
+    def text?(t)
+      t == "str" || t == "[]u8" || bytes_buf?(t)
     end
 
     # ---- calls --------------------------------------------------------
@@ -2037,6 +2062,10 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
+          if name.start_with?("append_") && elem != "u8"
+            err("E103", "'#{name}' appends text to a Buf(u8), found #{at}", a.line, a.col)
+            return "error"
+          end
           ret = opt_type(elem) if pop
           path = inout_path(a.expr)
           clash = args.find { |o| !o.equal?(a) && !path.nil? && mentions_path?(o, path) }
@@ -2048,7 +2077,16 @@ module Egg
           if at == "void"
             err("E103", "'#{name}' cannot print a void value", a.line, a.col)
           elsif at != "error" && !printable?(at)
-            err("E103", "'#{name}' prints numbers, bool, str and enums, not #{at}", a.line, a.col)
+            err("E103", "'#{name}' prints numbers, bool, text (str, []u8, Buf(u8)) and enums, not #{at}", a.line, a.col)
+          else
+            check_borrowed(a, at)
+          end
+        elsif pt == "text"
+          at = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a, "str")
+          if at != "error" && !text?(at)
+            err("E103", "'#{name}' needs text: a str, a []u8 or a Buf(u8), found #{at}", a.line, a.col)
+          else
+            check_borrowed(a, at)
           end
         elsif pt == "integer"
           at = check_expr(a)
@@ -2793,6 +2831,8 @@ module Egg
     # and an error.X literal fits any !T.
     def fits?(want, got)
       return true if got == "error" || want == "error" || want.nil? || want == got
+      # Text is lent to a []u8 parameter: a str's bytes, or a Buf(u8)'s.
+      return true if want == "[]u8" && (got == "str" || bytes_buf?(got))
       if want.start_with?("!")
         return true if got == "anyerror"
         return true if @types[want].inner == got

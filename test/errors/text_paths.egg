@@ -1,0 +1,16 @@
+// A Buf(u8) is a buffer: no growing it while a for loop reads it, and
+// no use after it is freed.
+uses io, alloc
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(u8) = .empty
+    a.append_str(&b, "x")
+    for (b) |ch| {
+        a.append_int(&b, ch)
+    }
+    a.free(b)
+    out.print(b)
+}
+
+// error: E137 @9
+// error: E136 @12

@@ -493,6 +493,10 @@ module Egg
       in Field[info: { buf_empty: true }] then nil
       in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit | StructTypeExpr then nil
       in Unary[operand:] then walk(operand)
+      in Binary[op: "==" | "!=", lhs:, rhs:]
+        # Comparing (text, the only owned values == takes) only reads.
+        walk(lhs, true)
+        walk(rhs, true)
       in Binary[op:, lhs:, rhs:, line:, col:]
         walk(lhs)
         if op == "and" || op == "or"
@@ -588,16 +592,24 @@ module Egg
       end
     end
 
+    # Capability methods that take what they are given: a.free and a.push.
+    # The others (out.print, a.concat, a.append_str, ...) only read theirs.
+    TAKING_CAP_METHODS = %w[Allocator.free Allocator.push].freeze
+
     # A plain parameter borrows its argument, a sink parameter takes it.
-    # Without known parameters (Allocator methods) every argument is taken.
+    # Without known parameters (capability methods) every argument is
+    # taken by a.free and a.push and borrowed by the rest.
     def walk_args(args, info = nil)
       params = info&.[](:params)
       params = nil unless params.nil? || params.length == args.length
+      cap = info&.[](:cap_method)
       args.each_with_index do |a, i|
         if a.is_a?(AddrOf)
           # inout: the callee may replace or resize it
           check_elem_change(a.expr, a.line, a.col, "passed as inout")
           walk_place(a.expr)
+        elsif params.nil? && !cap.nil?
+          walk(a, !TAKING_CAP_METHODS.include?(cap))
         else
           walk(a, !params.nil? && params[i][1].nil?)
         end

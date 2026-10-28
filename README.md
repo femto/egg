@@ -120,6 +120,10 @@ v3 (memory without GC, and what realistic programs needed; under way):
   only the chosen branch is checked
 - `if` with a value: `const sign = if (x < 0) -1 else 1`; both branches
   are expressions and the `else` is required
+- Text that is freed: a `Buf(u8)`, built with `a.append_str(&b, s)`,
+  `a.append_int(&b, n)` and `a.append_float(&b, x)` and freed with
+  `a.free(b)`; any text (str, `Buf(u8)`, a slice) is lent to a `[]u8`
+  parameter, prints, and compares with `==`
 
 From v2:
 
