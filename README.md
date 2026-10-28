@@ -104,9 +104,10 @@ v3 (memory without GC, and what realistic programs needed; under way):
 - A standard library in `lib/std/`, imported by module name without `.egg`:
   `const math = @import("std/math")`; a file import (`"lib/x.egg"`) may
   not leave its module's root. `std/map` has `HashMap(K, V)`, in
-  insertion order until the first remove: `init()` for str and integer
-  keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
-  `eq: fn(K, K) bool`)
+  insertion order until the first remove: `init()` for str, `Buf(u8)` and
+  integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
+  `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
+  looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`)
 - Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
   owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
   works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and

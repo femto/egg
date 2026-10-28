@@ -508,7 +508,8 @@ module Egg
         else
           walk(rhs)
         end
-      in Call[args:, info:] then walk_args(args, info)
+      # info[:args]: the runtime arguments, without a generic call's types.
+      in Call[args:, info:] then walk_args(info&.[](:args) || args, info)
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
