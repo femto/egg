@@ -26,8 +26,9 @@ module Egg
   # root: the directory its file imports must stay inside
   ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows, :links, :root)
 
-  # The standard library: EGG_STD, or std/ next to the compiler's lib/.
-  STD_ROOT = ENV["EGG_STD"] || File.expand_path("../../std", __dir__)
+  # The standard library: EGG_STD, or lib/std beside the compiler's
+  # lib/egg (as Zig keeps it in lib/std).
+  STD_ROOT = ENV["EGG_STD"] || File.expand_path("../std", __dir__)
 
   # The global name of `name` declared in module `mod`.
   def self.qualify(mod, name)

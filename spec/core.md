@@ -953,8 +953,8 @@ const shapes = @import("lib/shapes.egg")
 imports another file, as a path relative to the importing file ending in
 `.egg` (a missing file is E129). A string without `.egg` names a
 **module** instead: `@import("std/math")` is `math.egg` of the standard
-library, which ships next to the compiler (the `EGG_STD` environment
-variable points elsewhere); `std` is the only module name so far. A file
+library, which ships with the compiler in `lib/std` (the `EGG_STD`
+environment variable points elsewhere); `std` is the only module name so far. A file
 import may not leave its module's root, the directory of the root file
 for a program and the library's directory for `std` (E129): a module is
 a self-contained tree, and reaches others only by name. The name, here
