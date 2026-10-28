@@ -1,4 +1,5 @@
-// std/map: HashMap(K, V), a hash map that keeps insertion order.
+// std/map: HashMap(K, V), a hash map whose entries are in insertion order
+// until the first remove (remove moves the last entry into the gap).
 // const map = @import("std/map")
 //
 //     var m = map.HashMap(str, i64).init()
