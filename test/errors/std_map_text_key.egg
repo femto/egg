@@ -1,0 +1,12 @@
+// The text lookups (find_text, get_text, ...) need Buf(u8) keys.
+uses alloc, io
+
+const map = @import("std/map")
+
+fn main(out: Io, a: Allocator) void {
+    var m = map.HashMap(str, i64).init()
+    defer a.free(m)
+    m.put(a, "x", 1)
+    out.print(m.get_text("x") orelse 0)
+}
+// error: E146 @std/map.egg:166

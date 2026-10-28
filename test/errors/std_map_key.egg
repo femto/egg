@@ -1,4 +1,4 @@
-// HashMap(K, V).init() takes str or integer keys; others need init_with.
+// HashMap(K, V).init() takes str, Buf(u8) or integer keys; others need init_with.
 uses alloc
 
 const map = @import("std/map")
@@ -9,4 +9,4 @@ fn main(a: Allocator) void {
     const m = map.HashMap(Point, i64).init()
     a.free(m)
 }
-// error: E146 @std/map.egg:43
+// error: E146 @std/map.egg:55

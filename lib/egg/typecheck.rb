@@ -2288,12 +2288,12 @@ module Egg
       in Builtin[name: "len"] then false
       in Unary[operand:] then holds?(operand, path)
       in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
-      in Call[args:, info:] then sunk(args, info).any? { |x| holds?(x, path) }
+      in Call[args:, info:] then sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
       in Builtin[args:] then args.any? { |x| holds?(x, path) }
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]
-        (own_obj && holds?(obj, path)) || sunk(args, info).any? { |x| holds?(x, path) }
+        (own_obj && holds?(obj, path)) || sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
       in StructLit[fields:] then fields.any? { |f| holds?(f[1], path) }
       in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
       in AddrOf[expr:] then mentions_path?(expr, path)
@@ -2488,6 +2488,18 @@ module Egg
     # The type an expression names (K, str, i64, Point, m.Point), or nil
     # when it is not a type; reports nothing.
     def comptime_type(e)
+      # Buf(T) names a buffer type when T does (K == Buf(u8)).
+      if e.is_a?(Call) && e.name == "Buf" && e.args.length == 1
+        elem = comptime_type(e.args[0])
+        return nil if elem.nil?
+        before = @diagnostics.length
+        t = buf_type([elem], e.line, e.col)
+        if @diagnostics.length > before || t == "error"
+          @diagnostics.slice!(before..)
+          return nil
+        end
+        return t
+      end
       name = case e
              in Var[name:] then name
              in Field[obj: Var[name: m], name:] then "#{m}.#{name}"
@@ -2895,8 +2907,12 @@ module Egg
     end
 
     def declare(name, info)
+      # Only this module's own functions and types are visible here (the
+      # root module's names are unqualified, but other modules do not see
+      # them).
       q = qualify(name)
-      if lookup(name) || @sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q) || @mod.aliases.key?(name)
+      own = @mod.names.include?(name) && (@sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q))
+      if lookup(name) || own || @mod.aliases.key?(name)
         err("E106", "'#{name}' shadows an existing declaration", info.line, info.col)
       end
       @scopes.last[name] = info

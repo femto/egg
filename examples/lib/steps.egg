@@ -1,0 +1,7 @@
+// A local named like a function of the program that imports this file:
+// the program's names are not visible here, so it is no clash.
+fn twice(x: i64) i64 {
+    var step: i64 = x
+    step = step * 2
+    return step
+}

@@ -1,0 +1,18 @@
+// A map with Buf(u8) keys is looked up by text, so it takes no hash or eq.
+uses alloc
+
+const map = @import("std/map")
+
+fn h(k: Buf(u8)) i64 {
+    return @len(k)
+}
+
+fn same(x: Buf(u8), y: Buf(u8)) bool {
+    return x == y
+}
+
+fn main(a: Allocator) void {
+    const m = map.HashMap(Buf(u8), i64).init_with(h, same)
+    a.free(m)
+}
+// error: E146 @std/map.egg:64

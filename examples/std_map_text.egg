@@ -1,0 +1,60 @@
+// A HashMap with Buf(u8) keys owns its keys' text, so a map built from
+// input that changes as the program runs frees everything at a.free(m).
+// It is looked up by any text (a str, a Buf(u8), a slice) without
+// allocating: put_text copies the text into a key only when it is new.
+// expect: 3
+// expect: apple 3
+// expect: pear 1
+// expect: fig 2
+// expect: 3
+// expect: true
+// expect: false
+// expect: 2
+// expect: fig 2
+// expect: pear 1
+uses io, alloc
+
+const map = @import("std/map")
+
+fn main(out: Io, a: Allocator) void {
+    var counts = map.HashMap(Buf(u8), i64).init()
+    defer a.free(counts)
+    // Words cut out of one line, counted without a str per word.
+    const line = "apple pear fig apple fig apple"
+    var start: i64 = 0
+    var i: i64 = 0
+    while (i <= @len(line)) {
+        if (i == @len(line) or line[i] == 32) {
+            const at = counts.get_or_put_text(a, line[start..i], 0)
+            counts.entries[at].val = counts.entries[at].val + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    out.print(counts.count())
+    for (counts.entries) |e| {
+        var row: Buf(u8) = .empty
+        defer a.free(row)
+        a.append_str(&row, e.key)
+        a.append_str(&row, " ")
+        a.append_int(&row, e.val)
+        out.print(row)
+    }
+    out.print(counts.get_text("apple") orelse 0)
+    var key: Buf(u8) = .empty
+    defer a.free(key)
+    a.append_str(&key, "fig")
+    out.print(counts.contains_text(key))
+    out.print(counts.contains_text("kiwi"))
+    counts.put_text(a, "pear", 1)
+    _ = counts.remove_text(a, "apple")
+    out.print(counts.count())
+    for (counts.entries) |e| {
+        var row: Buf(u8) = .empty
+        defer a.free(row)
+        a.append_str(&row, e.key)
+        a.append_str(&row, " ")
+        a.append_int(&row, e.val)
+        out.print(row)
+    }
+}

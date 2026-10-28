@@ -8,10 +8,22 @@
 //     const n = m.get("apple") orelse 0
 //     for (m.entries) |e| { ... e.key ... e.val ... }
 //
-// Keys of type str or any integer type hash and compare by themselves;
-// for other keys pass the functions: HashMap(Point, V).init_with(hash, eq),
-// with hash returning any i64. Keys and values may own buffers: put and
-// remove free what they replace or drop, and a.free(m) frees everything.
+// Keys of type str, Buf(u8) or any integer type hash and compare by
+// themselves; for other keys pass the functions:
+// HashMap(Point, V).init_with(hash, eq), with hash returning any i64. Keys
+// and values may own buffers: put and remove free what they replace or
+// drop, and a.free(m) frees everything.
+//
+// A map with Buf(u8) keys owns its keys' text and is looked up by any text
+// (a str, a Buf(u8), a slice), allocating nothing:
+//
+//     var m = map.HashMap(Buf(u8), i64).init()
+//     defer a.free(m)
+//     m.put_text(a, "apple", 3)       // copies "apple" into a new key
+//     const n = m.get_text("apple") orelse 0
+//
+// find_text, contains_text, get_text and remove_text look up; put_text and
+// get_or_put_text copy the text into a key only when it is new.
 //
 // The pairs live in `entries`, in the order they were added (a removal
 // moves the last pair into the gap); `index` is an open-addressing table of
@@ -35,18 +47,24 @@ fn HashMap(comptime K: type, comptime V: type) type {
         hash: ?fn(K) i64
         eq: ?fn(K, K) bool
 
-        // A map with str or integer keys.
+        // A map with str, Buf(u8) or integer keys.
         fn init() @This() {
-            if (K == str or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
+            if (K == str or K == Buf(u8) or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
                 return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = null, .eq = null }
             } else {
-                @compileError("HashMap(K, V).init() needs str or integer keys; for other keys use init_with(hash, eq)")
+                @compileError("HashMap(K, V).init() needs str, Buf(u8) or integer keys; for other keys use init_with(hash, eq)")
             }
         }
 
-        // A map whose keys hash and compare with these functions.
+        // A map whose keys hash and compare with these functions. Not for
+        // Buf(u8) keys: they are looked up by text, which such functions
+        // could not take.
         fn init_with(hash: fn(K) i64, eq: fn(K, K) bool) @This() {
-            return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = hash, .eq = eq }
+            if (K == Buf(u8)) {
+                @compileError("HashMap(Buf(u8), V) hashes and compares keys by their bytes; use init()")
+            } else {
+                return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = hash, .eq = eq }
+            }
         }
 
         fn count(self: @This()) i64 {
@@ -120,6 +138,89 @@ fn HashMap(comptime K: type, comptime V: type) type {
         // Removes k's pair, freeing it; false if k is not there.
         fn remove(inout self: @This(), a: Allocator, k: K) bool {
             const p = self.find(k) orelse return false
+            return self.remove_at(a, p)
+        }
+
+        // ---- Buf(u8) keys, looked up by any text ----
+
+        // The position of the pair whose key has the text k, or null.
+        fn find_text(self: @This(), k: []u8) ?i64 {
+            if (K == Buf(u8)) {
+                const n = @len(self.index)
+                if (n == 0) {
+                    return null
+                }
+                var s = self.slot_for(hash_bytes(k))
+                while (true) {
+                    const p = self.index[s]
+                    if (p == -1) {
+                        return null
+                    }
+                    if (p >= 0 and self.entries[p].key == k) {
+                        return p
+                    }
+                    s = (s + 1) % n
+                }
+                return null
+            } else {
+                @compileError("find_text needs Buf(u8) keys; use find")
+            }
+        }
+
+        fn contains_text(self: @This(), k: []u8) bool {
+            const p = self.find_text(k) orelse return false
+            return p >= 0
+        }
+
+        // A copy of the value for the text k, for values that own nothing.
+        fn get_text(self: @This(), k: []u8) ?V {
+            const p = self.find_text(k) orelse return null
+            return self.entries[p].val
+        }
+
+        // Sets the value for the text k; a new key is a copy of k.
+        fn put_text(inout self: @This(), a: Allocator, k: []u8, sink v: V) void {
+            if (K == Buf(u8)) {
+                const found = self.find_text(k) orelse -1
+                if (found >= 0) {
+                    a.free(@replace(&self.entries[found].val, v))
+                    return
+                }
+                var key: Buf(u8) = .empty
+                a.append_str(&key, k)
+                self.put(a, key, v)
+            } else {
+                @compileError("put_text needs Buf(u8) keys; use put")
+            }
+        }
+
+        // The position of the pair for the text k, adding (a copy of k,
+        // fresh) first if it is new; otherwise fresh is freed.
+        fn get_or_put_text(inout self: @This(), a: Allocator, k: []u8, sink fresh: V) i64 {
+            if (K == Buf(u8)) {
+                const found = self.find_text(k) orelse -1
+                if (found >= 0) {
+                    a.free(fresh)
+                    return found
+                }
+                var key: Buf(u8) = .empty
+                a.append_str(&key, k)
+                return self.get_or_put(a, key, fresh)
+            } else {
+                @compileError("get_or_put_text needs Buf(u8) keys; use get_or_put")
+            }
+        }
+
+        // Removes the pair for the text k, freeing it; false if absent.
+        fn remove_text(inout self: @This(), a: Allocator, k: []u8) bool {
+            const p = self.find_text(k) orelse return false
+            return self.remove_at(a, p)
+        }
+
+        // ---- the index ----
+
+        // Removes the pair at position p, freeing it.
+        fn remove_at(inout self: @This(), a: Allocator, p: i64) bool {
             self.index[self.slot_holding(p)] = -2
             self.dead = self.dead + 1
             const last = @len(self.entries) - 1
@@ -139,11 +240,14 @@ fn HashMap(comptime K: type, comptime V: type) type {
             return true
         }
 
-        // ---- the index ----
-
         fn slot_of(self: @This(), k: K) i64 {
+            return self.slot_for(self.hash_of(k))
+        }
+
+        // The first slot to look at for a key with hash h.
+        fn slot_for(self: @This(), hash: i64) i64 {
             const n = @len(self.index)
-            var h = self.hash_of(k) % n
+            var h = hash % n
             if (h < 0) {
                 h = h + n
             }
@@ -192,7 +296,7 @@ fn HashMap(comptime K: type, comptime V: type) type {
         }
 
         fn same(self: @This(), x: K, y: K) bool {
-            if (K == str or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
+            if (K == str or K == Buf(u8) or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
                 const f = self.eq orelse return x == y
                 return f(x, y)
             } else {
@@ -203,10 +307,10 @@ fn HashMap(comptime K: type, comptime V: type) type {
     }
 }
 
-// A hash of a str or an integer, in [0, 1000000007).
+// A hash of text (a str or a Buf(u8)) or an integer, in [0, 1000000007).
 fn default_hash(comptime K: type, k: K) i64 {
-    if (K == str) {
-        return hash_str(k)
+    if (K == str or K == Buf(u8)) {
+        return hash_bytes(k)
     } else if (K == u64 or K == usize) {
         return @as(i64, k % 1000000007)
     } else if (K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32) {
@@ -223,11 +327,12 @@ fn default_hash(comptime K: type, k: K) i64 {
     }
 }
 
-// A polynomial hash of the bytes of s, in [0, 1000000007).
-fn hash_str(s: str) i64 {
+// A polynomial hash of the bytes of s, in [0, 1000000007): the same for
+// the same text, whether a str, a Buf(u8) or a slice holds it.
+fn hash_bytes(s: []u8) i64 {
     var h: i64 = 7
     for (s) |c| {
-        h = (h * 31 + c) % 1000000007
+        h = (h * 31 + @as(i64, c)) % 1000000007
     }
     return h
 }
