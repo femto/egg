@@ -1886,6 +1886,7 @@ module Egg
         runtime_args = []
         gf.params.each_with_index { |p, i| runtime_args << args[i] unless p.mode == "comptime" }
         e.info[:c_name] = sig.c_name
+        e.info[:sig] = sig
         e.info[:args] = runtime_args
         e.info[:params] = sig.params
         record_call(sig, line, col)
@@ -1903,6 +1904,7 @@ module Egg
         return "error"
       end
       e.info[:c_name] = sig.c_name
+      e.info[:sig] = sig
       e.info[:args] = args
       e.info[:params] = sig.params
       record_call(sig, line, col)
@@ -2007,6 +2009,7 @@ module Egg
         enqueue(sig)
         record_call(sig, line, col)
         e.info[:c_name] = sig.c_name
+        e.info[:sig] = sig
         e.info[:static] = true
         e.info[:args] = args
         e.info[:params] = sig.params
@@ -2043,6 +2046,7 @@ module Egg
       enqueue(sig)
       record_call(sig, line, col)
       e.info[:c_name] = sig.c_name
+      e.info[:sig] = sig
       e.info[:self_inout] = self_mode == "inout"
       e.info[:self_sink] = self_mode == "sink"
       e.info[:args] = args
