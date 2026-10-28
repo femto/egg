@@ -4,7 +4,9 @@
 # emitted as :nl tokens. The parser skips them where a statement cannot end.
 
 module Egg
-  Token = Struct.new(:kind, :text, :line, :col)
+  # len: the token's length in the source, when it differs from text's
+  # (a character literal 'a' has text "97").
+  Token = Struct.new(:kind, :text, :line, :col, :len)
 
   KEYWORDS = %w[fn return if else while var const true false and or
                 struct enum union switch for break continue try catch orelse error inout sink comptime uses allow extern link owned null defer errdefer].freeze
@@ -14,7 +16,8 @@ module Egg
 
   class Lexer
     def initialize(src)
-      @src = src
+      # Source is UTF-8 whatever the locale's default encoding is.
+      @src = src.encoding == Encoding::UTF_8 ? src : src.dup.force_encoding(Encoding::UTF_8)
       @pos = 0
       @line = 1
       @col = 1
@@ -136,7 +139,9 @@ module Egg
       elsif c == "\\"
         advance
         e = @src[@pos] || ""
-        if CHAR_ESCAPES.key?(e)
+        if e == "" || e == "\n"
+          raise CompileError.new(Diagnostic.new("E001", "unterminated character literal", line, col))
+        elsif CHAR_ESCAPES.key?(e)
           value = CHAR_ESCAPES[e]
           advance
         elsif e == "x" && @src[@pos + 1, 2].to_s.match?(/\A\h\h\z/)
@@ -145,6 +150,8 @@ module Egg
         else
           raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in character literal (\\n \\r \\t \\\\ \\' \\\" \\0 \\xNN)", @line, @col))
         end
+      elsif !c.valid_encoding?
+        raise CompileError.new(Diagnostic.new("E001", "a character literal holds one byte, and this one is not valid UTF-8: use \\xNN for a byte", line, col))
       elsif c.bytesize > 1
         raise CompileError.new(Diagnostic.new("E001", "'#{c}' is #{c.bytesize} bytes; a character literal holds one byte: use a string, or \\xNN for a byte", line, col))
       else
@@ -156,7 +163,7 @@ module Egg
         raise CompileError.new(Diagnostic.new("E001", what, line, col))
       end
       advance
-      @tokens << Token.new(:int, value.to_s, line, col)
+      @tokens << Token.new(:int, value.to_s, line, col, @col - col)
     end
 
     def lex_ident

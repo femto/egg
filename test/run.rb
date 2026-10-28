@@ -50,9 +50,10 @@ def report(ok, name, detail = nil)
 end
 
 # The text after "// key: "; only the one space after the colon goes, so
-# "// expect:   x" expects "  x".
+# "// expect:   x" expects "  x". A test may hold bytes that are not
+# UTF-8 (to check that eggc rejects them), so those are scrubbed here.
 def comment_values(src, key)
-  src.lines.filter_map { |l| l[%r{^\s*//\s*#{key}: ?(.*)$}, 1]&.rstrip }
+  src.scrub.lines.filter_map { |l| l[%r{^\s*//\s*#{key}: ?(.*)$}, 1]&.rstrip }
 end
 
 # Compile, build and run a program; check its output or panic.
@@ -170,6 +171,25 @@ def lsp_session(messages)
     end
   end
   [replies, diags, status, err]
+end
+
+# A diagnostic on a character literal underlines all of it: '\xff' is six
+# characters of source, though its token is the integer 255.
+def check_lsp_char
+  uri = "file:///t/ch.egg"
+  src = "fn main() void {\n    const x: i8 = '\\xff'\n}\n"
+  doc = { "uri" => uri }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 5, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  _, diags, status, err = lsp_session(req)
+  r = diags.first&.find { |d| d["code"] == "E003" }&.dig("range")
+  span = r && [r["start"]["character"], r["end"]["character"]]
+  report(span == [18, 24], "lsp diagnostic range covers a character literal", diags.inspect)
+  report(status.success? && err.empty?, "lsp char session ends cleanly", err)
 end
 
 # catch |e|: the error's name is declared for the fallback.
@@ -594,6 +614,7 @@ Dir.mktmpdir do |dir|
   check_lsp_generics
   check_lsp_v1
   check_lsp_catch
+  check_lsp_char
   check_lsp_modules
   check_lsp_extern
   check_lsp_pointers

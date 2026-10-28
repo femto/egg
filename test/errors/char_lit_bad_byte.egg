@@ -1,0 +1,7 @@
+// error: E001 @6
+// A byte that is not valid UTF-8 is not a character; write \xff.
+uses io
+
+fn main(out: Io) void {
+    out.print('ÿ')
+}

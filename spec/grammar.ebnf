@@ -102,7 +102,9 @@ INT         = digit , { digit | "_" } ;            (* at most u64's maximum; mus
 FLOAT       = INT , ( "." , INT , [ exponent ] | exponent ) ;  (* f64, or f32 from context *)
 exponent    = ( "e" | "E" ) , [ "+" | "-" ] , INT ;
 STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \r \t \\ \" \0 *)
-CHAR        = "'" , ( char | escape | "\x" , hex , hex ) , "'" ;  (* one byte, an INT: 'a' is 97; escapes \n \r \t \\ \' \" \0 *)
+CHAR        = "'" , ( byte | escape | "\x" , hex , hex ) , "'" ;  (* an INT: 'a' is 97; byte: one ASCII character
+                                                       but ' \ and newline, so 'é' (two UTF-8 bytes) is E001;
+                                                       escapes \n \r \t \\ \' \" \0 *)
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;
 KEYWORDS    = fn return if else while for break continue switch var const
