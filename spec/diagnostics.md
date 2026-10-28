@@ -16,9 +16,9 @@ program imports:
 | E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum), or a float literal is infinite in its type (`1e400`, `1e39` as `f32`) or rounds to zero though it is not zero (`1e-400`) | use a smaller literal or a wider type; for one that rounds to zero, a larger literal, `0.0`, or `f64` instead of `f32` |
 | E101 | checker | undefined variable | declare it with `const` or `var` |
 | E102 | checker | undefined function, or calling a variable | define the function |
-| E103 | checker | type mismatch (also: the branches of an if with a value having different types, or no value such as void; comparing structs, arrays or unions; an array where a slice is expected; two integer types in one operation; negating an unsigned value; a generic or inout function used as a value) | make both sides the same type with `@as`; no implicit conversions |
+| E103 | checker | type mismatch (also: the branches of an if with a value having different types, or no value such as void; comparing structs, arrays or unions; an array where a slice is expected; an inout slice parameter given `&x` instead of `&x[lo..hi]`; two integer types in one operation; negating an unsigned value; a generic or inout function used as a value) | make both sides the same type with `@as`; no implicit conversions |
 | E104 | checker | wrong number of arguments | match the function's parameter list |
-| E105 | checker | assigning to, or passing as inout, a `const`, a by-value parameter, or an element of a slice or str | declare it with `var`, or make the parameter `inout`; slice and str elements are always read-only, so copy them into a `var` array |
+| E105 | checker | assigning to, or passing as inout, a `const`, a by-value parameter, or an element of a read-only slice or str; reassigning an `inout` slice parameter itself; lending a mutable slice (`&x[lo..hi]`) of a `const`, a plain parameter, a read-only slice or a str | declare it with `var`, or make the parameter `inout` (`inout xs: []T` for a slice, passed as `&x[lo..hi]`); str elements are always read-only, so copy them into a `var` array |
 | E106 | checker | duplicate definition (function, type, import, field, member, method) or shadowing; a type named like a built-in one (`Buf`, `i64`, ...) | rename one of them |
 | E107 | checker | non-void function can reach its end without returning | add a `return` on every path |
 | E108 | checker | unknown type, `void` or `type` where a value type is needed, `[_]T` outside a literal; `?T` of a pointer (already nullable), `!U` or `?U` | use a value type; write `*T` for a nullable pointer |
@@ -60,6 +60,7 @@ program imports:
 | E144 | ownership | moving, freeing, returning, assigning or `@drop`ping a plain parameter of an owned type, or any part of it: it is only borrowed | declare it `sink x: T` to take it over, or copy out the plain values you need |
 | E145 | checker | a `sink` parameter whose type owns nothing (not a buffer, an `owned struct` or a value holding one; in a generic instance it is allowed) | remove `sink`: a plain parameter reads it |
 | E146 | checker | a `@compileError("...")` that is checked: anywhere outside a comptime `if` branch that is not chosen (typically a generic function instantiated with a type it does not support), or one whose argument is not a single string literal | call the function with a type it supports, as the message says; put `@compileError` only in a branch that should never be chosen, and give it one string literal |
+| E147 | checker | an `inout` slice whose elements own buffers (`inout xs: []Buf(i64)`): assigning an element would lose them | pass the whole container as `inout` and swap elements out with `@replace`/`@take` |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 

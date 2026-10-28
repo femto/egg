@@ -1,0 +1,62 @@
+// std/sort: in-place algorithms on a mutable slice of numbers.
+// const sort = @import("std/sort")
+// sort.sort(i64, &b[0..]) sorts b ascending, by <.
+
+fn swap(comptime T: type, inout xs: []T, i: i64, j: i64) void {
+    const t = xs[i]
+    xs[i] = xs[j]
+    xs[j] = t
+}
+
+// Heapsort: O(n log n), allocates nothing. Not stable.
+fn sort(comptime T: type, inout xs: []T) void {
+    const n = @len(xs)
+    var i = n / 2 - 1
+    while (i >= 0) {
+        sift(T, &xs[0..], i, n)
+        i = i - 1
+    }
+    var end = n - 1
+    while (end > 0) {
+        swap(T, &xs[0..], 0, end)
+        sift(T, &xs[0..], 0, end)
+        end = end - 1
+    }
+}
+
+// Moves xs[root] down until xs[0..end] is a max-heap below it again.
+fn sift(comptime T: type, inout xs: []T, root: i64, end: i64) void {
+    var r = root
+    while (2 * r + 1 < end) {
+        var child = 2 * r + 1
+        if (child + 1 < end and xs[child] < xs[child + 1]) {
+            child = child + 1
+        }
+        if (!(xs[r] < xs[child])) {
+            return
+        }
+        swap(T, &xs[0..], r, child)
+        r = child
+    }
+}
+
+fn reverse(comptime T: type, inout xs: []T) void {
+    var i = 0
+    var j = @len(xs) - 1
+    while (i < j) {
+        swap(T, &xs[0..], i, j)
+        i = i + 1
+        j = j - 1
+    }
+}
+
+fn is_sorted(comptime T: type, xs: []T) bool {
+    var i = 1
+    while (i < @len(xs)) {
+        if (xs[i] < xs[i - 1]) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}

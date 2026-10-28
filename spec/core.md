@@ -111,7 +111,7 @@ fn main(out: Io) void {
 | enum `Name` | one of a fixed set of names | section 10 |
 | `union(enum)` `Name` | one member, maybe with a payload | section 10 |
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
-| `[]T` | a read-only view of consecutive T | parameters only; section 11 |
+| `[]T` | a view of consecutive T, read-only unless `inout` | parameters only; section 11 |
 | `!T` | a T or an error | section 13 |
 | `anyerror` | an error: `error.Name` | compared with `==`, switched on, named with `@errorName`; section 13 |
 | `?T` | a T or `null` | section 13 |
@@ -750,7 +750,7 @@ elements), or fill one with `@splat(v)` where the type is known. `a[i]` is
 bounds-checked; `@len(a)` is N.
 
 `[]T` is a **slice**: a read-only view of consecutive elements of an array,
-written `a[lo..hi]` or `a[lo..]`. Slices are **second-class** (E116): a
+written `a[lo..hi]` or `a[lo..]` (an `inout` slice is writable; section 12). Slices are **second-class** (E116): a
 slice can be a parameter type, an argument, or the subject of `for`, and
 nothing else. It cannot be stored in a variable or a field, or returned. So
 a view can never outlive the array it looks into, without any lifetime
@@ -836,6 +836,54 @@ fn main(out: Io) void {
     var total = 1
     add_into(&total, total)
     out.print(total)
+}
+```
+
+**Mutable slices.** An `inout xs: []T` parameter is a writable view: the
+argument is written `&x[lo..hi]` (or `&x[lo..]`, never just `&x`; E103),
+where `x` is a `var` array, a `var` or `inout` `Buf`, or another inout
+slice. The function writes elements (`xs[i] = v`, `&xs[i]` as an inout
+argument) and may lend a part of it on (`&xs[1..]`), but cannot reassign
+`xs` itself or resize it (E105); like every slice it cannot outlive the
+call. Its elements must own no buffers (E147), since assigning one would
+lose them. Exclusivity is the same as for `&x`: `f(&b[0..2], &b[2..])` is
+E117, as is `f(&b[0..], b[0..])`, since the callee would see the same
+memory twice. Changing elements is allowed inside a `for` loop over `x`.
+
+```egg
+// expect: 0
+// expect: 7
+// expect: 7
+// expect: 0
+uses io
+
+fn fill(inout xs: []i64, v: i64) void {
+    for (xs) |_, i| {
+        xs[i] = v
+    }
+}
+
+fn main(out: Io) void {
+    var a = [4]i64{ 0, 0, 0, 0 }
+    fill(&a[1..3], 7)
+    for (a) |x| {
+        out.print(x)
+    }
+}
+```
+
+```egg
+// error: E105
+uses io
+
+fn fill(inout xs: []i64, v: i64) void {
+    xs[0] = v
+}
+
+fn main(out: Io) void {
+    const a = [2]i64{ 1, 2 }
+    fill(&a[0..], 0)
+    out.print(a[0])
 }
 ```
 

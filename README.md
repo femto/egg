@@ -107,7 +107,13 @@ v3 (memory without GC, and what realistic programs needed; under way):
   insertion order until the first remove: `init()` for str, `Buf(u8)` and
   integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
-  looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`)
+  looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
+  `std/sort` sorts, reverses and checks a mutable slice in place
+  (`sort.sort(i64, &b[0..])`)
+- Mutable slices: `inout xs: []T` lends a writable view for the call,
+  passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
+  inout slice; its elements change, but it cannot be reassigned or
+  resized, and its elements own no buffers (E147)
 - Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
   owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
   works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and
@@ -179,7 +185,7 @@ From v1:
 - Types: `i64`, `bool`, `str`, `void`; structs with methods; enums;
   tagged unions `union(enum)`; arrays `[N]T`; slices `[]T`; error unions `!T`
 - `const` / `var`, assignment to mutable variables, fields and array
-  elements (slice and str elements are read-only); `if`,
+  elements (str and plain slice elements are read-only); `if`,
   `while`, `for (xs) |x, i|`, `break`, `continue`, exhaustive `switch` with
   payload capture
 - Parameters by value, `inout` (passed as `&x`, with exclusivity checked),

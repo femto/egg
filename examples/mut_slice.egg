@@ -1,0 +1,65 @@
+// A mutable slice: `inout xs: []T` borrows a writable view for the call.
+// The argument is written &x[lo..hi], so the call shows that it writes:
+// x is a var array, a var or inout Buf, or another inout slice. The view
+// cannot be reassigned or resized, only its elements written, and like
+// every slice it cannot outlive the call.
+// expect: 0
+// expect: 7
+// expect: 7
+// expect: 0
+// expect: 9
+// expect: 9
+// expect: 9
+// expect: 1
+// expect: 28
+// expect: 3
+uses io, alloc
+
+fn fill(inout xs: []i64, v: i64) void {
+    var i = 0
+    while (i < @len(xs)) {
+        xs[i] = v
+        i = i + 1
+    }
+}
+
+fn bump(inout x: i64) void {
+    x = x + 1
+}
+
+// Lends a part of its own view on.
+fn fill_tail(inout xs: []i64, v: i64) void {
+    fill(&xs[1..], v)
+    bump(&xs[0])
+}
+
+fn total(xs: []i64) i64 {
+    var t = 0
+    for (xs) |x| {
+        t = t + x
+    }
+    return t
+}
+
+fn grow(a: Allocator, inout b: Buf(i64)) void {
+    a.push(&b, 5)
+    fill(&b[0..], 3)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var arr = [4]i64{ 0, 0, 0, 0 }
+    fill(&arr[1..3], 7)
+    for (arr) |x| {
+        out.print(x)
+    }
+    var b = a.alloc(4, 0)
+    defer a.free(b)
+    fill_tail(&b[0..], 9)
+    out.print(b[1])
+    out.print(b[2])
+    out.print(b[3])
+    out.print(b[0])
+    out.print(total(b[0..]))
+    grow(a, &b)
+    out.print(@len(b) - 2)
+}

@@ -718,7 +718,7 @@ module Egg
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       params = runtime.each_with_index.map do |p, i|
         t, mode = sig.params[i]
-        mode == "inout" ? "#{c_type(t)} *v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
+        by_ref?(t, mode) ? "#{c_type(t)} *v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
       end
       params_text = params.empty? ? "void" : params.join(", ")
       # Not static: an unused function is not an error in Egg, and external
@@ -741,7 +741,7 @@ module Egg
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       runtime.each_with_index do |p, i|
         t, mode = sig.params[i]
-        @locals.last[p.name] = [t, mode == "inout"]
+        @locals.last[p.name] = [t, by_ref?(t, mode)]
       end
       mark(sig.func.line)
       @out << signature(sig) << " {\n"
@@ -754,6 +754,12 @@ module Egg
       line("return (#{c_type('!void')}){ 0 };") if sig.ret == "!void"
       @out << "}\n\n"
       nil
+    end
+
+    # An inout parameter is a pointer, except an inout slice: the view is
+    # passed by value and its elements are written through it.
+    def by_ref?(t, mode)
+      mode == "inout" && @types[t]&.kind != :slice
     end
 
     # main's capability parameters are made here: the runtime is where
@@ -1030,6 +1036,7 @@ module Egg
           len = "#{s}.len"
         end
         item = "#{ptr}[#{idx}]"
+        line("(void)#{ptr};") if stmt.var == "_"
       end
       line("for (int64_t #{idx} = 0; #{idx} < #{len}; #{idx}++) {")
       @loop_marks << @defers.length
@@ -1354,6 +1361,7 @@ module Egg
       args.each_with_index do |a, i|
         pt = params[i][0]
         codes << case a
+                 in AddrOf[expr: SliceExpr => s] then slice_expr(s)
                  in AddrOf[expr: place] then "&#{lvalue(place)}"
                  in SliceExpr then coerce(slice_expr(a), a.ty, pt)
                  else coerce(expr(a), a.ty, pt)
@@ -1606,6 +1614,10 @@ module Egg
         if @types[obj.ty]&.kind == :buf
           b = lvalue(obj)
           "#{b}.ptr[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
+        elsif @types[obj.ty]&.kind == :slice
+          # Only an inout slice is written: it views a mutable place.
+          b = lvalue(obj)
+          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
         else
           "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
         end
