@@ -26,9 +26,9 @@ module Egg
   # root: the directory its file imports must stay inside
   ModuleInfo = Struct.new(:prefix, :path, :file, :uses, :aliases, :names, :imports, :allows, :links, :root)
 
-  # The standard library: EGG_STD, or lib/std beside the compiler's
-  # lib/egg (as Zig keeps it in lib/std).
-  STD_ROOT = ENV["EGG_STD"] || File.expand_path("../std", __dir__)
+  # The standard library: EGG_STD (an empty one counts as unset), or
+  # lib/std beside the compiler's lib/egg (as Zig keeps it in lib/std).
+  STD_ROOT = File.expand_path(ENV["EGG_STD"].to_s.empty? ? File.join(__dir__, "../std") : ENV["EGG_STD"])
 
   # The global name of `name` declared in module `mod`.
   def self.qualify(mod, name)
@@ -74,9 +74,7 @@ module Egg
         base_dir = mod.path.nil? ? Dir.pwd : File.dirname(mod.path)
         abs = File.expand_path(imp.path, base_dir)
         root = mod.root
-        unless abs.start_with?("#{root}/")
-          fail_at(mod, imp, "E129", "\"#{imp.path}\" is outside this module's root (#{root}); a file can import only files under it, and other modules by name, such as @import(\"std/map\")")
-        end
+        fail_outside(mod, imp, root) unless inside?(abs, root)
         file = display_path(mod, imp.path)
       else
         abs, root, file = module_path(mod, imp)
@@ -85,6 +83,10 @@ module Egg
       return found unless found.nil?
       unless File.file?(abs)
         fail_at(mod, imp, "E129", "cannot find \"#{imp.path}\" (looked for #{abs})")
+      end
+      # A symlink under the root may lead out of it: check where it goes.
+      if imp.path.end_with?(".egg") && !inside?(real(abs), real(root))
+        fail_outside(mod, imp, root)
       end
       src = begin
         File.read(abs)
@@ -124,11 +126,11 @@ module Egg
       mod
     end
 
-    # "std/map" -> the file std/map.egg of the library, its root, and the
-    # path shown in diagnostics; "std" alone is std/std.egg. Only std is
-    # known so far.
+    # "std/map" -> the file map.egg of the library, its root, and the
+    # path shown in diagnostics (the file's own, so it can be opened); "std"
+    # alone is std.egg. Only std is known so far.
     def module_path(mod, imp)
-      parts = imp.path.split("/")
+      parts = imp.path.split("/", -1)
       if parts.empty? || parts.any? { |p| !p.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) }
         fail_at(mod, imp, "E129", "\"#{imp.path}\" is neither a file (name.egg) nor a module name such as \"std/map\"")
       end
@@ -136,7 +138,22 @@ module Egg
         fail_at(mod, imp, "E129", "unknown module '#{parts[0]}': the modules are std and its parts (\"std/map\"); a file of this program ends in .egg")
       end
       rest = parts.length == 1 ? ["std"] : parts.drop(1)
-      [File.join(STD_ROOT, *rest) + ".egg", STD_ROOT, "std/#{rest.join('/')}.egg"]
+      abs = File.join(STD_ROOT, *rest) + ".egg"
+      [abs, STD_ROOT, abs]
+    end
+
+    def inside?(abs, root)
+      root == "/" || abs.start_with?("#{root.chomp('/')}/")
+    end
+
+    def real(path)
+      File.realpath(path)
+    rescue SystemCallError
+      path
+    end
+
+    def fail_outside(mod, imp, root)
+      fail_at(mod, imp, "E129", "\"#{imp.path}\" is outside this module's root (#{root}); a file can import only files under it, and other modules by name, such as @import(\"std/map\")")
     end
 
     def unique_prefix(abs)

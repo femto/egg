@@ -1,4 +1,5 @@
-// std/math: small numeric helpers for any number type.
+// std/math: small numeric helpers. min, max and clamp take any number
+// type; abs takes signed integers and floats.
 // const math = @import("std/math")
 
 fn min(comptime T: type, a: T, b: T) T {
@@ -15,9 +16,10 @@ fn max(comptime T: type, a: T, b: T) T {
     return b
 }
 
+// 0 - x, not -x, so abs(f64, -0.0) is 0.0
 fn abs(comptime T: type, x: T) T {
-    if (x < 0) {
-        return -x
+    if (x <= 0) {
+        return 0 - x
     }
     return x
 }

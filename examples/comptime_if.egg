@@ -4,6 +4,7 @@
 // @compileError reports a branch that should never be chosen.
 // expect: 683
 // expect: 7
+// expect: 7
 // expect: 1
 // expect: true
 // expect: false
@@ -13,7 +14,7 @@ fn hash(comptime K: type, k: K) i64 {
     if (K == str) {
         var h: i64 = 0
         for (k) |c| {
-            h = h * 2 + c
+            h = (h * 2 + c) % 1000000007
         }
         return h
     } else if (K == i64 or K == i32) {
@@ -37,6 +38,7 @@ fn is_text(comptime T: type) bool {
 
 fn main(out: Io) void {
     out.print(hash(str, "abc"))
+    out.print(hash(i64, 7))
     out.print(hash(i32, 7))
     out.print(hash(bool, true))
     out.print(is_text(str))
