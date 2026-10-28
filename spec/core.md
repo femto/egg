@@ -1572,8 +1572,9 @@ follows every path through each function and checks:
   reassign or resize `b` either: the compiler sums up, for each function,
   which parts of its `inout` parameters it may change, directly or
   through the functions it calls, so `s.bump()` inside `for (s.items)`
-  is fine when `bump` only changes `s.hits`. An `Allocator` method
-  (`a.push(&b, x)`) always may.
+  is fine when `bump` only changes `s.hits`. An `Allocator` method is
+  always taken to resize what it is given, so `a.push(&b, x)` in the
+  loop stays E137.
 
 An owned value moved into a call may not appear in another argument of it
 (E117), so a slice of it cannot outlive it. Owned values cannot be compared
