@@ -1,0 +1,48 @@
+// Inside a for loop over a buffer, a call may take what holds it as inout
+// when the callee cannot move, reassign or resize that buffer: each
+// function's summary says which parts of its inout parameters it may
+// change, through the functions it calls too.
+// expect: 11
+// expect: 4
+// expect: 8
+uses io, alloc
+
+const Stats = struct {
+    items: Buf(i64)
+    hits: i64
+
+    fn bump(inout self: Stats, by: i64) void {
+        self.hits = self.hits + by
+    }
+
+    // Changes elements only, which the loop allows.
+    fn double_first(inout self: Stats) void {
+        self.items[0] = self.items[0] * 2
+    }
+
+    fn add(inout self: Stats, a: Allocator, v: i64) void {
+        a.push(&self.items, v)
+    }
+}
+
+fn note(inout s: Stats, x: i64) void {
+    s.bump(x)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var s = Stats{ .items = a.alloc(3, 1), .hits = 0 }
+    defer a.free(s.items)
+    for (s.items) |x| {
+        note(&s, x)
+        s.double_first()
+    }
+    out.print(s.hits + s.items[0])
+    // add may resize s.items: after the loop, or over an index.
+    var i = 0
+    while (i < 1) {
+        s.add(a, s.items[i])
+        i = i + 1
+    }
+    out.print(@len(s.items))
+    out.print(s.items[3])
+}

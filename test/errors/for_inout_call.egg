@@ -1,0 +1,53 @@
+// A call in a for loop over a buffer may not take it, or what holds it, as
+// inout when the callee may move, reassign or resize it: directly, through
+// another function, or recursively. An Allocator method may always.
+uses alloc
+
+const Stats = struct {
+    items: Buf(i64)
+    hits: i64
+
+    fn add(inout self: Stats, a: Allocator, v: i64) void {
+        a.push(&self.items, v)
+    }
+
+    fn deep(inout self: Stats, a: Allocator, n: i64) void {
+        if (n > 0) {
+            self.deep(a, n - 1)
+        } else {
+            self.add(a, 1)
+        }
+    }
+
+    fn swap_out(inout self: Stats, a: Allocator) void {
+        a.free(self.items)
+        self.items = a.alloc(1, 0)
+    }
+}
+
+fn grow(a: Allocator, inout b: Buf(i64)) void {
+    a.push(&b, 1)
+}
+
+fn via(a: Allocator, inout s: Stats) void {
+    grow(a, &s.items)
+}
+
+fn main(a: Allocator) void {
+    var s = Stats{ .items = a.alloc(3, 1), .hits = 0 }
+    defer a.free(s.items)
+    for (s.items) |x| {
+        s.add(a, x)
+        s.deep(a, 3)
+        s.swap_out(a)
+        grow(a, &s.items)
+        via(a, &s)
+        a.push(&s.items, x)
+    }
+}
+// error: E137 @40
+// error: E137 @41
+// error: E137 @42
+// error: E137 @43
+// error: E137 @44
+// error: E137 @45

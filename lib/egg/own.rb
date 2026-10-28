@@ -32,7 +32,15 @@
 # While `for (b)` iterates over a buffer, the loop holds on to it: the body
 # may read and write its elements, but not move, reassign or resize it
 # (E137); if its elements own buffers, the body may not replace them
-# either, and the loop variable only borrows each one.
+# either, and the loop variable only borrows each one. A call that takes
+# an inout argument is judged by what the callee may change: each
+# function has a summary of the parts of its inout parameters it may
+# move, reassign or resize (itself or through the functions it calls), so
+# `s.bump()` inside `for (s.items)` is fine when bump only changes
+# s.hits. The summaries are computed first, to a fixed point (a call to a
+# function not summarized yet, as in recursion, adds nothing until it
+# is), and a callee without a body (a function value, an Allocator
+# method) may change all of its argument.
 #
 # An `owned struct` (a resource) is owned for itself, not only for its
 # buffers: its `v.#` path is followed like a buffer, and `@drop(v)` (in its
@@ -57,6 +65,16 @@ module Egg
     end
 
     def check
+      # Summaries first: re-run until no function's summary grows. Each
+      # run only adds paths, and there are finitely many, so this ends.
+      @summary = {}.compare_by_identity
+      while true
+        @grew = false
+        @checker.concrete.each { |sig| check_func(sig) }
+        break unless @grew
+      end
+      @diags = []
+      @seen = {}
       @checker.concrete.each { |sig| check_func(sig) }
       @diags
     end
@@ -78,10 +96,13 @@ module Egg
       @iterated = {} # path -> line of the for loop iterating it
       @borrowed = {} # loop variable borrowing an owned element -> its container, as written
       @res = {}      # v.# path of an owned struct -> its type
+      @summary[sig] ||= {}
+      @param_index = {}
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       runtime.each_with_index do |p, i|
         t, mode = sig.params[i]
         kind = { "inout" => :inout, "sink" => :param }.fetch(mode, :bparam)
+        @param_index[p.name] = i
         declare(p.name, kind, p.line, p.col, t) if owned?(t)
       end
       walk_stmts(sig.func.body.stmts)
@@ -380,15 +401,51 @@ module Egg
     end
 
     def check_iterated(path, line, col, what)
+      note_change(path)
       key = @iterated.keys.find { |k| overlap?(k, path) }
       return if key.nil?
       err("E137", "'#{path}' cannot be #{what} here: the for loop on line #{@iterated[key]} is iterating over #{key == path ? 'it' : "'#{key}'"}", line, col)
     end
 
+    # A change to `path`, rooted at an inout parameter, goes into this
+    # function's summary as the parameter's index and the rest of the path
+    # ("" for all of it, ".items" for its items field).
+    def note_change(path)
+      r = root(path)
+      d = @decl[r]
+      return if d.nil? || d[0] != :inout || !@param_index.key?(r)
+      changes = (@summary[@sig][@param_index[r]] ||= [])
+      rest = path[r.length..]
+      return if changes.include?(rest)
+      changes << rest
+      @grew = true
+    end
+
+    # &place passed as parameter `i` of `callee` (nil when unknown): check
+    # each part of it the callee may change against the for loops here.
+    def check_inout_arg(place, callee, i, line, col)
+      check_elem_change(place, line, col, "passed as inout", false)
+      p = path_of(place)
+      return if p.nil?
+      if callee.nil? || callee.func.nil?
+        check_iterated(p, line, col, "passed as inout")
+        return
+      end
+      (@summary.dig(callee, i) || []).each do |rest|
+        changed = "#{p}#{rest}"
+        note_change(changed)
+        key = @iterated.keys.find { |k| overlap?(k, changed) }
+        next if key.nil?
+        via = changed == p ? "" : " (through '#{p}')"
+        err("E137", "'#{callee.name}' may move, reassign or resize '#{changed}'#{via}, but the for loop on line #{@iterated[key]} is iterating over #{key == changed ? 'it' : "'#{key}'"}; loop over an index with while, or make the change after the loop", line, col)
+      end
+    end
+
     # A place changed in place (&x, @replace): if it is (in) an element of
     # an array or buffer whose elements own buffers, a for loop over that
-    # container would see a stale copy.
-    def check_elem_change(place, line, col, what)
+    # container would see a stale copy. whole: the place itself changes
+    # too (false for an inout argument, which check_inout_arg judges).
+    def check_elem_change(place, line, col, what, whole = true)
       p = place
       while p.is_a?(Field) || p.is_a?(Index)
         if p.is_a?(Index) && owned?(p.ty)
@@ -397,6 +454,7 @@ module Egg
         end
         p = p.obj
       end
+      return unless whole
       c = path_of(place)
       check_iterated(c, line, col, what) unless c.nil?
     end
@@ -513,8 +571,7 @@ module Egg
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
-            p = path_of(obj)
-            check_iterated(p, obj.line, obj.col, "passed as inout") unless p.nil?
+            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col)
             walk_place(obj)
           else
             # self is borrowed unless the method takes `sink self`;
@@ -605,10 +662,13 @@ module Egg
       params = info&.[](:params)
       params = nil unless params.nil? || params.length == args.length
       cap = info&.[](:cap_method)
+      callee = info&.[](:sig)
+      # A method's own parameters start after self.
+      shift = callee.nil? || callee.params.length == args.length ? 0 : 1
       args.each_with_index do |a, i|
         if a.is_a?(AddrOf)
-          # inout: the callee may replace or resize it
-          check_elem_change(a.expr, a.line, a.col, "passed as inout")
+          # inout: the callee may replace or resize what its summary says
+          check_inout_arg(a.expr, callee, i + shift, a.line, a.col) unless a.expr.is_a?(SliceExpr)
           walk_place(a.expr)
         elsif params.nil? && !cap.nil?
           walk(a, !TAKING_CAP_METHODS.include?(cap))

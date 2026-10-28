@@ -1567,8 +1567,13 @@ follows every path through each function and checks:
   `catch`, the right side of `and`/`or`), and an iteration of a loop
   leaves each buffer from outside it as it found it (E134);
 - while `for (b)` iterates over a buffer, the body may change its
-  elements but not move, reassign or resize it, nor pass it as `inout`
-  (E137).
+  elements but not move, reassign or resize it (E137). It may pass `b`,
+  or a struct holding it, as `inout` to a function that cannot move,
+  reassign or resize `b` either: the compiler sums up, for each function,
+  which parts of its `inout` parameters it may change, directly or
+  through the functions it calls, so `s.bump()` inside `for (s.items)`
+  is fine when `bump` only changes `s.hits`. An `Allocator` method
+  (`a.push(&b, x)`) always may.
 
 An owned value moved into a call may not appear in another argument of it
 (E117), so a slice of it cannot outlive it. Owned values cannot be compared
