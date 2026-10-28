@@ -917,6 +917,13 @@ module Egg
     # if / else if / else chains become one flat C chain, unless an else-if
     # condition needs temporaries: then it nests inside the else.
     def gen_if(stmt)
+      if stmt.cond.is_a?(BoolLit) && stmt.cond.value == true && stmt.else_body.nil?
+        # always taken (a folded comptime if): a plain block
+        line("{")
+        gen_block(stmt.then_body)
+        line("}")
+        return
+      end
       c = cond(stmt.cond)
       line("if (#{c}) {")
       gen_block(stmt.then_body)

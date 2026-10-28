@@ -1,0 +1,31 @@
+// Types compare only in an if condition; @compileError reports the branch
+// a type chooses, and needs a string literal.
+uses io
+
+fn f(comptime K: type) bool {
+    const b = K == str
+    return b
+}
+
+fn pick(comptime K: type) i64 {
+    if (K == i64) {
+        return 1
+    } else {
+        @compileError("pick needs i64")
+    }
+}
+
+fn g() void {
+    const m = "x"
+    @compileError(m)
+}
+
+fn main(out: Io) void {
+    out.print(f(i64))
+    out.print(pick(i64))
+    out.print(pick(bool))
+    g()
+}
+// error: E103 @6
+// error: E146 @14
+// error: E146 @20

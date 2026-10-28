@@ -1,0 +1,46 @@
+// An if whose condition compares types (K == str, joined by and / or / !)
+// is decided at compile time: only the chosen branch is checked and
+// generated, so one generic function can do different things per type.
+// @compileError reports a branch that should never be chosen.
+// expect: 683
+// expect: 7
+// expect: 7
+// expect: 1
+// expect: true
+// expect: false
+uses io
+
+fn hash(comptime K: type, k: K) i64 {
+    if (K == str) {
+        var h: i64 = 0
+        for (k) |c| {
+            h = (h * 2 + c) % 1000000007
+        }
+        return h
+    } else if (K == i64 or K == i32) {
+        return @as(i64, k)
+    } else if (K == bool) {
+        if (k) {
+            return 1
+        }
+        return 0
+    } else {
+        @compileError("hash supports str, i64, i32 and bool")
+    }
+}
+
+fn is_text(comptime T: type) bool {
+    if (T == str) {
+        return true
+    }
+    return false
+}
+
+fn main(out: Io) void {
+    out.print(hash(str, "abc"))
+    out.print(hash(i64, 7))
+    out.print(hash(i32, 7))
+    out.print(hash(bool, true))
+    out.print(is_text(str))
+    out.print(is_text(i64))
+}
