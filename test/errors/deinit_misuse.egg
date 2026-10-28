@@ -2,7 +2,7 @@
 // cannot copy an owned struct, not even one of empty buffers.
 uses alloc, io
 
-const t = @import("../../examples/lib/tracked.egg")
+const t = @import("lib/tracked.egg")
 
 const Bad = owned struct {
     id: i64

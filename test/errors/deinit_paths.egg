@@ -1,7 +1,7 @@
 // A value pushed is moved; one popped must be ended.
 uses alloc, io
 
-const t = @import("../../examples/lib/tracked.egg")
+const t = @import("lib/tracked.egg")
 
 fn moved(a: Allocator) void {
     const log = t.new_log(a)
