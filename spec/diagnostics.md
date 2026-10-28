@@ -59,6 +59,7 @@ program imports:
 | E143 | checker | an owned struct's `deinit` that is not `fn deinit(sink self: T) void` or `fn deinit(sink self: T, a: Allocator) void` | `a.free` can pass it only the value and an Allocator; end it some other way in a method of another name |
 | E144 | ownership | moving, freeing, returning, assigning or `@drop`ping a plain parameter of an owned type, or any part of it: it is only borrowed | declare it `sink x: T` to take it over, or copy out the plain values you need |
 | E145 | checker | a `sink` parameter whose type owns nothing (not a buffer, an `owned struct` or a value holding one; in a generic instance it is allowed) | remove `sink`: a plain parameter reads it |
+| E146 | checker | `@compileError("...")` in a branch that is checked: a generic function instantiated with a type it does not support | call it with a type it supports; the message says which |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 

@@ -913,6 +913,53 @@ fn main(out: Io) void {
 }
 ```
 
+**Choosing by type.** An `if` whose condition compares types (`K == str`,
+`K != i64`, joined by `and`, `or` and `!`) is decided at compile time:
+only the branch it chooses is checked and generated, so one generic
+function can do different things per type, and an `else if` chain picks
+the first branch whose types match. Types compare nowhere else (E103).
+`@compileError("message")` reports E146 with that message where it is
+checked, so it marks a branch no type should choose; such a branch needs
+no `return`.
+
+```egg
+// expect: 3
+// expect: 7
+uses io
+
+fn size(comptime T: type, x: T) i64 {
+    if (T == str) {
+        return @len(x)
+    } else if (T == i64) {
+        return x
+    } else {
+        @compileError("size takes a str or an i64")
+    }
+}
+
+fn main(out: Io) void {
+    out.print(size(str, "abc"))
+    out.print(size(i64, 7))
+}
+```
+
+```egg
+// error: E146
+uses io
+
+fn size(comptime T: type, x: T) i64 {
+    if (T == str) {
+        return @len(x)
+    } else {
+        @compileError("size takes a str")
+    }
+}
+
+fn main(out: Io) void {
+    out.print(size(bool, true))
+}
+```
+
 ## 15. Builtins
 
 Builtins start with `@`; any other name is E112.
@@ -923,6 +970,7 @@ Builtins start with `@`; any other name is E112.
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
 | `@errorName(e)` | the name of the error `e: anyerror`, without `error.`, as a `str` (section 13) |
+| `@compileError("msg")` | E146 with that message, where a branch chosen by type reaches it (section 14) |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
@@ -1279,7 +1327,8 @@ freeing a storable value that owns nothing does nothing, so one generic containe
 serves owned and plain values alike);
 `a.resize(&b, n, v)` changes its length to n, filling new elements with v.
 A negative length panics with `negative buffer length`. `a.push(&b, v)`
-moves v in at the end, and `a.pop(&b)` moves the last element out as a
+moves v in at the end (a buffer keeps spare room, doubling it when it
+runs out, so a push costs amortized O(1)), and `a.pop(&b)` moves the last element out as a
 `?T` (`null` when b is empty); a pushed value is not copied, so it may be
 an owned one. A `Buf(?U)` pops a `??U`, unwrapped with two orelses, the
 outer one for an empty buffer: `(a.pop(&b) orelse 0) orelse -1`. These

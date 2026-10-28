@@ -421,7 +421,7 @@ module Egg
 
     # Buf(T).empty: no elements, nothing on the heap.
     def empty_buf(t)
-      "((#{c_type(t)}){ .ptr = NULL, .len = 0 })"
+      "((#{c_type(t)}){ .ptr = NULL, .len = 0, .cap = 0 })"
     end
 
     # Record a helper call; every checked helper also needs egg_panic.
@@ -658,7 +658,8 @@ module Egg
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
       when :buf
         emit_type(info.elem, done)
-        @out << "typedef struct { #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
+        # cap: elements allocated, so a.push grows by doubling.
+        @out << "typedef struct { #{c_type(info.elem)} *ptr; int64_t len; int64_t cap; } #{info.c_name};\n"
       when :ptr
         # A struct or union target is declared up front; others are needed.
         emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
@@ -915,6 +916,13 @@ module Egg
     # if / else if / else chains become one flat C chain, unless an else-if
     # condition needs temporaries: then it nests inside the else.
     def gen_if(stmt)
+      if stmt.cond.is_a?(BoolLit) && stmt.cond.value == true && stmt.else_body.nil?
+        # always taken (a folded comptime if): a plain block
+        line("{")
+        gen_block(stmt.then_body)
+        line("}")
+        return
+      end
       c = cond(stmt.cond)
       line("if (#{c}) {")
       gen_block(stmt.then_body)
@@ -1310,6 +1318,7 @@ module Egg
                line("#{c_type(ret)} #{b};")
                line("#{b}.len = #{codes[0]};")
                line("#{b}.ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(NULL, #{b}.len, sizeof(#{c_type(elem)}));")
+               line("#{b}.cap = #{b}.len;")
                v = hoist(codes[1], elem)
                i = tmp
                line("for (int64_t #{i} = 0; #{i} < #{b}.len; #{i}++) #{b}.ptr[#{i}] = #{v};")
@@ -1338,6 +1347,7 @@ module Egg
                  line("if (#{n} >= 0) for (int64_t #{i} = #{n}; #{i} < #{p}->len; #{i}++) #{drop(elem)}(#{p}->ptr[#{i}]);")
                end
                line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{n}, sizeof(#{c_type(elem)}));")
+               line("#{p}->cap = #{n};")
                i = tmp
                line("for (int64_t #{i} = #{p}->len; #{i} < #{n}; #{i}++) #{p}->ptr[#{i}] = #{v};")
                line("#{p}->len = #{n};")
@@ -1349,7 +1359,12 @@ module Egg
                p = tmp
                line("#{c_type(buf)} *#{p} = #{codes[0]};")
                v = hoist(coerce(codes[1], args[1].ty, elem), elem)
-               line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{p}->len + 1, sizeof(#{c_type(elem)}));")
+               # Out of room: double the capacity (at least 4), so pushes
+               # cost amortized O(1).
+               line("if (#{p}->len == #{p}->cap) {")
+               line("    #{p}->cap = #{p}->cap < 2 ? 4 : #{p}->cap * 2;")
+               line("    #{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{p}->cap, sizeof(#{c_type(elem)}));")
+               line("}")
                line("#{p}->ptr[#{p}->len] = #{v};")
                line("#{p}->len++;")
                "((void)0)"

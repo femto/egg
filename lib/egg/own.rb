@@ -278,6 +278,9 @@ module Egg
           walk_place(target)
           walk(value)
         end
+      in If[cond: BoolLit[value: true], then_body:, else_body: nil]
+        # Always taken (also what a comptime if folds to).
+        walk_block(then_body)
       in If[cond:, then_body:, else_body:, line:, col:]
         walk(cond)
         start = @st
