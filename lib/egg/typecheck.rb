@@ -418,6 +418,8 @@ module Egg
           elsif p.mode == "sink" && t != "error" && !owned?(t) && (sig.tenv.nil? || sig.tenv.empty?)
             # In a generic instance T may or may not own something.
             err("E145", "'sink' takes ownership, but #{t} owns nothing; remove 'sink' (a plain parameter reads it)", p.line, p.col)
+          elsif p.mode == "inout" && t.start_with?("[]") && owned?(@types[t].elem)
+            err("E147", "an inout slice cannot hold #{@types[t].elem}: assigning an element would lose the buffers it owns; pass the whole container as inout instead", p.line, p.col)
           end
           sig.params << [t, p.mode]
         end
@@ -1054,7 +1056,9 @@ module Egg
             err("E101", "undefined variable '#{name}'", line, col)
           else
             vt = check_expr(value, info.type)
-            if !info.mutable
+            if info.inout && info.type.start_with?("[]")
+              err("E105", "cannot assign to slice parameter '#{name}': only its elements can change (#{name}[i] = v)", line, col)
+            elsif !info.mutable
               what = info.param ? "parameter" : "constant"
               err("E105", "cannot assign to #{what} '#{name}'", line, col)
             else
@@ -1276,7 +1280,9 @@ module Egg
           e.ty = "error"
           return "error"
         end
-        if !info.mutable
+        if mut_slice_param?(e)
+          err("E105", "cannot #{verb} slice parameter '#{name}': only its elements can change (#{name}[i] = v)", line, col)
+        elsif !info.mutable
           what = info.param ? "parameter" : "constant"
           err("E105", "cannot #{verb} #{what} '#{name}'", line, col)
         else
@@ -1292,10 +1298,13 @@ module Egg
         e.info = {}
         e.ty
       in Index[obj:, index:, line:, col:]
-        t = check_lvalue(obj, verb)
+        writable = mut_slice_param?(obj)
+        t = slice_var?(obj) ? check_expr(obj) : check_lvalue(obj, verb)
         expect_type("i64", check_expr(index), index)
-        if t.start_with?("[]") || t == "str"
-          err("E105", "cannot #{verb} an element of a #{t == 'str' ? 'str' : 'slice'}: it is read-only", line, col)
+        if t == "str"
+          err("E105", "cannot #{verb} an element of a str: it is read-only", line, col)
+        elsif t.start_with?("[]") && !writable
+          err("E105", "cannot #{verb} an element of a read-only slice; declare the parameter `inout #{root_name(obj) || 'xs'}: #{t}` and pass &x[lo..hi]", line, col)
         end
         e.ty = index_type(t, line, col)
         e.info = { len: @types[t]&.len }
@@ -1316,6 +1325,45 @@ module Egg
         check_expr(e)
         "error"
       end
+    end
+
+    # An `inout xs: []T` parameter: its elements can be written, but xs
+    # itself is a view and cannot be reassigned.
+    def mut_slice_param?(e)
+      slice_var?(e) && lookup(e.name).inout
+    end
+
+    def slice_var?(e)
+      return false unless e.is_a?(Var)
+      info = lookup(e.name)
+      !info.nil? && info.type.start_with?("[]")
+    end
+
+    # &x[lo..hi] lent to an `inout []T` parameter: a writable view of a
+    # var array, a var or inout Buf, or an inout slice.
+    def check_mut_slice(s)
+      s.info = {}
+      obj = s.obj
+      t = slice_var?(obj) ? check_expr(obj) : check_lvalue(obj, "lend a mutable slice of")
+      mark_root_used(obj)
+      expect_type("i64", check_expr(s.lo), s.lo)
+      expect_type("i64", check_expr(s.hi), s.hi) unless s.hi.nil?
+      return(s.ty = "error") if t == "error"
+      info = @types[t]
+      if t == "str"
+        err("E105", "cannot lend a mutable slice of a str: it is read-only", s.line, s.col)
+        return(s.ty = "error")
+      elsif info.nil? || !%i[array slice buf].include?(info.kind)
+        err("E103", "cannot slice a #{t}", s.line, s.col)
+        return(s.ty = "error")
+      elsif info.kind == :slice && !mut_slice_param?(obj)
+        err("E105", "cannot lend a mutable slice of a read-only slice", s.line, s.col)
+        return(s.ty = "error")
+      end
+      s.info[:len] = info.len
+      canon = "[]#{info.elem}"
+      register(canon, :slice, s.line, s.col).elem = info.elem
+      s.ty = canon
     end
 
     # &place in an `allow unsafe` file: a pointer to a mutable place (a
@@ -2157,11 +2205,24 @@ module Egg
         a = args[i]
         if mode == "inout"
           unless a.is_a?(AddrOf)
-            err("E121", "parameter #{i + 1} of '#{name}' is inout: pass a variable as &x", a.line, a.col)
-            check_expr(a)
+            how = pt.start_with?("[]") ? "a writable slice as &x[lo..hi]" : "a variable as &x"
+            err("E121", "parameter #{i + 1} of '#{name}' is inout: pass #{how}", a.line, a.col)
+            a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
             next
           end
           a.info = {}
+          if pt.start_with?("[]")
+            unless a.expr.is_a?(SliceExpr)
+              err("E103", "parameter #{i + 1} of '#{name}' is an inout slice: pass &x[lo..hi] or &x[0..]", a.line, a.col)
+              check_expr(a.expr)
+              next
+            end
+            a.ty = check_mut_slice(a.expr)
+            expect_type(pt, a.ty, a)
+            path = inout_path(a.expr)
+            inout_roots << [path, a] unless path.nil?
+            next
+          end
           t = check_lvalue(a.expr, "pass as inout")
           mark_root_used(a.expr)
           a.ty = t
@@ -2268,6 +2329,7 @@ module Egg
       case e
       in Field[obj:] then inout_path(obj)
       in Index[obj:] then inout_path(obj)
+      in SliceExpr[obj:] then inout_path(obj)
       else nil
       end
     end

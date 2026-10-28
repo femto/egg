@@ -1,0 +1,55 @@
+// std/sort sorts a mutable slice in place: a whole buffer (&b[0..]) or
+// a part of an array (&a[1..4]).
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 5
+// expect: 8
+// expect: 9
+// expect: true
+// expect: 9
+// expect: 1
+// expect: 3
+// expect: 2
+// expect: 1.5
+// expect: 0
+// expect: true
+uses io, alloc
+
+const sort = @import("std/sort")
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(i64) = .empty
+    defer a.free(b)
+    for ([6]i64{ 5, 9, 1, 8, 2, 3 }) |x| {
+        a.push(&b, x)
+    }
+    sort.sort(i64, &b[0..])
+    for (b) |x| {
+        out.print(x)
+    }
+    out.print(sort.is_sorted(i64, b[0..]))
+    sort.reverse(i64, &b[0..])
+    out.print(b[0])
+    out.print(b[5])
+    var arr = [5]u8{ 9, 4, 2, 3, 0 }
+    sort.reverse(u8, &arr[1..4])
+    out.print(arr[1])
+    out.print(arr[2])
+    var fs = [2]f64{ 2.5, 1.5 }
+    sort.sort(f64, &fs[0..])
+    out.print(fs[0])
+    var none: Buf(i64) = .empty
+    defer a.free(none)
+    sort.sort(i64, &none[0..])
+    out.print(@len(none))
+    var seed: i64 = 7
+    var i = 0
+    while (i < 200) {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        a.push(&none, seed % 1000)
+        i = i + 1
+    }
+    sort.sort(i64, &none[0..])
+    out.print(sort.is_sorted(i64, none[0..]))
+}

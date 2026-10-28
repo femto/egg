@@ -1,0 +1,43 @@
+// An inout slice is written &x[lo..hi] of a mutable place, and only its
+// elements change.
+uses io, alloc
+
+fn fill(inout xs: []i64, v: i64) void {
+    xs[0] = v
+}
+
+fn reset(inout xs: []i64, ys: []i64) void {
+    xs = ys
+    ys[0] = 1
+    fill(&ys[0..], 2)
+}
+
+fn both(inout xs: []i64, inout ys: []i64) void {
+    fill(&xs[0..], @len(ys))
+}
+
+fn own(inout bs: []Buf(i64)) void {
+    _ = @len(bs)
+}
+
+fn main(out: Io, a: Allocator) void {
+    const arr = [2]i64{ 1, 2 }
+    fill(&arr[0..], 0)
+    var v = [2]i64{ 1, 2 }
+    fill(&v, 0)
+    fill(v[0..], 0)
+    fill(&"ab"[0..], 0)
+    both(&v[0..1], &v[1..])
+    reset(&v[0..], v[0..])
+    out.print(v[0])
+}
+// error: E147 @19
+// error: E105 @10
+// error: E105 @11
+// error: E105 @12
+// error: E105 @25
+// error: E103 @27
+// error: E121 @28
+// error: E105 @29
+// error: E117 @30
+// error: E117 @31
