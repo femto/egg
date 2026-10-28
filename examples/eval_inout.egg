@@ -1,0 +1,46 @@
+// Operands run left to right even when a later one changes a variable
+// through an inout argument of a call inside it: x is read before
+// bump(&x) runs, in arguments, arithmetic, struct and array literals,
+// and the values of out.print.
+// expect: 12
+// expect: 12
+// expect: 12
+// expect: 12
+// expect: 12
+// expect: 1 2
+uses io
+
+fn bump(inout x: i64) i64 {
+    x = x + 1
+    return x
+}
+
+fn two(a: i64, b: i64) i64 {
+    return a * 10 + b
+}
+
+const P = struct {
+    a: i64
+    b: i64
+
+    fn with(self: P, b: i64) i64 {
+        return self.a * 10 + b
+    }
+}
+
+fn main(out: Io) void {
+    var x = 1
+    out.print(two(x, bump(&x)))
+    x = 1
+    out.print(x * 10 + bump(&x))
+    x = 1
+    const p = P{ .a = x, .b = bump(&x) }
+    out.print(p.a * 10 + p.b)
+    x = 1
+    const arr = [2]i64{ x, bump(&x) }
+    out.print(arr[0] * 10 + arr[1])
+    var q = P{ .a = 1, .b = 0 }
+    out.print(q.with(bump(&q.a)))
+    x = 1
+    out.print(x, " ", bump(&x))
+}

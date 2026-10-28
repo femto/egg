@@ -294,7 +294,13 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 - `and` / `or` short-circuit: the right side is evaluated only if needed.
 - Structs, unions and arrays cannot be compared with `==` (E103).
 - **Evaluation is left to right.** Operands and arguments are evaluated in
-  the order they are written, so `f() + g()` always calls `f` first.
+  the order they are written, so `f() + g()` always calls `f` first, and
+  in `f(x, bump(&x))` the first argument is the value of `x` before
+  `bump` changes it. An operand may not borrow what a later or earlier one
+  changes through an inout argument of a call inside it
+  (`first(b[0..], grow(a, &b))`, `b == grow(a, &b)`; E117): the borrow
+  would see the buffer before a resize. Read values are copies, so
+  `@len(b) + @len(grow(a, &b))` is fine.
 
 ### if with a value
 
@@ -1224,7 +1230,7 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `out.print(x)`: prints an integer, a float, `bool`, `str` or enum and a newline to standard output |
+| `io` | `Io` | `out.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `out.print(w, ": ", n)` |
 | `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
