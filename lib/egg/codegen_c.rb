@@ -34,7 +34,8 @@
 # Capability values (Io, Allocator) carry no data: the capability is in
 # the type, which the checker tracks. What a.concat, a.int_str and
 # a.create allocate is never freed, so a str or a pointer from them is
-# always valid. A Buf(T) is { T *ptr; int64_t len; } from malloc, and
+# always valid. A Buf(T) is { T *ptr; int64_t len; int64_t cap; } from
+# malloc (cap: elements allocated, len <= cap), and
 # a.free(b) frees it; the ownership check (own.rb) has made sure that
 # happens exactly once and that nothing uses it after.
 #
@@ -1355,7 +1356,7 @@ module Egg
                # Out of room: double the capacity (at least 4), so pushes
                # cost amortized O(1).
                line("if (#{p}->len == #{p}->cap) {")
-               line("    #{p}->cap = #{p}->cap < 2 ? 4 : #{p}->cap * 2;")
+               line("    #{p}->cap = #{p}->cap < 2 ? 4 : #{helper('egg_mul')}(#{p}->cap, 2);")
                line("    #{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{p}->cap, sizeof(#{c_type(elem)}));")
                line("}")
                line("#{p}->ptr[#{p}->len] = #{v};")
