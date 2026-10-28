@@ -24,6 +24,7 @@ fn main(out: Io, a: Allocator) void {
     const s: []u8 = b
     out.print(c == c)
     a.append_str(&b, 5)
+    out.print(n(if (@len(b) > 0) b else b))
 }
 
 // error: E117 @18
@@ -34,3 +35,4 @@ fn main(out: Io, a: Allocator) void {
 // error: E110 @24
 // error: E103 @25
 // error: E103 @26
+// error: E133 @27

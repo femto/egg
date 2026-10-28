@@ -12,6 +12,7 @@
 // expect: false
 // expect: 1,2,3,4,5
 // expect: id=7!
+// expect: score=91.5
 uses io, alloc
 
 // Lent text: a str, a Buf(u8), or a slice of either.
@@ -58,4 +59,5 @@ fn main(out: Io, a: Allocator) void {
     // A str that outlives line: copied into the program's arena.
     const kept = a.concat(line[0..4], "!")
     out.print(kept)
+    out.print(line[6..])
 }

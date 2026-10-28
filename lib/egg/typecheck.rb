@@ -1536,6 +1536,10 @@ module Egg
         inner
       in IfExpr[cond:, then_expr:, else_expr:, line:, col:]
         expect_type("bool", check_expr(cond), cond)
+        # An if with a value is never a slice, so a []u8 context does not
+        # turn its branches into one: the argument check then sees what
+        # they are (a str fits; a Buf(u8) cannot be lent from here, E133).
+        expected = nil if expected&.start_with?("[]")
         # Both branches have the type the context expects, or else the
         # first one's; a literal (5, .red, null) takes the other's.
         first, second = expected.nil? && untyped_lit?(then_expr) && !untyped_lit?(else_expr) ? [else_expr, then_expr] : [then_expr, else_expr]
@@ -2073,7 +2077,7 @@ module Egg
             err("E117", "'#{path}' is passed as inout and also used by another argument of the same call", a.line, a.col)
           end
         elsif pt == "printable"
-          at = check_expr(a)
+          at = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
           if at == "void"
             err("E103", "'#{name}' cannot print a void value", a.line, a.col)
           elsif at != "error" && !printable?(at)
