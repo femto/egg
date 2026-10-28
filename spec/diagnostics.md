@@ -34,7 +34,7 @@ program imports:
 | E118 | checker | `try` outside a function returning `!T`, or `try`/`catch` on a value that is not `!T`, `orelse` on one that is not `?T`, or a value fallback for `!void`; a block after `orelse`, or after a `catch` on a `!T` other than `!void`, that does not leave on every path (it has no value to give); `try`, or a `catch`/`orelse` that leaves (`return`/`break`/`continue`, or a block that may), inside `defer`; `errdefer` in a function that does not return `!T` | return `!T`, or handle the error with `catch`; end the block with `return`, `break` or `continue`, or give a value by calling a function (`catch |e| f(e)`); use `defer` |
 | E119 | checker | a struct contains itself by value | hold an index into an array instead |
 | E120 | checker | `struct { ... }` outside a type function, or a type function whose body is not `return struct { ... }` | declare the type with `const Name = struct { ... }` |
-| E121 | checker | `&` outside an inout argument (in a file without `allow unsafe`, where it would take an address), or an inout argument without `&` | write `f(&x)` exactly where the parameter is `inout` |
+| E121 | checker | `&` outside an inout argument (in a file without `allow unsafe`, where it would take an address), or an inout argument without `&` | write `f(&x)` exactly where the parameter is `inout` (`f(&x[lo..hi])` for an `inout xs: []T`) |
 | E122 | checker | no such field, method or member (also: reading a union's member without `switch`) | check the name; use `switch` for unions |
 | E123 | checker | a struct or union literal with a missing, unknown or repeated field | name every field once; a union literal names one member |
 | E124 | checker | an array literal with the wrong number of elements, or a zero-length array | match the length in `[N]T` |
@@ -60,7 +60,7 @@ program imports:
 | E144 | ownership | moving, freeing, returning, assigning or `@drop`ping a plain parameter of an owned type, or any part of it: it is only borrowed | declare it `sink x: T` to take it over, or copy out the plain values you need |
 | E145 | checker | a `sink` parameter whose type owns nothing (not a buffer, an `owned struct` or a value holding one; in a generic instance it is allowed) | remove `sink`: a plain parameter reads it |
 | E146 | checker | a `@compileError("...")` that is checked: anywhere outside a comptime `if` branch that is not chosen (typically a generic function instantiated with a type it does not support), or one whose argument is not a single string literal | call the function with a type it supports, as the message says; put `@compileError` only in a branch that should never be chosen, and give it one string literal |
-| E147 | checker | an `inout` slice whose elements own buffers (`inout xs: []Buf(i64)`): assigning an element would lose them | pass the whole container as `inout` and swap elements out with `@replace`/`@take` |
+| E147 | checker | an `inout` slice whose elements own buffers or owned structs (`inout xs: []Buf(i64)`, even one with a `deinit`): assigning an element would lose them | pass the whole container as `inout` and swap elements out with `@replace`/`@take` |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 

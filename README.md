@@ -113,7 +113,7 @@ v3 (memory without GC, and what realistic programs needed; under way):
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
-  resized, and its elements own no buffers (E147)
+  resized, and its elements own no buffers or resources (E147)
 - Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
   owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
   works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and

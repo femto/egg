@@ -1582,10 +1582,12 @@ module Egg
       len = if t == "str" || %i[slice buf].include?(info.kind) then "#{base}.len" else "INT64_C(#{info.len})" end
       hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64")
       line("#{helper('egg_slice_check')}(#{lo}, #{hi}, #{len});")
+      # An empty buffer's ptr is NULL, and NULL + 0 is undefined in C; lo
+      # > 0 means the length is too, so ptr is then not NULL.
       if t == "str"
-        "((egg_str){ #{base}.ptr + #{lo}, #{hi} - #{lo} })"
+        "((egg_str){ #{lo} ? #{base}.ptr + #{lo} : #{base}.ptr, #{hi} - #{lo} })"
       elsif %i[slice buf].include?(info.kind)
-        "((#{c_type(e.ty)}){ #{base}.ptr + #{lo}, #{hi} - #{lo} })"
+        "((#{c_type(e.ty)}){ #{lo} ? #{base}.ptr + #{lo} : #{base}.ptr, #{hi} - #{lo} })"
       else
         "((#{c_type(e.ty)}){ #{base}.a + #{lo}, #{hi} - #{lo} })"
       end

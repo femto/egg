@@ -793,9 +793,9 @@ fn main(out: Io) void {
 ## 12. inout parameters
 
 An `inout` parameter lets a function change its caller's variable. The
-argument is written `&x`, so a reader of the call can see it: `x` (or a
-field or element of it) must be a `var` or an `inout` parameter, and `&`
-is allowed nowhere else (E121). Inside the function, the parameter reads
+argument is written `&x` (`&x[lo..hi]` for an inout slice, below), so a
+reader of the call can see it: `x` (or a field or element of it) must be
+a `var` or an `inout` parameter, and `&` is allowed nowhere else (E121). Inside the function, the parameter reads
 and assigns like a local.
 
 **Exclusivity** (E117): a place passed as `inout` may not appear in any
@@ -845,8 +845,8 @@ where `x` is a `var` array, a `var` or `inout` `Buf`, or another inout
 slice. The function writes elements (`xs[i] = v`, `&xs[i]` as an inout
 argument) and may lend a part of it on (`&xs[1..]`), but cannot reassign
 `xs` itself or resize it (E105); like every slice it cannot outlive the
-call. Its elements must own no buffers (E147), since assigning one would
-lose them. Exclusivity is the same as for `&x`: `f(&b[0..2], &b[2..])` is
+call. Its elements must own no buffers or owned structs (E147), since
+assigning one would lose them. Exclusivity is the same as for `&x`: `f(&b[0..2], &b[2..])` is
 E117, as is `f(&b[0..], b[0..])`, since the callee would see the same
 memory twice. Changing elements is allowed inside a `for` loop over `x`.
 
