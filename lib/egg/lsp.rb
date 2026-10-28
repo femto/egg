@@ -346,6 +346,8 @@ module Egg
           in Block then walk_block(fallback)
           else walk_expr(fallback)
           end
+        in IfExpr[cond:, then_expr:, else_expr:]
+          [cond, then_expr, else_expr].each { |x| walk_expr(x) }
         in Unary[operand:]
           walk_expr(operand)
         in Binary[lhs:, rhs:]

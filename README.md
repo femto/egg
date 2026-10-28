@@ -118,6 +118,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
 - Choosing by type in generic code: `if (K == str) { ... } else if (K == i64)
   { ... } else { @compileError("...") }` is decided at compile time, and
   only the chosen branch is checked
+- `if` with a value: `const sign = if (x < 0) -1 else 1`; both branches
+  are expressions and the `else` is required
 
 From v2:
 

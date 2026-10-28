@@ -1,0 +1,60 @@
+// An if with a value: if (c) a else b. Both branches are expressions (no
+// braces), the else is required, and else if chains. The branches have
+// one type: the one the context expects, or else the first branch's (a
+// literal such as 5, .red or null takes the other branch's). Only the
+// chosen branch runs.
+// expect: -1
+// expect: green
+// expect: 99
+// expect: 2
+// expect: 4
+// expect: 3
+// expect: 1.5
+// expect: neg
+// expect: 10
+// expect: 0
+// expect: -2
+uses io, alloc
+
+const Color = enum { red, green }
+
+fn pick(fail: bool) !i64 {
+    if (fail) {
+        return error.Nope
+    }
+    return 4
+}
+
+fn name(c: Color) str {
+    return if (c == .red) "red" else "green"
+}
+
+// try in a branch returns only when that branch is taken.
+fn twice(out: Io, x: i64) !void {
+    const k = if (x > 0) try pick(true) else 0
+    out.print(k)
+}
+
+fn main(out: Io, a: Allocator) void {
+    const x: i64 = -3
+    out.print(if (x < 0) -1 else 1)
+    const c: Color = if (x > 0) .red else .green
+    out.print(name(c))
+    const m: ?i64 = if (x > 0) x else null
+    out.print(m orelse 99)
+    out.print(if (x > 0) 1 else if (x == 0) 0 else 2)
+    out.print(if (x < 0) pick(false) catch 0 else 7)
+    // An owned value moves out of the branch that makes it.
+    const b: Buf(i64) = if (x < 0) a.alloc(3, 1) else .empty
+    defer a.free(b)
+    out.print(@len(b))
+    out.print(if (x < 0) 1.5 else 2)
+    out.print(if (x < 0) "neg" else "pos")
+    const y = if (x < 0)
+        x * x + 1
+    else
+        0
+    out.print(y)
+    twice(out, 0) catch out.print(-1)
+    twice(out, 1) catch out.print(-2)
+}

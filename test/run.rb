@@ -113,6 +113,8 @@ def bad_line_marks(c_source, src, path)
     # A line continues the previous one after "," "(" "[" or an operator, and
     # when it is a `.field = value` line of a multi-line struct literal.
     continued = prev.match?(/(,|\(|\[|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/)
+    # An if with a value split over lines: its branches and its else.
+    continued ||= (prev.match?(/\bif \(.*\)\z/) && !prev.include?(" else ")) || prev == "else" || text == "else"
     # `uses`, `allow`, `@import` and `extern fn` lines declare, and
     # generate no code (an extern fn only a prototype).
     declares = text.match?(/\A(uses|allow|extern|link)\s/) || text.match?(/\Aconst \w+ = @import\(/)

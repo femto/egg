@@ -1,0 +1,8 @@
+// error: E002 @7
+// An if with a value needs an else.
+uses io
+
+fn main(out: Io) void {
+    const x: i64 = 1
+    out.print(if (x > 0) 1)
+}

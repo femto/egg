@@ -1,0 +1,14 @@
+// The branches of an if with a value must agree on what they move.
+uses io, alloc
+
+fn main(out: Io, a: Allocator) void {
+    const b: Buf(i64) = a.alloc(2, 0)
+    const d: Buf(i64) = a.alloc(5, 0)
+    const x: i64 = 1
+    const c = if (x < 0) b else d
+    out.print(@len(c))
+    a.free(c)
+}
+
+// error: E134 @8
+// error: E134 @8
