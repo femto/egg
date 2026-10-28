@@ -11,7 +11,7 @@ program imports:
 
 | Code | Stage | Meaning | Typical fix |
 |------|-------|---------|-------------|
-| E001 | lexer | unexpected character | remove it |
+| E001 | lexer | unexpected character; a malformed character literal (`''`, `'ab'`, `'é'` of several bytes, an unknown escape, no closing `'`) | remove it; a character literal holds one byte (`'a'`, `'\n'`, `'\xff'`): use a string for more |
 | E002 | parser | syntax error (also: chained comparison `a < b < c`; an if with a value without `else`, or with a block as a branch) | follow spec/grammar.ebnf |
 | E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum), or a float literal is infinite in its type (`1e400`, `1e39` as `f32`) or rounds to zero though it is not zero (`1e-400`) | use a smaller literal or a wider type; for one that rounds to zero, a larger literal, `0.0`, or `f64` instead of `f32` |
 | E101 | checker | undefined variable | declare it with `const` or `var` |

@@ -39,6 +39,8 @@ module Egg
           lex_builtin
         elsif c == "\""
           lex_string
+        elsif c == "'"
+          lex_char
         else
           lex_operator
         end
@@ -116,6 +118,45 @@ module Egg
         end
       end
       @tokens << Token.new(:string, out, line, col)
+    end
+
+    CHAR_ESCAPES = { "n" => 10, "r" => 13, "t" => 9, "\\" => 92, "'" => 39, "\"" => 34, "0" => 0 }.freeze
+
+    # 'a': one byte, an integer literal like 97 (typed by its context).
+    # Escapes \n \r \t \\ \' \" \0 and \xNN.
+    def lex_char
+      line = @line
+      col = @col
+      advance # opening quote
+      c = @src[@pos]
+      if c.nil? || c == "\n"
+        raise CompileError.new(Diagnostic.new("E001", "unterminated character literal", line, col))
+      elsif c == "'"
+        raise CompileError.new(Diagnostic.new("E001", "empty character literal; a character literal holds one byte", line, col))
+      elsif c == "\\"
+        advance
+        e = @src[@pos] || ""
+        if CHAR_ESCAPES.key?(e)
+          value = CHAR_ESCAPES[e]
+          advance
+        elsif e == "x" && @src[@pos + 1, 2].to_s.match?(/\A\h\h\z/)
+          value = @src[@pos + 1, 2].to_i(16)
+          3.times { advance }
+        else
+          raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in character literal (\\n \\r \\t \\\\ \\' \\\" \\0 \\xNN)", @line, @col))
+        end
+      elsif c.bytesize > 1
+        raise CompileError.new(Diagnostic.new("E001", "'#{c}' is #{c.bytesize} bytes; a character literal holds one byte: use a string, or \\xNN for a byte", line, col))
+      else
+        value = c.ord
+        advance
+      end
+      unless @src[@pos] == "'"
+        what = @pos >= @src.length || @src[@pos] == "\n" ? "unterminated character literal" : "a character literal holds one byte; use a string for several"
+        raise CompileError.new(Diagnostic.new("E001", what, line, col))
+      end
+      advance
+      @tokens << Token.new(:int, value.to_s, line, col)
     end
 
     def lex_ident
