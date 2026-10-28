@@ -75,7 +75,7 @@ them in `var`s and passes the database as `&db`.
   is `@ptrFromInt(*u8, 18446744073709551615)`.
 - Egg does not let a value go unused silently, so the result codes of
   `close` and `finalize`, which report nothing new, are dropped with
-  `_ = sqlite3_finalize(...)`.
+  `_ = sqlite3_close_v2(...)` and `_ = sqlite3_finalize(...)`.
 
 ## Limits
 

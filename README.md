@@ -120,7 +120,7 @@ v3 (memory without GC, and what realistic programs needed; under way):
   only the chosen branch is checked
 - `if` with a value: `const sign = if (x < 0) -1 else 1`; both branches
   are expressions and the `else` is required
-- `_ = f()` drops a value on purpose (not an error, and nothing owned)
+- `_ = f()` drops a value on purpose (not void, not an error union, and nothing owned)
 
 From v2:
 

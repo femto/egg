@@ -1,4 +1,4 @@
-// _ = drops only a value: not void, not an error union, nothing owned.
+// _ = drops only a value: not void, not a type, not an error union, nothing owned.
 uses io, alloc
 
 fn may(fail: bool) !i64 {
@@ -16,6 +16,13 @@ fn main(out: Io, a: Allocator) void {
     defer a.free(bs)
     _ = a.pop(&bs)
     noisy()
+    _ = i64
+    a.alloc(2, 0)
+    done()
+}
+
+fn done() !void {
+    return
 }
 
 fn noisy() i64 {
@@ -27,3 +34,6 @@ fn noisy() i64 {
 // error: E113 @14
 // error: E113 @17
 // error: E113 @18
+// error: E113 @19
+// error: E113 @20
+// error: E113 @21
