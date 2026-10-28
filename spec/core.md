@@ -278,7 +278,7 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 | 1 | `e catch f`, `e orelse f` | `!T` / `?T`, fallback `T` | `T` (section 13) |
 | 2 | `or` | bool | bool |
 | 3 | `and` | bool | bool |
-| 4 | `==` `!=` | both the same number type, bool, str, enum, pointer or function type | bool |
+| 4 | `==` `!=` | both the same number type, bool, str, enum, pointer or function type; or both text (str, `[]u8`, `Buf(u8)`; section 8) | bool |
 | 4 | `<` `<=` `>` `>=` | both the same number type | bool |
 | 5 | `+` `-` | both the same number type | that type |
 | 6 | `*` `/` | both the same number type | that type |
@@ -531,6 +531,64 @@ fn main(out: Io) void {
     const crlf = "\r\n"
     out.print(crlf[0])        // \r is byte 13
     out.print(@len("a\r\n"))
+}
+```
+
+### Text that is freed: Buf(u8)
+
+A `str` is never freed, so a program that builds strings as it runs
+should build them in a **`Buf(u8)`** instead: an ordinary buffer (section
+21), which owns its bytes and is freed with `a.free`. Three Allocator
+methods add text at its end, growing it as `a.push` does:
+
+| Written | Adds |
+| --- | --- |
+| `a.append_str(&b, s)` | the bytes of the text s |
+| `a.append_int(&b, n)` | the integer n in decimal |
+| `a.append_float(&b, x)` | the float x as `out.print` writes it |
+
+**Text** here is a `str`, a `[]u8`, a `Buf(u8)`, or a slice of one of
+them; each is only read. Text in any of these forms:
+
+- is lent to a `[]u8` parameter (`fn count(s: []u8) i64` takes
+  `count("abc")`, `count(b)` and `count(b[1..])`). A slice cannot be
+  stored, so the bytes cannot outlive a Buf(u8) that is freed or grown;
+- prints with `out.print`, as its bytes;
+- compares with `==` and `!=` by its bytes, whatever kind each side is
+  (`b == "id=7"`, `b[0..2] == s`); a slice may be compared directly;
+- is copied into a `str` by `a.concat(s, t)`, which lives as long as the
+  program: `a.concat(b, "")` keeps the text of b after b is freed.
+
+The `Buf(u8)` itself follows the buffer rules: `a.append_str(&b, b)` is
+E117, growing it while `for (b)` reads it is E137, and a temporary one
+cannot be lent (E133). Appending needs a `Buf(u8)` and text (E103).
+
+```egg
+// expect: id=7, x=1.5
+// expect: true
+// expect: 2
+uses io, alloc
+
+fn count(s: []u8, c: u8) i64 {
+    var n: i64 = 0
+    for (s) |x| {
+        if (x == c) {
+            n = n + 1
+        }
+    }
+    return n
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(u8) = .empty
+    defer a.free(b)
+    a.append_str(&b, "id=")
+    a.append_int(&b, 7)
+    a.append_str(&b, ", x=")
+    a.append_float(&b, 1.5)
+    out.print(b)
+    out.print(b[0..4] == "id=7")
+    out.print(count(b, 61))
 }
 ```
 
@@ -1113,7 +1171,7 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `out.print(x)`: prints an integer, a float, `bool`, `str` or enum and a newline to standard output |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
@@ -1460,7 +1518,7 @@ follows every path through each function and checks:
 
 An owned value moved into a call may not appear in another argument of it
 (E117), so a slice of it cannot outlive it. Owned values cannot be compared
-or printed.
+or printed, except a `Buf(u8)`, which is text (section 8).
 
 **Owned structs and containers.** A struct with a `Buf` field, an array of
 buffers and a buffer of buffers are owned too: they move like a buffer,

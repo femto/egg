@@ -1,0 +1,38 @@
+// Text in a Buf(u8): appending needs a Buf(u8) and text, and lending one
+// follows the borrow rules.
+uses io, alloc
+
+fn n(s: []u8) i64 {
+    return @len(s)
+}
+
+fn make(a: Allocator) Buf(u8) {
+    var b: Buf(u8) = .empty
+    a.append_str(&b, "hi")
+    return b
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(u8) = .empty
+    defer a.free(b)
+    a.append_str(&b, b)
+    var c: Buf(i64) = .empty
+    defer a.free(c)
+    a.append_int(&c, 1)
+    out.print(make(a))
+    out.print(n(make(a)))
+    const s: []u8 = b
+    out.print(c == c)
+    a.append_str(&b, 5)
+    out.print(n(if (@len(b) > 0) b else b))
+}
+
+// error: E117 @18
+// error: E103 @21
+// error: E133 @22
+// error: E133 @23
+// error: E116 @24
+// error: E110 @24
+// error: E103 @25
+// error: E103 @26
+// error: E133 @27

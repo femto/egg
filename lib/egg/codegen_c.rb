@@ -81,7 +81,8 @@ module Egg
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
-                      egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize].freeze
+                      egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
+                      egg_append egg_append_int egg_append_uint egg_append_float].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -278,7 +279,7 @@ module Egg
         }
       C
       # p (NULL for a new buffer) resized to n elements of size bytes.
-      "egg_buf_resize" => <<~C
+      "egg_buf_resize" => <<~C,
         static void *egg_buf_resize(void *p, int64_t n, size_t size) {
             if (n < 0) egg_panic("negative buffer length");
             if ((uint64_t)n > SIZE_MAX / size) egg_panic("out of memory");
@@ -287,12 +288,52 @@ module Egg
             return q;
         }
       C
+      # n bytes from src at the end of a Buf(u8) (its ptr, len and cap),
+      # doubling the capacity (at least 4, at least enough) when they do
+      # not fit.
+      "egg_append" => <<~C,
+        static void egg_append(uint8_t **ptr, int64_t *len, int64_t *cap, const uint8_t *src, int64_t n) {
+            if (n > *cap - *len) {
+                if (n > INT64_MAX - *len) egg_panic("out of memory");
+                int64_t want = *len + n;
+                int64_t c = *cap < 2 ? 4 : (*cap > INT64_MAX / 2 ? INT64_MAX : *cap * 2);
+                if (c < want) c = want;
+                *ptr = (uint8_t *)egg_buf_resize(*ptr, c, 1);
+                *cap = c;
+            }
+            if (n > 0) memmove(*ptr + *len, src, (size_t)n);
+            *len += n;
+        }
+      C
+      "egg_append_int" => <<~C,
+        static void egg_append_int(uint8_t **ptr, int64_t *len, int64_t *cap, int64_t x) {
+            char buf[24];
+            int n = snprintf(buf, sizeof buf, "%" PRId64, x);
+            egg_append(ptr, len, cap, (const uint8_t *)buf, n);
+        }
+      C
+      "egg_append_uint" => <<~C,
+        static void egg_append_uint(uint8_t **ptr, int64_t *len, int64_t *cap, uint64_t x) {
+            char buf[24];
+            int n = snprintf(buf, sizeof buf, "%" PRIu64, x);
+            egg_append(ptr, len, cap, (const uint8_t *)buf, n);
+        }
+      C
+      "egg_append_float" => <<~C
+        static void egg_append_float(uint8_t **ptr, int64_t *len, int64_t *cap, double x, bool f32) {
+            char buf[40];
+            egg_fmt_float(buf, x, f32);
+            egg_append(ptr, len, cap, (const uint8_t *)buf, (int64_t)strlen(buf));
+        }
+      C
     }.freeze
 
     # Helpers that call others.
     HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"], "egg_uint_str" => ["egg_alloc"],
                     "egg_print_float" => ["egg_fmt_float"], "egg_float_str" => %w[egg_alloc egg_fmt_float],
-                    "egg_cstr" => ["egg_alloc"], "egg_str_from_c" => ["egg_alloc"] }.freeze
+                    "egg_cstr" => ["egg_alloc"], "egg_str_from_c" => ["egg_alloc"],
+                    "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
+                    "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float] }.freeze
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_fmt_float].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -1082,12 +1123,29 @@ module Egg
     # Wrap a value for a !T slot: T -> { value, 0 }, error.X -> { .err = X }.
     def coerce(code, from, to)
       return code if to.nil? || from == to
+      return text_as(code, from, to) if %w[str []u8].include?(to) && text_type?(from)
       return "((#{c_type(to)}){ .value = #{code}, .has = true })" if to.start_with?("?")
       return code unless to.start_with?("!")
       if from == "anyerror"
         "((#{c_type(to)}){ .err = #{code} })"
       else
         "((#{c_type(to)}){ .value = #{code}, .err = 0 })"
+      end
+    end
+
+    # A str, a []u8 or a Buf(u8).
+    def text_type?(t)
+      t == "str" || t == "[]u8" || (@types[t]&.kind == :buf && @types[t].elem == "u8")
+    end
+
+    # Text seen as a str or as a []u8: the same bytes, nothing copied.
+    def text_as(code, from, to)
+      v = code.match?(/\A[\w.>-]+\z/) ? code : hoist(code, from)
+      if to == "str"
+        @need_str = true
+        "((egg_str){ (const char *)#{v}.ptr, #{v}.len })"
+      else
+        "((#{c_type(to)}){ (const uint8_t *)#{v}.ptr, #{v}.len })"
       end
     end
 
@@ -1282,8 +1340,8 @@ module Egg
       end
       a = expr(lhs)
       b = expr(rhs)
-      if lhs.ty == "str"
-        call = "#{helper('egg_str_eq')}(#{a}, #{b})"
+      if text_type?(lhs.ty)
+        call = "#{helper('egg_str_eq')}(#{coerce(a, lhs.ty, 'str')}, #{coerce(b, rhs.ty, 'str')})"
         return op == "==" ? call : "(!#{call})"
       end
       "(#{a} #{op} #{b})"
@@ -1317,6 +1375,7 @@ module Egg
                case t
                when "bool" then "#{helper('egg_print_bool')}(#{codes[0]})"
                when "str" then "#{helper('egg_print_str')}(#{codes[0]})"
+               when ->(x) { text_type?(x) } then "#{helper('egg_print_str')}(#{coerce(codes[0], t, 'str')})"
                when "i64" then "#{helper('egg_print_i64')}(#{codes[0]})"
                when "i8", "i16", "i32" then "#{helper('egg_print_i64')}((int64_t)#{codes[0]})"
                when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}((uint64_t)#{codes[0]})"
@@ -1398,7 +1457,28 @@ module Egg
                line("#{c_type(ret)} #{r} = { .has = false };")
                line("if (#{p}->len > 0) { #{p}->len--; #{r}.value = #{p}->ptr[#{p}->len]; #{r}.has = true; }")
                r
-             when "Allocator.concat" then "#{helper('egg_concat')}(#{codes[0]}, #{codes[1]})"
+             when "Allocator.concat"
+               "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, #{coerce(codes[1], args[1].ty, 'str')})"
+             when "Allocator.append_str", "Allocator.append_int", "Allocator.append_float"
+               # The buffer's three fields, then the text, an integer or a float.
+               p = tmp
+               line("#{c_type(args[0].ty)} *#{p} = #{codes[0]};")
+               fields = "&#{p}->ptr, &#{p}->len, &#{p}->cap"
+               t = args[1].ty
+               case m
+               when "Allocator.append_str"
+                 s = coerce(codes[1], t, "str")
+                 v = hoist(s, "str")
+                 "#{helper('egg_append')}(#{fields}, (const uint8_t *)#{v}.ptr, #{v}.len)"
+               when "Allocator.append_int"
+                 if t.start_with?("i")
+                   "#{helper('egg_append_int')}(#{fields}, (int64_t)#{codes[1]})"
+                 else
+                   "#{helper('egg_append_uint')}(#{fields}, (uint64_t)#{codes[1]})"
+                 end
+               else
+                 "#{helper('egg_append_float')}(#{fields}, (double)#{codes[1]}, #{t == 'f32'})"
+               end
              when "Allocator.int_str"
                if args[0].ty.start_with?("i")
                  "#{helper('egg_int_str')}((int64_t)#{codes[0]})"

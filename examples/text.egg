@@ -1,0 +1,63 @@
+// Text that can be freed is a Buf(u8): build it with a.append_str,
+// a.append_int and a.append_float, and free it like any buffer. A str, a
+// Buf(u8) or a slice of either is lent to a []u8 parameter, prints, and
+// compares with == by its bytes. a.concat copies text into a str that
+// lives as long as the program.
+// expect: id=7, score=91.5
+// expect: 16
+// expect: 2
+// expect: 3
+// expect: true
+// expect: true
+// expect: false
+// expect: 1,2,3,4,5
+// expect: id=7!
+// expect: score=91.5
+uses io, alloc
+
+// Lent text: a str, a Buf(u8), or a slice of either.
+fn count(s: []u8, c: u8) i64 {
+    var n: i64 = 0
+    for (s) |x| {
+        if (x == c) {
+            n = n + 1
+        }
+    }
+    return n
+}
+
+// A Buf(u8) made here and given to the caller, who frees it.
+fn join(a: Allocator, xs: []i64, sep: []u8) Buf(u8) {
+    var b: Buf(u8) = .empty
+    for (xs) |x, i| {
+        if (i > 0) {
+            a.append_str(&b, sep)
+        }
+        a.append_int(&b, x)
+    }
+    return b
+}
+
+fn main(out: Io, a: Allocator) void {
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    a.append_str(&line, "id=")
+    a.append_int(&line, 7)
+    a.append_str(&line, ", score=")
+    a.append_float(&line, 91.5)
+    out.print(line)
+    out.print(@len(line))
+    out.print(count(line, 61))
+    out.print(count("a=b=c=", 61))
+    out.print(line[0..4] == "id=7")
+    out.print(line != "id=7")
+    out.print(line == "")
+    const nums = [5]i64{ 1, 2, 3, 4, 5 }
+    const csv = join(a, nums[0..], ",")
+    defer a.free(csv)
+    out.print(csv)
+    // A str that outlives line: copied into the program's arena.
+    const kept = a.concat(line[0..4], "!")
+    out.print(kept)
+    out.print(line[6..])
+}
