@@ -697,6 +697,8 @@ module Egg
         expect_op(".")
         name = expect(:ident, "error name after 'error.'")
         ErrorLit.new(name.text, t.line, t.col)
+      elsif kw?("if")
+        parse_if_expr
       elsif kw?("struct")
         advance
         members, methods = parse_struct_body(nil)
@@ -719,6 +721,29 @@ module Egg
       else
         error_here("expected an expression, found #{describe(t)}")
       end
+    end
+
+    # if (c) a else b: a value, so both branches are expressions (no braces)
+    # and the else is required; `else if` chains. The else branch reaches
+    # as far as an expression goes, as in Zig.
+    def parse_if_expr
+      t = expect_kw("if")
+      expect_op("(")
+      skip_nl
+      cond = parse_expr
+      skip_nl
+      expect_op(")")
+      skip_nl
+      if op?("{")
+        error_here("an if with a value takes expressions, not blocks: if (c) a else b (an if statement starts a line)")
+      end
+      then_expr = parse_expr
+      skip_nl
+      error_here("an if with a value needs an else: if (c) a else b") unless kw?("else")
+      advance
+      skip_nl
+      error_here("an if with a value takes expressions, not blocks: if (c) a else b (an if statement starts a line)") if op?("{")
+      IfExpr.new(cond, then_expr, parse_expr, t.line, t.col)
     end
 
     # { .a = e, .b = e }  (commas and/or newlines between fields)

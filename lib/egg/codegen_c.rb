@@ -1181,6 +1181,23 @@ module Egg
           line("if (#{r}.err) return (#{c_type(@sig.ret)}){ .err = #{r}.err };")
         end
         e.ty == "void" ? "" : "#{r}.value"
+      in IfExpr[cond: c, then_expr:, else_expr:]
+        a, pre_a = capture { coerce(expr(then_expr), then_expr.ty, e.ty) }
+        b, pre_b = capture { coerce(expr(else_expr), else_expr.ty, e.ty) }
+        test = cond(c)
+        return "(#{test} ? #{a} : #{b})" if pre_a.empty? && pre_b.empty?
+        # A branch needs temporaries: compute only the one that is taken.
+        out = tmp
+        line("#{c_type(e.ty)} #{out};")
+        line("if (#{test}) {")
+        # Each branch's lines, captured above, go one level in.
+        emit_raw(pre_a.gsub(/^(?=.)/, "    "))
+        line("    #{out} = #{a};")
+        line("} else {")
+        emit_raw(pre_b.gsub(/^(?=.)/, "    "))
+        line("    #{out} = #{b};")
+        line("}")
+        out
       in Orelse[expr: inner, fallback:]
         r = hoist(expr(inner), inner.ty)
         out = tmp

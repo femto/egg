@@ -844,6 +844,12 @@ module Egg
     # needs a place that owns it: a temporary would never be freed.
     def check_borrowed(obj, t)
       return unless owned?(t) && !owned_place?(obj)
+      if obj.is_a?(IfExpr)
+        # Borrowing whichever one is chosen would hide which variable is
+        # held (by a for loop, against inout in the same call).
+        err("E133", "an if with a value cannot lend a #{t}: it is a place only in each branch; use an if statement and borrow each variable in its own branch", obj.line, obj.col)
+        return
+      end
       err("E133", "this #{t} is a temporary that would never be freed; store it in a variable first", obj.line, obj.col)
     end
 
@@ -1525,6 +1531,26 @@ module Egg
         inner = @types[t].inner
         check_orelse_fallback(fallback, inner, "orelse", line, col)
         inner
+      in IfExpr[cond:, then_expr:, else_expr:, line:, col:]
+        expect_type("bool", check_expr(cond), cond)
+        # Both branches have the type the context expects, or else the
+        # first one's; a literal (5, .red, null) takes the other's.
+        first, second = expected.nil? && untyped_lit?(then_expr) && !untyped_lit?(else_expr) ? [else_expr, then_expr] : [then_expr, else_expr]
+        t1 = check_expr(first, expected)
+        want = expected || t1
+        t2 = check_expr(second, want)
+        if expected.nil? && !fits?(want, t2)
+          err("E103", "the branches of an if with a value must have one type, found #{first.equal?(then_expr) ? "#{t1} and #{t2}" : "#{t2} and #{t1}"}; give the result a type (const x: ?i64 = ...) if one fits it", line, col)
+          return "error"
+        end
+        expect_type(want, t1, first)
+        expect_type(want, t2, second)
+        t = want == "error" ? t2 : want
+        unless t == "error" || (storable?(t) && t != "module")
+          err("E103", "an if with a value needs values, found #{t}; for actions use an if statement", line, col)
+          return "error"
+        end
+        t
       in AddrOf[expr: place, line:, col:]
         unless unsafe?
           err("E121", "'&' marks an inout argument; it is only allowed directly in a call (taking an address needs `allow unsafe`)", line, col)
@@ -2215,6 +2241,7 @@ module Egg
       in Try[expr:] then holds?(expr, path)
       in Catch[expr:, fallback:] then holds?(expr, path) || (!(fb = fallback_expr(fallback)).nil? && holds?(fb, path))
       in Orelse[expr:, fallback:] then holds?(expr, path) || (!(fb = fallback_expr(fallback)).nil? && holds?(fb, path))
+      in IfExpr[cond:, then_expr:, else_expr:] then [cond, then_expr, else_expr].any? { |x| holds?(x, path) }
       else false
       end
     end
@@ -2257,6 +2284,7 @@ module Egg
       in Try[expr:] then collect_paths(expr, out)
       in Catch[expr:, fallback:] then [expr, fallback_expr(fallback)].compact.each { |x| collect_paths(x, out) }
       in Orelse[expr:, fallback:] then [expr, fallback_expr(fallback)].compact.each { |x| collect_paths(x, out) }
+      in IfExpr[cond:, then_expr:, else_expr:] then [cond, then_expr, else_expr].each { |x| collect_paths(x, out) }
       else nil
       end
       out
@@ -2288,6 +2316,7 @@ module Egg
       in Try[expr:] then mentions?(expr, name)
       in Catch[expr:, fallback:] then mentions?(expr, name) || (!(fb = fallback_expr(fallback)).nil? && mentions?(fb, name))
       in Orelse[expr:, fallback:] then mentions?(expr, name) || (!(fb = fallback_expr(fallback)).nil? && mentions?(fb, name))
+      in IfExpr[cond:, then_expr:, else_expr:] then [cond, then_expr, else_expr].any? { |x| mentions?(x, name) }
       else false
       end
     end
@@ -2311,6 +2340,7 @@ module Egg
       in SliceExpr[obj:, lo:, hi:] then contains_try?(obj, in_loop) || contains_try?(lo, in_loop) || (!hi.nil? && contains_try?(hi, in_loop))
       in StructLit[fields:] then fields.any? { |f| contains_try?(f[1], in_loop) }
       in ArrayLit[items:] then items.any? { |i| contains_try?(i, in_loop) }
+      in IfExpr[cond:, then_expr:, else_expr:] then [cond, then_expr, else_expr].any? { |x| contains_try?(x, in_loop) }
       in Catch | Orelse
         # A fallback that leaves: return always does; break and continue
         # only when not inside a loop of their own.

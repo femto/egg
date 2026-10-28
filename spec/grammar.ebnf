@@ -48,6 +48,8 @@ block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}"
 
 stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
             | "break" | "continue" | return_stmt | defer_stmt | expr ;
+                                                     (* an expr statement does not start with "if":
+                                                        a leading if is always if_stmt *)
 defer_stmt  = ( "defer" | "errdefer" ) , expr ;          (* a void expression without try *)
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
 assign      = place , "=" , expr ;
@@ -89,6 +91,8 @@ primary     = INT | FLOAT | STRING | "true" | "false" | "null"
               "{" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ] , "}"
             | "[" , nl , "]" , type                 (* a slice type as a value *)
             | "struct" , struct_body                (* only as a type function's result *)
+            | "if" , "(" , nl , expr , nl , ")" , nl , expr , nl , "else" , nl , expr
+                                                    (* a value; not at the start of a statement *)
             | "(" , nl , expr , nl , ")" ;
 args        = "(" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ] , ")" ;
 

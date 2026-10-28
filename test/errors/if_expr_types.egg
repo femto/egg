@@ -1,0 +1,26 @@
+// The branches of an if with a value have one type, which is a value;
+// the condition is a bool; and it cannot lend an owned value.
+uses io, alloc
+
+fn n(b: Buf(i64)) i64 {
+    return @len(b)
+}
+
+fn main(out: Io, a: Allocator) void {
+    const x: i64 = 1
+    out.print(if (x > 0) 1 else "s")
+    const y = if (x > 0) out.print(1) else out.print(2)
+    out.print(if (x) 1 else 2)
+    const want: str = if (x > 0) "a" else 3
+    out.print(want)
+    const b: Buf(i64) = a.alloc(2, 0)
+    defer a.free(b)
+    out.print(n(if (x > 0) b else b))
+}
+
+// error: E103 @11
+// error: E103 @12
+// error: E110 @12
+// error: E103 @13
+// error: E103 @14
+// error: E133 @18

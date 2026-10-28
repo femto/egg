@@ -563,6 +563,16 @@ module Egg
         else walk(fallback)
         end
         merge([start, @st], line, col, "this catch")
+      in IfExpr[cond:, then_expr:, else_expr:, line:, col:]
+        # Each branch runs only sometimes; they must agree on what moved.
+        walk(cond)
+        start = @st
+        @st = dup(start)
+        walk(then_expr)
+        taken = @st
+        @st = dup(start)
+        walk(else_expr)
+        merge([taken, @st], line, col, "this if")
       in Orelse[expr: inner, fallback:, line:, col:]
         walk(inner)
         start = @st

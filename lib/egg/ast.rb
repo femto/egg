@@ -94,6 +94,7 @@ module Egg
   Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info, :capture) # e catch f, e catch |err| f; capture: [name, line, col]
   # e orelse f; f is an expression, or a Return, Break or Continue
   Orelse     = Struct.new(:expr, :fallback, :line, :col, :ty, :info)
+  IfExpr     = Struct.new(:cond, :then_expr, :else_expr, :line, :col, :ty, :info) # if (c) a else b
   TypeExpr   = Struct.new(:type, :line, :col, :ty, :info)                # a type in value position: []i64
   Deref      = Struct.new(:expr, :line, :col, :ty, :info)                # p.*
   NullLit    = Struct.new(:line, :col, :ty, :info)                       # null

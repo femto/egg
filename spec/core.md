@@ -290,6 +290,51 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 - **Evaluation is left to right.** Operands and arguments are evaluated in
   the order they are written, so `f() + g()` always calls `f` first.
 
+### if with a value
+
+`if (c) a else b` is an expression: `a` when the bool `c` is true, else
+`b`, and only the chosen branch is evaluated. Both branches are
+expressions, without braces, and the `else` is required (E002 otherwise,
+and for a block in place of a branch); `else if` chains. An `if` that
+starts a statement is the if statement (section 6). The else branch
+reaches as far as an expression goes, as in Zig: `if (c) 1 else 2 + 3`
+is `if (c) 1 else (2 + 3)`.
+
+The branches have one type: the type the context expects, or else the
+first branch's; a literal (`5`, `.red`) takes the other branch's type, so
+`if (c) 1 else x` is x's type (E103 when they differ). `null` still needs
+a `?T` or pointer from the context: `const m: ?i64 = if (c) x else null`. The
+result must be a value: not `void`, a type or a slice (E103).
+
+An owned value moves out of the branch that makes or names it, and the
+branches must agree on what they move (E134), as the branches of an if
+statement do: `if (c) b else d` moves only one of two buffers, so it is
+E134; use an if statement that also frees the other one. An if
+with a value cannot be borrowed from (`n(if (c) b else d)` with a plain
+parameter, `for (if (c) b else d)`: E133), since it would hide which
+variable is held.
+
+```egg
+// expect: -1
+// expect: green
+// expect: 99
+uses io
+
+const Color = enum { red, green }
+
+fn name(c: Color) str {
+    return if (c == .red) "red" else "green"
+}
+
+fn main(out: Io) void {
+    const x: i64 = -3
+    out.print(if (x < 0) -1 else 1)
+    out.print(name(if (x > 0) .red else .green))
+    const m: ?i64 = if (x > 0) x else null
+    out.print(m orelse 99)
+}
+```
+
 ### Integer types
 
 `i8`, `i16`, `i32`, `i64` are signed and `u8`, `u16`, `u32`, `u64` unsigned,
