@@ -56,9 +56,15 @@ fn HashMap(comptime K: type, comptime V: type) type {
             }
         }
 
-        // A map whose keys hash and compare with these functions.
+        // A map whose keys hash and compare with these functions. Not for
+        // Buf(u8) keys: they are looked up by text, which such functions
+        // could not take.
         fn init_with(hash: fn(K) i64, eq: fn(K, K) bool) @This() {
-            return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = hash, .eq = eq }
+            if (K == Buf(u8)) {
+                @compileError("HashMap(Buf(u8), V) hashes and compares keys by their bytes; use init()")
+            } else {
+                return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = hash, .eq = eq }
+            }
         }
 
         fn count(self: @This()) i64 {
@@ -142,15 +148,6 @@ fn HashMap(comptime K: type, comptime V: type) type {
             if (K == Buf(u8)) {
                 const n = @len(self.index)
                 if (n == 0) {
-                    return null
-                }
-                if (self.custom_hash()) {
-                    // Its hash takes a Buf(u8), not text: look at each key.
-                    for (self.entries) |e, p| {
-                        if (e.key == k) {
-                            return p
-                        }
-                    }
                     return null
                 }
                 var s = self.slot_for(hash_bytes(k))
@@ -291,11 +288,6 @@ fn HashMap(comptime K: type, comptime V: type) type {
             for (self.entries) |e, p| {
                 self.index[self.free_slot(e.key)] = p
             }
-        }
-
-        fn custom_hash(self: @This()) bool {
-            _ = self.hash orelse return false
-            return true
         }
 
         fn hash_of(self: @This(), k: K) i64 {

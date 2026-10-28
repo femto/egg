@@ -522,7 +522,8 @@ module Egg
             walk(obj, !info.nil? && !info[:params].nil? && !info[:self_sink])
           end
         end
-        walk_args(args, info)
+        # m.f(K, x): a generic call into a module; info[:args] has no types.
+        walk_args(info&.[](:args) || args, info)
       in Builtin[name: "drop", args:, line:, col:]
         path = path_of(args[0])
         path.nil? ? walk(args[0]) : drop(path, line, col)

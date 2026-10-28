@@ -2293,7 +2293,7 @@ module Egg
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]
-        (own_obj && holds?(obj, path)) || sunk(args, info).any? { |x| holds?(x, path) }
+        (own_obj && holds?(obj, path)) || sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
       in StructLit[fields:] then fields.any? { |f| holds?(f[1], path) }
       in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
       in AddrOf[expr:] then mentions_path?(expr, path)
@@ -2491,7 +2491,14 @@ module Egg
       # Buf(T) names a buffer type when T does (K == Buf(u8)).
       if e.is_a?(Call) && e.name == "Buf" && e.args.length == 1
         elem = comptime_type(e.args[0])
-        return elem.nil? ? nil : buf_type([elem], e.line, e.col)
+        return nil if elem.nil?
+        before = @diagnostics.length
+        t = buf_type([elem], e.line, e.col)
+        if @diagnostics.length > before || t == "error"
+          @diagnostics.slice!(before..)
+          return nil
+        end
+        return t
       end
       name = case e
              in Var[name:] then name
@@ -2900,8 +2907,12 @@ module Egg
     end
 
     def declare(name, info)
+      # Only this module's own functions and types are visible here (the
+      # root module's names are unqualified, but other modules do not see
+      # them).
       q = qualify(name)
-      if lookup(name) || @sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q) || @mod.aliases.key?(name)
+      own = @mod.names.include?(name) && (@sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q))
+      if lookup(name) || own || @mod.aliases.key?(name)
         err("E106", "'#{name}' shadows an existing declaration", info.line, info.col)
       end
       @scopes.last[name] = info

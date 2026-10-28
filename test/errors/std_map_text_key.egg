@@ -9,4 +9,4 @@ fn main(out: Io, a: Allocator) void {
     m.put(a, "x", 1)
     out.print(m.get_text("x") orelse 0)
 }
-// error: E146 @std/map.egg:169
+// error: E146 @std/map.egg:166

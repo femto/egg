@@ -1,0 +1,14 @@
+// Names are per module: lib/steps.egg has a local `step`, and this file a
+// function `step`; neither sees the other's.
+// expect: 11
+uses io
+
+const steps = @import("lib/steps.egg")
+
+fn step() i64 {
+    return 1
+}
+
+fn main(out: Io) void {
+    out.print(steps.twice(5) + step())
+}
