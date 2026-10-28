@@ -1,0 +1,135 @@
+// std/map's HashMap(K, V): str and integer keys hash by themselves, other
+// keys take functions; values may own buffers. Pairs keep insertion order,
+// and a removal moves the last pair into the gap.
+// expect: the 3
+// expect: cat 2
+// expect: dog 1
+// expect: 1000
+// expect: 441
+// expect: false
+// expect: 500
+// expect: 500
+// expect: 49
+// expect: -1
+// expect: 0
+// expect: 1000
+// expect: 0
+// expect: 1000
+// expect: true
+// expect: 2
+// expect: c
+// expect: a: 3
+// expect: b: 2
+// expect: true
+// expect: 1
+uses alloc, io
+
+const map = @import("std/map")
+
+const Point = struct { x: i64, y: i64 }
+
+fn point_hash(p: Point) i64 {
+    return p.x * 1000 + p.y
+}
+
+fn point_eq(p: Point, q: Point) bool {
+    return p.x == q.x and p.y == q.y
+}
+
+fn main(out: Io, a: Allocator) void {
+    // counting words
+    var counts = map.HashMap(str, i64).init()
+    defer a.free(counts)
+    const words = [_]str{ "the", "cat", "the", "dog", "the", "cat" }
+    for (words) |w| {
+        counts.put(a, w, (counts.get(w) orelse 0) + 1)
+    }
+    for (counts.entries) |e| {
+        out.print(a.concat(a.concat(e.key, " "), a.int_str(e.val)))
+    }
+
+    // many integer keys, so the index grows
+    var squares = map.HashMap(i64, i64).init()
+    defer a.free(squares)
+    var i: i64 = -500
+    while (i < 500) {
+        squares.put(a, i, i * i)
+        i = i + 1
+    }
+    out.print(squares.count())
+    out.print(squares.get(-21) orelse -1)
+    out.print(squares.contains(500))
+    var removed: i64 = 0
+    var k: i64 = -500
+    while (k < 500) {
+        if (k % 2 == 0 and squares.remove(a, k)) {
+            removed = removed + 1
+        }
+        k = k + 1
+    }
+    out.print(removed)
+    out.print(squares.count())
+    out.print(squares.get(7) orelse -1)
+    out.print(squares.get(8) orelse -1)
+    // every odd key still maps to its square; evens come back
+    var wrong: i64 = 0
+    var j: i64 = -500
+    while (j < 500) {
+        if (j % 2 != 0 and (squares.get(j) orelse -1) != j * j) {
+            wrong = wrong + 1
+        }
+        j = j + 1
+    }
+    j = -500
+    while (j < 500) {
+        if (j % 2 == 0) {
+            squares.put(a, j, j)
+        }
+        j = j + 1
+    }
+    out.print(wrong)
+    out.print(squares.count())
+    // churn: add and remove the same keys many times
+    var round: i64 = 0
+    while (round < 200) {
+        var t: i64 = 0
+        while (t < 50) {
+            squares.put(a, 10000 + t, round)
+            t = t + 1
+        }
+        t = 0
+        while (t < 50) {
+            if (!squares.remove(a, 10000 + t)) {
+                wrong = wrong + 1
+            }
+            t = t + 1
+        }
+        round = round + 1
+    }
+    out.print(wrong)
+    out.print(squares.count())
+    out.print(@len(squares.index) <= 8192)
+
+    // struct keys with their own hash and eq
+    var grid = map.HashMap(Point, str).init_with(point_hash, point_eq)
+    defer a.free(grid)
+    grid.put(a, Point{ .x = 1, .y = 2 }, "a")
+    grid.put(a, Point{ .x = 3, .y = 4 }, "b")
+    grid.put(a, Point{ .x = 1, .y = 2 }, "c")
+    out.print(grid.count())
+    out.print(grid.get(Point{ .x = 1, .y = 2 }) orelse "none")
+
+    // values that own buffers: grouping by first letter
+    var groups = map.HashMap(str, Buf(str)).init()
+    defer a.free(groups)
+    const names = [_]str{ "ann", "bob", "amy", "bea", "al" }
+    for (names) |n| {
+        const g = groups.get_or_put(a, n[0..1], .empty)
+        a.push(&groups.entries[g].val, n)
+    }
+    for (groups.entries) |e| {
+        out.print(a.concat(a.concat(e.key, ": "), a.int_str(@len(e.val))))
+    }
+    out.print(groups.remove(a, "a"))
+    out.print(groups.count())
+}

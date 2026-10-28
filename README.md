@@ -103,7 +103,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
 
 - A standard library in `std/`, imported by module name without `.egg`:
   `const math = @import("std/math")`; a file import (`"lib/x.egg"`) may
-  not leave its module's root
+  not leave its module's root. `std/map` has `HashMap(K, V)`, keeping
+  insertion order, for str and integer keys or keys with your own hash
 - Parameters borrow by default: `fn get(self: Map, k: str) ?i64` reads an
   owned value without taking it, so `m.put(a, k, (m.get(k) orelse 0) + 1)`
   works; `sink x: T` takes it over (`fn close(sink self: Db) void`), and
@@ -213,6 +214,7 @@ spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
 std/                   the standard library: @import("std/math") is std/math.egg
+                       (math: min, max, abs, clamp; map: HashMap(K, V))
 examples/              programs with `// expect:` / `// panic:` / `// fails:` lines
                        (examples/lib/: modules they import)
                        (examples/complex/: larger programs: a parser, Dijkstra,
