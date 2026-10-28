@@ -26,7 +26,7 @@ program imports:
 | E110 | checker | local variable is never used | remove it |
 | E111 | checker | `var` is never changed (assigned, or passed as inout) | declare it with `const` |
 | E112 | checker | unknown builtin (also: `@print`, removed in v2) | see core.md section 15; print with `out.print(x)` |
-| E113 | checker | a non-void value or an error is ignored (also: a `defer` whose expression is not void) | use the value; handle an error with `try` or `catch` |
+| E113 | checker | a non-void value or an error is ignored (also: a `defer` whose expression is not void; `_ =` with a void value, an error union, or an owned value, which would never be freed) | use the value or drop it with `_ = e`; handle an error with `try` or `catch`; free an owned value with `a.free` |
 | E114 | — | reserved for the workflow profile | |
 | E115 | checker | a type cannot be inferred (`.member` with no known type, `@splat` without an array type, `const e = error.X`, `null` without a pointer type) | write the type: `Color.red`, `var a: [4]i64 = ...`, `!i64` |
 | E116 | checker | a slice used outside a parameter, an argument or a `for` (stored, returned, a field) | pass `a[lo..hi]` directly; slices exist only as parameters |

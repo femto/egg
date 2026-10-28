@@ -52,7 +52,7 @@ stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
                                                         a leading if is always if_stmt *)
 defer_stmt  = ( "defer" | "errdefer" ) , expr ;          (* a void expression without try *)
 var_decl    = ( "var" | "const" ) , IDENT , [ ":" , type ] , "=" , expr ;
-assign      = place , "=" , expr ;
+assign      = place , "=" , expr ;                 (* "_" = expr drops the value *)
 place       = IDENT , { "." , IDENT | "[" , expr , "]" | "." , "*" }
             | postfix , "." , "*" , { "." , IDENT | "[" , expr , "]" | "." , "*" } ;
                                                      (* behind a pointer: @ptrAdd(p, 1).* = v *)

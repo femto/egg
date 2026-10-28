@@ -1,0 +1,29 @@
+// _ = drops only a value: not void, not an error union, nothing owned.
+uses io, alloc
+
+fn may(fail: bool) !i64 {
+    if (fail) {
+        return error.Bad
+    }
+    return 1
+}
+
+fn main(out: Io, a: Allocator) void {
+    _ = may(true)
+    _ = out.print(1)
+    _ = a.alloc(2, 0)
+    var bs: Buf(Buf(i64)) = .empty
+    defer a.free(bs)
+    _ = a.pop(&bs)
+    noisy()
+}
+
+fn noisy() i64 {
+    return 1
+}
+
+// error: E113 @12
+// error: E113 @13
+// error: E113 @14
+// error: E113 @17
+// error: E113 @18
