@@ -1355,7 +1355,7 @@ module Egg
         pt = params[i][0]
         codes << case a
                  in AddrOf[expr: place] then "&#{lvalue(place)}"
-                 in SliceExpr then slice_expr(a)
+                 in SliceExpr then coerce(slice_expr(a), a.ty, pt)
                  else coerce(expr(a), a.ty, pt)
                  end
       end

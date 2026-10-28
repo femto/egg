@@ -7,6 +7,7 @@
 // expect: 16
 // expect: 2
 // expect: 3
+// expect: 2
 // expect: true
 // expect: true
 // expect: false
@@ -49,6 +50,7 @@ fn main(out: Io, a: Allocator) void {
     out.print(@len(line))
     out.print(count(line, 61))
     out.print(count("a=b=c=", 61))
+    out.print(count("a=b=c="[0..4], 61))
     out.print(line[0..4] == "id=7")
     out.print(line != "id=7")
     out.print(line == "")
