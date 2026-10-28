@@ -85,7 +85,7 @@ module Egg
         fail_at(mod, imp, "E129", "cannot find \"#{imp.path}\" (looked for #{abs})")
       end
       # A symlink under the root may lead out of it: check where it goes.
-      if imp.path.end_with?(".egg") && !inside?(real(abs), real(root))
+      unless inside?(real(abs), real(root))
         fail_outside(mod, imp, root)
       end
       src = begin
@@ -127,8 +127,9 @@ module Egg
     end
 
     # "std/map" -> the file map.egg of the library, its root, and the
-    # path shown in diagnostics (the file's own, so it can be opened); "std"
-    # alone is std.egg. Only std is known so far.
+    # path shown in diagnostics (the file's own, so it can be opened);
+    # "std/a/b" is a/b.egg and "std" alone is std.egg. Only std is known
+    # so far.
     def module_path(mod, imp)
       parts = imp.path.split("/", -1)
       if parts.empty? || parts.any? { |p| !p.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) }
