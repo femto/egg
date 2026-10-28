@@ -242,7 +242,8 @@ fn main(out: Io) void {
 | `switch (x) { ... }` | section 10 |
 | `return` / `return e` | section 5 |
 | `defer e`, `errdefer e` | run `e` when the block is left; section 21 |
-| expression | must have type `void` (E113); a result or an error may not be discarded |
+| expression | must have type `void` (E113); a result or an error may not be dropped silently |
+| `_ = e` | evaluates `e` and drops its value: not `void`, not an error union (`_ = try f()`), and nothing owned, which would never be freed (E113) |
 
 Loop variables are constants; name one `_` to ignore it. Rule E113 is why
 `two()` alone on a line is an error when `two` returns `i64`, and why a

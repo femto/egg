@@ -1132,12 +1132,29 @@ module Egg
         elsif t != "void" && t != "error"
           err("E113", "#{what} runs an action, which must be void; found #{t}", line, col)
         end
+      in ExprStmt[expr:, line:, col:, discard: true]
+        t = check_expr(expr)
+        inner = @types[t]&.kind == :opt ? @types[t].inner : t
+        if t.start_with?("!")
+          hint = @types[t].inner == "void" ? "try f()" : "_ = try f()"
+          err("E113", "the error in this #{t} is ignored; handle it with 'try' or 'catch' (#{hint})", line, col)
+        elsif t == "void"
+          err("E113", "'_ =' drops a value, but this is void; call it on its own", line, col)
+        elsif t == "type"
+          err("E113", "'_ =' drops a value, but a type has none", line, col)
+        elsif t != "error" && (owned?(t) || owned?(inner))
+          err("E113", "'_ =' cannot drop a #{t}: it would never be freed; end it with a.free (or its own sink method)", line, col)
+        end
       in ExprStmt[expr:, line:, col:]
         t = check_expr(expr)
         if t.start_with?("!")
           err("E113", "the error in this #{t} is ignored; handle it with 'try' or 'catch'", line, col)
+        elsif t == "type"
+          err("E113", "a type is not a value; this statement does nothing", line, col)
+        elsif t != "void" && t != "error" && (owned?(t) || owned?(@types[t]&.kind == :opt ? @types[t].inner : t))
+          err("E113", "value of type #{t} is ignored, and it would never be freed; end it with a.free (or its own sink method)", line, col)
         elsif t != "void" && t != "error"
-          err("E113", "value of type #{t} is ignored", line, col)
+          err("E113", "value of type #{t} is ignored; drop it with _ = ... if it is not needed", line, col)
         end
       else
         raise "typecheck: unhandled statement #{stmt.class}"

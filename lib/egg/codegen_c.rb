@@ -930,6 +930,9 @@ module Egg
         gen_return(value, stmt.line)
       in Defer
         @defers.last << stmt
+      in ExprStmt[expr: e, discard: true]
+        code = expr(e)
+        line("(void)(#{code});") unless code.empty?
       in ExprStmt[expr: e]
         code = expr(e)
         line("#{code};") unless code.empty?

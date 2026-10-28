@@ -1,0 +1,45 @@
+// _ = e evaluates e and drops its value on purpose. An error still has to
+// be handled (_ = try f()), and an owned value cannot be dropped: it would
+// never be freed. _ = x also counts as using x.
+// expect: 3
+// expect: 1
+// expect: 2
+// expect: tried
+// expect: unused ok
+// expect: 0
+uses io, alloc
+
+fn noisy(out: Io, n: i64) i64 {
+    out.print(n)
+    return n * 2
+}
+
+fn may(fail: bool) !i64 {
+    if (fail) {
+        return error.Bad
+    }
+    return 1
+}
+
+fn run(out: Io) !void {
+    _ = try may(false)
+    out.print("tried")
+}
+
+fn unused(out: Io, x: i64) void {
+    _ = x
+    out.print("unused ok")
+}
+
+fn main(out: Io, a: Allocator) void {
+    _ = noisy(out, 3)
+    _ = noisy(out, 1) + noisy(out, 2)
+    _ = may(true) catch 0
+    run(out) catch out.print("no")
+    unused(out, 5)
+    var b: Buf(i64) = .empty
+    defer a.free(b)
+    a.push(&b, 4)
+    _ = a.pop(&b)
+    out.print(@len(b))
+}

@@ -34,11 +34,6 @@ fn done() i32 {
     return 101
 }
 
-// For the result codes of close and finalize, which report nothing new:
-// Egg does not let a value go unused silently.
-fn ignore(rc: i32) void {
-}
-
 const Db = owned struct {
     handle: *u8
 
@@ -46,7 +41,7 @@ const Db = owned struct {
     // finalized: the connection is freed when the last one is, so closing
     // first neither fails nor leaks.
     fn close(sink self: Db) void {
-        ignore(sqlite3_close_v2(self.handle))
+        _ = sqlite3_close_v2(self.handle)
         @drop(self)
     }
 
@@ -129,7 +124,7 @@ const Stmt = owned struct {
     }
 
     fn finalize(sink self: Stmt) void {
-        ignore(sqlite3_finalize(self.handle))
+        _ = sqlite3_finalize(self.handle)
         @drop(self)
     }
 }
@@ -140,7 +135,7 @@ fn open(a: Allocator, path: str) !Db {
     var h: *u8 = null
     const rc = sqlite3_open(a.cstr(path), &h)
     if (rc != ok()) {
-        ignore(sqlite3_close_v2(h))
+        _ = sqlite3_close_v2(h)
         return error.Open
     }
     return Db{ .handle = h }
