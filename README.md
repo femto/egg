@@ -180,6 +180,9 @@ From v2:
   callers release it only through its API (`db.close()`). With a
   `fn deinit(sink self: Db) void`, `a.free` ends ones held in a `Buf`, an
   array or a struct, so a pool is `Buf(Db)` filled with `a.push(&pool, db)`
+- Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
+  `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
+  a `str`
 - `out.print(w, ": ", n)` prints several values and then a newline,
   allocating nothing; operands run left to right even when a later one
   changes a variable through `&x` (`f(x, bump(&x))` passes the old x)

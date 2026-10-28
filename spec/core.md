@@ -568,8 +568,11 @@ them; each is only read. Text in any of these forms:
 - prints with `out.print`, as its bytes;
 - compares with `==` and `!=` by its bytes, whatever kind each side is
   (`b == "id=7"`, `b[0..2] == s`); a slice may be compared directly;
-- is copied into a `str` by `a.concat(s, t)`, which lives as long as the
-  program: `a.concat(b, "")` keeps the text of b after b is freed.
+- orders with `<`, `<=`, `>` and `>=` by its bytes, as unsigned numbers,
+  a text sorting before any longer one it starts (`"ab" < "abc"`,
+  `"B" < "a"`); text and a number cannot be ordered (E103);
+- is copied into a `str` by `a.str(t)` or `a.concat(s, t)`, which live as
+  long as the program: `a.str(b)` keeps the text of b after b is freed.
 
 The `Buf(u8)` itself follows the buffer rules: `a.append_str(&b, b)` is
 E117, growing it while `for (b)` reads it is E137, and a temporary one
@@ -1231,7 +1234,7 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `out.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `out.print(w, ": ", n)` |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.str(t) str`: a copy of the text t; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be

@@ -79,7 +79,7 @@ module Egg
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
-                      egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
+                      egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
                       egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float].freeze
@@ -166,6 +166,15 @@ module Egg
       "egg_str_eq" => <<~C,
         static bool egg_str_eq(egg_str a, egg_str b) {
             return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
+        }
+      C
+      # Byte order, unsigned; a prefix sorts first. <0, 0 or >0 like memcmp.
+      "egg_str_cmp" => <<~C,
+        static int egg_str_cmp(egg_str a, egg_str b) {
+            int64_t n = a.len < b.len ? a.len : b.len;
+            int c = n == 0 ? 0 : memcmp(a.ptr, b.ptr, (size_t)n);
+            if (c != 0) return c;
+            return a.len < b.len ? -1 : (a.len > b.len ? 1 : 0);
         }
       C
       "egg_print_i64" => <<~C,
@@ -336,7 +345,7 @@ module Egg
                     "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_fmt_float].freeze
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
@@ -581,7 +590,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -1349,6 +1358,9 @@ module Egg
       end
       a = in_order(expr(lhs), lhs, [rhs])
       b = expr(rhs)
+      if text_type?(lhs.ty) && op != "==" && op != "!="
+        return "(#{helper('egg_str_cmp')}(#{coerce(a, lhs.ty, 'str')}, #{coerce(b, rhs.ty, 'str')}) #{op} 0)"
+      end
       if text_type?(lhs.ty)
         call = "#{helper('egg_str_eq')}(#{coerce(a, lhs.ty, 'str')}, #{coerce(b, rhs.ty, 'str')})"
         return op == "==" ? call : "(!#{call})"
@@ -1477,6 +1489,10 @@ module Egg
                line("#{c_type(ret)} #{r} = { .has = false };")
                line("if (#{p}->len > 0) { #{p}->len--; #{r}.value = #{p}->ptr[#{p}->len]; #{r}.has = true; }")
                r
+             when "Allocator.str"
+               # A copy that lives as long as the program, even after a
+               # Buf(u8) it came from is freed.
+               "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, ((egg_str){ \"\", 0 }))"
              when "Allocator.concat"
                "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, #{coerce(codes[1], args[1].ty, 'str')})"
              when "Allocator.append_str", "Allocator.append_int", "Allocator.append_float"

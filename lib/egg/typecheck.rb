@@ -87,7 +87,7 @@ module Egg
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
-      "Allocator" => { "concat" => [%w[text text], "str"], "int_str" => [["integer"], "str"],
+      "Allocator" => { "concat" => [%w[text text], "str"], "str" => [["text"], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
                        "append_float" => [%w[inout_buffer float], "void"],
@@ -1731,7 +1731,7 @@ module Egg
       # A slice may be compared directly (b[0..3] == "row"): it lives only
       # as long as the comparison.
       operand = lambda do |x, want|
-        op_eq = op == "==" || op == "!="
+        op_eq = op == "==" || op == "!=" || ORDER_OPS.include?(op)
         op_eq && x.is_a?(SliceExpr) ? check_slice_arg(x, nil) : check_expr(x, want)
       end
       if typed_by_other && untyped_lit?(lhs) && (!untyped_lit?(rhs) || (float_lit?(rhs) && !float_lit?(lhs)))
@@ -1751,6 +1751,17 @@ module Egg
           err("E103", "'%' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
         end
         return int?(lt) ? lt : "error"
+      elsif ORDER_OPS.include?(op) && (text?(lt) || text?(rt)) && lt != "error" && rt != "error"
+        # Text orders by its bytes, as unsigned, the shorter of two with
+        # one start first ("ab" < "abc"), whichever kind each side is.
+        if !text?(lt) || !text?(rt)
+          other, side = text?(lt) ? [rt, rhs] : [lt, lhs]
+          err("E103", "'#{op}' compares text with text or numbers with numbers, found #{other}", side.line, side.col)
+        else
+          check_borrowed(lhs, lt)
+          check_borrowed(rhs, rt)
+        end
+        return "bool"
       elsif arith || ORDER_OPS.include?(op)
         if lt != "error" && !num?(lt)
           err("E103", "'#{op}' needs numbers, found #{lt}", lhs.line, lhs.col)
