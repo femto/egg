@@ -970,7 +970,7 @@ Builtins start with `@`; any other name is E112.
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
 | `@errorName(e)` | the name of the error `e: anyerror`, without `error.`, as a `str` (section 13) |
-| `@compileError("msg")` | E146 with that message, where a branch chosen by type reaches it (section 14) |
+| `@compileError("msg")` | E146 with that message wherever it is checked: everywhere except in a comptime `if` branch that is not chosen (section 14); msg must be a string literal |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
