@@ -109,7 +109,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
   `std/sort` sorts, reverses and checks a mutable slice in place
-  (`sort.sort(i64, &b[0..])`)
+  (`sort.sort(i64, &b[0..])`, numbers or text; `sort.sort_by(Row,
+  &rows[0..], less)` by any order)
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
