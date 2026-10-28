@@ -336,6 +336,8 @@ module Egg
           advance
           skip_nl
           value = parse_expr
+          # `_ = e` evaluates e and drops its value.
+          return ExprStmt.new(value, t.line, t.col, true) if e.is_a?(Var) && e.name == "_"
           root = assign_root(e)
           error_at(t, "only a variable, a field or an element can be assigned to") if root.nil?
           target = e.is_a?(Var) ? nil : e

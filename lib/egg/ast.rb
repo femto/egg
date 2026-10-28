@@ -65,7 +65,7 @@ module Egg
   Break    = Struct.new(:line, :col)
   Continue = Struct.new(:line, :col)
   Return   = Struct.new(:value, :line, :col)                              # value may be nil
-  ExprStmt = Struct.new(:expr, :line, :col)
+  ExprStmt = Struct.new(:expr, :line, :col, :discard)                     # discard: `_ = e`
   # defer e / errdefer e (err: true): e runs when its block is left
   # (errdefer: only when the function returns an error)
   Defer    = Struct.new(:expr, :err, :line, :col)

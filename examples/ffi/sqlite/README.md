@@ -73,8 +73,9 @@ them in `var`s and passes the database as `&db`.
   only until the next step.
 - `SQLITE_TRANSIENT` (`(void *)-1`, which tells SQLite to copy bound text)
   is `@ptrFromInt(*u8, 18446744073709551615)`.
-- Egg does not let a value go unused, so the result codes of `close` and
-  `finalize` are dropped through a tiny `ignore(rc)`.
+- Egg does not let a value go unused silently, so the result codes of
+  `close` and `finalize`, which report nothing new, are dropped with
+  `_ = sqlite3_close_v2(...)` and `_ = sqlite3_finalize(...)`.
 
 ## Limits
 
