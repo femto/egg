@@ -1751,10 +1751,12 @@ module Egg
           err("E103", "'%' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
         end
         return int?(lt) ? lt : "error"
-      elsif ORDER_OPS.include?(op) && (text?(lt) || text?(rt)) && lt != "error" && rt != "error"
+      elsif ORDER_OPS.include?(op) && (text?(lt) || text?(rt))
         # Text orders by its bytes, as unsigned, the shorter of two with
         # one start first ("ab" < "abc"), whichever kind each side is.
-        if !text?(lt) || !text?(rt)
+        if lt == "error" || rt == "error"
+          # already reported
+        elsif !text?(lt) || !text?(rt)
           other, side = text?(lt) ? [rt, rhs] : [lt, lhs]
           err("E103", "'#{op}' compares text with text or numbers with numbers, found #{other}", side.line, side.col)
         else
@@ -2443,16 +2445,15 @@ module Egg
     # inout argument of a call inside it) and the receiver of an inout
     # self method. Locals change no other way inside an expression: there
     # are no globals or closures. :block stands for a catch block, which
-    # may assign anything.
+    # may assign anything, and :pointer for a write through a pointer
+    # (&p.*), which may change whatever p points to.
     def inout_writes(e, out = [])
       case e
       in AddrOf[expr:]
-        p = inout_path(expr)
-        out << p unless p.nil?
+        out << (inout_path(expr) || :pointer)
         inout_writes(expr, out)
       in MethodCall[obj:, args:, info:]
-        p = info&.[](:self_inout) ? inout_path(obj) : nil
-        out << p unless p.nil?
+        out << (inout_path(obj) || :pointer) if info&.[](:self_inout)
         [obj, *args].each { |x| inout_writes(x, out) }
       in Unary[operand:] then inout_writes(operand, out)
       in Binary[lhs:, rhs:] then [lhs, rhs].each { |x| inout_writes(x, out) }
@@ -2484,7 +2485,7 @@ module Egg
     def check_nested_writes(args)
       args.each_with_index do |w, i|
         inout_writes(w).each do |path|
-          next if path == :block
+          next unless path.is_a?(String)
           args.each_with_index do |o, j|
             next if i == j || o.is_a?(AddrOf) || !holds?(o, path)
             err("E117", "this borrows '#{path}', which another operand of the same call or comparison changes (a call inside it takes '#{path}' as inout); compute that operand into a local first", o.line, o.col)

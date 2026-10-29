@@ -8,7 +8,7 @@
 // expect: true
 uses io, alloc
 
-fn first(a: Allocator, words: []str) str {
+fn min_word(a: Allocator, words: []str) str {
     var best = words[0]
     for (words) |w| {
         if (w < best) {
@@ -29,5 +29,5 @@ fn main(out: Io, a: Allocator) void {
     a.free(b)
     out.print(s, " ", t)
     const ws = [3]str{ "pear", "fig", "plum" }
-    out.print(first(a, ws[0..]) == "fig")
+    out.print(min_word(a, ws[0..]) == "fig")
 }

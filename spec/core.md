@@ -284,7 +284,7 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 | 2 | `or` | bool | bool |
 | 3 | `and` | bool | bool |
 | 4 | `==` `!=` | both the same number type, bool, str, enum, pointer or function type; or both text (str, `[]u8`, `Buf(u8)`; section 8) | bool |
-| 4 | `<` `<=` `>` `>=` | both the same number type | bool |
+| 4 | `<` `<=` `>` `>=` | both the same number type; or both text (str, `[]u8`, `Buf(u8)`; section 8) | bool |
 | 5 | `+` `-` | both the same number type | that type |
 | 6 | `*` `/` | both the same number type | that type |
 | 6 | `%` | both the same integer type | that type |

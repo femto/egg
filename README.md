@@ -137,6 +137,12 @@ v3 (memory without GC, and what realistic programs needed; under way):
   `a.append_int(&b, n)` and `a.append_float(&b, x)` and freed with
   `a.free(b)`; any text (str, `Buf(u8)`, a slice) is lent to a `[]u8`
   parameter, prints, and compares with `==`
+- Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
+  `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
+  a `str`
+- `out.print(w, ": ", n)` prints several values and then a newline,
+  allocating nothing; operands run left to right even when a later one
+  changes a variable through `&x` (`f(x, bump(&x))` passes the old x)
 
 From v2:
 
@@ -181,12 +187,6 @@ From v2:
   callers release it only through its API (`db.close()`). With a
   `fn deinit(sink self: Db) void`, `a.free` ends ones held in a `Buf`, an
   array or a struct, so a pool is `Buf(Db)` filled with `a.push(&pool, db)`
-- Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
-  `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
-  a `str`
-- `out.print(w, ": ", n)` prints several values and then a newline,
-  allocating nothing; operands run left to right even when a later one
-  changes a variable through `&x` (`f(x, bump(&x))` passes the old x)
 - Character literals `'a'`, `'\n'`, `'\xff'`: one byte, an integer
   literal typed by its context, so `s[i] == 'a'` reads naturally
 - Optionals `?T`: `null` or a T, unwrapped with `orelse` (a value, or
