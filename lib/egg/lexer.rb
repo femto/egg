@@ -87,12 +87,15 @@ module Egg
       i < @src.length && digit?(@src[i])
     end
 
-    # "..." on one line, with escapes \n \r \t \\ \" \0.
+    # "..." on one line, with escapes \n \r \t \\ \" \0, \xNN (any byte,
+    # so a str need not be UTF-8) and \u{N} (a code point, written as its
+    # UTF-8 bytes). The text is built as bytes and kept in a UTF-8 String.
     def lex_string
       line = @line
       col = @col
       advance # opening quote
       out = +""
+      out.force_encoding(Encoding::BINARY)
       while true
         if @pos >= @src.length || @src[@pos] == "\n"
           raise CompileError.new(Diagnostic.new("E001", "unterminated string literal", line, col))
@@ -103,24 +106,59 @@ module Egg
           break
         end
         if c == "\\"
+          ecol = @col
           advance
           e = @pos < @src.length ? @src[@pos] : ""
-          if e == "n" then out << "\n"
-          elsif e == "r" then out << "\r"
-          elsif e == "t" then out << "\t"
-          elsif e == "\\" then out << "\\"
-          elsif e == "\"" then out << "\""
-          elsif e == "0" then out << "\0"
+          if CHAR_ESCAPES.key?(e) && e != "'"
+            out << CHAR_ESCAPES[e].chr
+            advance
+          elsif e == "x"
+            unless @src[@pos + 1, 2].to_s.match?(/\A\h\h\z/)
+              raise CompileError.new(Diagnostic.new("E001", "\\x in a string needs two hex digits, as in \\xff", @line, ecol))
+            end
+            out << @src[@pos + 1, 2].to_i(16).chr
+            3.times { advance }
+          elsif e == "u"
+            advance
+            utf8_bytes(lex_code_point(ecol)).each { |b| out << b.chr }
           else
-            raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in string", @line, @col))
+            raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in string (\\n \\r \\t \\\\ \\\" \\0 \\xNN \\u{N})", @line, ecol))
           end
-          advance
         else
-          out << c
+          out << c.dup.force_encoding(Encoding::BINARY)
           advance
         end
       end
+      out.force_encoding(Encoding::UTF_8)
       @tokens << Token.new(:string, out, line, col)
+    end
+
+    # {N} after \u: 1 to 6 hex digits naming a Unicode scalar value (not a
+    # surrogate, at most 10FFFF).
+    def lex_code_point(ecol)
+      text = @src[@pos, 8].to_s
+      m = text.match(/\A\{(\h{1,6})\}/)
+      if m.nil?
+        raise CompileError.new(Diagnostic.new("E001", "\\u needs a code point in braces, 1 to 6 hex digits, as in \\u{e9}", @line, ecol))
+      end
+      cp = m[1].to_i(16)
+      if cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)
+        raise CompileError.new(Diagnostic.new("E001", "\\u{#{m[1]}} is not a Unicode scalar value (a surrogate, or above 10FFFF)", @line, ecol))
+      end
+      m[0].length.times { advance }
+      cp
+    end
+
+    def utf8_bytes(cp)
+      if cp < 0x80
+        [cp]
+      elsif cp < 0x800
+        [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+      elsif cp < 0x10000
+        [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+      else
+        [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+      end
     end
 
     CHAR_ESCAPES = { "n" => 10, "r" => 13, "t" => 9, "\\" => 92, "'" => 39, "\"" => 34, "0" => 0 }.freeze
@@ -147,6 +185,8 @@ module Egg
         elsif e == "x" && @src[@pos + 1, 2].to_s.match?(/\A\h\h\z/)
           value = @src[@pos + 1, 2].to_i(16)
           3.times { advance }
+        elsif e == "u"
+          raise CompileError.new(Diagnostic.new("E001", "a character literal holds one byte, and \\u{N} is a code point that may need several: use a string (\"\\u{e9}\"), or \\xNN for a byte", @line, @col))
         else
           raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in character literal (\\n \\r \\t \\\\ \\' \\\" \\0 \\xNN)", @line, @col))
         end

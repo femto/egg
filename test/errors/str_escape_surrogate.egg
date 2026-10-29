@@ -1,0 +1,7 @@
+// error: E001 @6
+// \u{N} must be a Unicode scalar value: no surrogates.
+uses io
+
+fn main(out: Io) void {
+    out.print("ok \u{d800}")
+}

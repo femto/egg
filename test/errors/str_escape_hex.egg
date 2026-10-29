@@ -1,0 +1,7 @@
+// error: E001 @6
+// \x in a string needs two hex digits.
+uses io
+
+fn main(out: Io) void {
+    out.print("\x4g")
+}

@@ -137,6 +137,9 @@ v3 (memory without GC, and what realistic programs needed; under way):
   `a.append_int(&b, n)` and `a.append_float(&b, x)` and freed with
   `a.free(b)`; any text (str, `Buf(u8)`, a slice) is lent to a `[]u8`
   parameter, prints, and compares with `==`
+- String escapes `\xNN` (any byte, so a str need not be UTF-8) and
+  `\u{N}` (a code point, written as UTF-8): `"caf\u{e9}"`, `"\u{1f600}"`,
+  `"\xff\xfe"`
 - Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
   `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
   a `str`
