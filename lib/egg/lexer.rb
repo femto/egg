@@ -12,7 +12,7 @@ module Egg
                 struct enum union switch for break continue try catch orelse error inout sink comptime uses allow extern link owned null defer errdefer].freeze
 
   # Longest operators first so "==" wins over "=" and ".." over ".".
-  OPERATORS = %w[== != <= >= => .. ( ) { } [ ] , : = < > + - * / % ! ? . | &].freeze
+  OPERATORS = %w[== != <= >= => << >> .. ( ) { } [ ] , : = < > + - * / % ! ? . | & ^ ~].freeze
 
   class Lexer
     def initialize(src)
@@ -56,11 +56,15 @@ module Egg
     private
 
     # 42, or a float: 1.5, 2e10, 6.02e-23 (a '.' must have a digit on
-    # both sides, so 0..n stays a range).
+    # both sides, so 0..n stays a range). 0xff and 0b1010 are integers,
+    # kept as their decimal value.
     def lex_number
       line = @line
       col = @col
       start = @pos
+      if @src[@pos] == "0" && (@src[@pos + 1] == "x" || @src[@pos + 1] == "b")
+        return lex_radix(line, col)
+      end
       kind = :int
       lex_digits
       if @src[@pos] == "." && digit_at?(@pos + 1)
@@ -77,6 +81,22 @@ module Egg
       end
       text = @src[start...@pos].delete("_")
       @tokens << Token.new(kind, text, line, col)
+    end
+
+    def lex_radix(line, col)
+      start = @pos
+      hex = @src[@pos + 1] == "x"
+      advance
+      advance
+      advance while @pos < @src.length && ident_char?(@src[@pos])
+      text = @src[start...@pos]
+      digits = text[2..].delete("_")
+      valid = hex ? digits.match?(/\A[0-9A-Fa-f]+\z/) : digits.match?(/\A[01]+\z/)
+      unless valid && text[2] != "_"
+        what = hex ? "a hex literal needs hex digits after 0x, as in 0xff" : "a binary literal needs 0s and 1s after 0b, as in 0b1010"
+        raise CompileError.new(Diagnostic.new("E001", "#{what}, found '#{text}'", line, col))
+      end
+      @tokens << Token.new(:int, digits.to_i(hex ? 16 : 2).to_s, line, col, @pos - start)
     end
 
     def lex_digits

@@ -149,6 +149,10 @@ v3 (memory without GC, and what realistic programs needed; under way):
   an operand that borrows what a later one changes through `&` or moves
   into a nested `sink` parameter, such as a slice in
   `f(b[0..], grow(a, &b))` or `b` in `f(b, eat(a, b))`, is E117
+- Bitwise operators on integers: `&` `|` `^` `~`, and `<<` `>>` by any
+  integer amount (`<<` drops the bits shifted out; an amount out of
+  range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
+  parentheses. Hex and binary literals: `0xff`, `0b1010`
 
 From v2:
 

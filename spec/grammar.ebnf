@@ -69,11 +69,14 @@ expr        = or_expr , { "catch" , nl , [ "|" , IDENT , "|" , nl ] , fallback |
 fallback    = or_expr | "return" , [ or_expr ] | "break" | "continue" | block ;
 or_expr     = and_expr , { "or" , nl , and_expr } ;
 and_expr    = cmp_expr , { "and" , nl , cmp_expr } ;
-cmp_expr    = add_expr , [ cmp_op , nl , add_expr ] ;   (* not chainable: a < b < c is E002 *)
+cmp_expr    = bit_expr , [ cmp_op , nl , bit_expr ] ;   (* not chainable: a < b < c is E002 *)
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+bit_expr    = shift_expr , { bit_op , nl , shift_expr } ;   (* one bit_op only: a | b & c is E002 *)
+bit_op      = "&" | "|" | "^" ;
+shift_expr  = add_expr , { ( "<<" | ">>" ) , nl , add_expr } ;
 add_expr    = mul_expr , { ( "+" | "-" ) , nl , mul_expr } ;
 mul_expr    = unary , { ( "*" | "/" | "%" ) , nl , unary } ;
-unary       = ( "-" | "!" | "try" | "&" ) , unary | postfix ;
+unary       = ( "-" | "!" | "~" | "try" | "&" ) , unary | postfix ;
 postfix     = primary , { "." , IDENT , [ args ]            (* field, method call *)
                         | "." , "*"                         (* p.*: what p points to *)
                         | "[" , nl , expr , nl , "]"        (* index *)
@@ -98,9 +101,12 @@ args        = "(" , nl , [ expr , nl , { "," , nl , expr , nl } , [ "," , nl ] ]
 
 (* Lexical *)
 IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)
-INT         = digit , { digit | "_" } ;            (* at most u64's maximum; must fit its type *)
-FLOAT       = INT , ( "." , INT , [ exponent ] | exponent ) ;  (* f64, or f32 from context *)
-exponent    = ( "e" | "E" ) , [ "+" | "-" ] , INT ;
+INT         = decimal                              (* at most u64's maximum; must fit its type *)
+            | "0x" , hex , { hex | "_" }
+            | "0b" , ( "0" | "1" ) , { "0" | "1" | "_" } ;
+decimal     = digit , { digit | "_" } ;
+FLOAT       = decimal , ( "." , decimal , [ exponent ] | exponent ) ;  (* f64, or f32 from context *)
+exponent    = ( "e" | "E" ) , [ "+" | "-" ] , decimal ;
 STRING      = '"' , { char | escape | "\x" , hex , hex | "\u{" , hex , [ hex , [ hex , [ hex , [ hex , [ hex ] ] ] ] ] , "}" } , '"' ;
                                                    (* one line; escapes \n \r \t \\ \" \0; \xNN is any byte,
                                                       \u{N} a code point (not a surrogate, at most 10FFFF)

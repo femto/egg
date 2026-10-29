@@ -524,6 +524,33 @@ module Egg
       "static #{ct} #{name}(#{ct} a, #{ct} b) {\n    #{body}\n}\n"
     end
 
+    # The helper for x << n or x >> n, x of type t and n of type nt. The
+    # amount must be below t's width; << drops the bits shifted out
+    # (computed in 64 unsigned bits, so nothing overflows in C), and >> on
+    # a negative x brings in ones (C leaves that to the compiler).
+    def shift_op(op, t, nt)
+      ct = INT_C[t][0]
+      bits = t == "usize" ? 64 : t[1..].to_i
+      src = nt.start_with?("i") ? "s" : "u"
+      name = "egg_#{op == '<<' ? 'shl' : 'shr'}_#{t}_#{src}"
+      unless @int_helpers.key?(name)
+        helper("egg_panic")
+        nct = src == "s" ? "int64_t" : "uint64_t"
+        range = src == "s" ? "n < 0 || n >= #{bits}" : "n >= #{bits}"
+        body =
+          if op == "<<" then "return (#{ct})((uint64_t)a << n);"
+          elsif t.start_with?("i") then "return a < 0 ? (#{ct})~(~a >> n) : (#{ct})(a >> n);"
+          else "return (#{ct})(a >> n);"
+          end
+        @int_helpers[name] = "static #{ct} #{name}(#{ct} a, #{nct} n) {
+    if (#{range}) egg_panic(\"shift out of range\");
+    #{body}
+}
+"
+      end
+      name
+    end
+
     # x of integer type `from` as integer type `to`, checked: the value is
     # carried in 64 bits (signed or not, as `from` is) and must survive the
     # round trip through `to` (comparisons with constants would be always
@@ -1184,6 +1211,8 @@ module Egg
       in Unary[op:, operand:, info: { neg_lit: true }]
         # As a float, -0 keeps its sign: negate the literal, do not fold it.
         FLOAT_C.key?(e.ty) ? "(-#{int_lit(operand.value, e.ty)})" : int_lit(-operand.value, e.ty)
+      in Unary[op: "~", operand:]
+        "((#{INT_C[e.ty][0]})~#{expr(operand)})"
       in Unary[op:, operand:]
         if op != "-" then "(!#{expr(operand)})"
         elsif FLOAT_C.key?(e.ty) then "(-#{expr(operand)})"
@@ -1339,6 +1368,14 @@ module Egg
         b = expr(rhs)
         return "(#{a} #{op} #{b})" if FLOAT_C.key?(lhs.ty)
         return "#{int_op(op, lhs.ty)}(#{a}, #{b})"
+      end
+      if op == "&" || op == "|" || op == "^"
+        a = in_order(expr(lhs), lhs, [rhs])
+        return "((#{INT_C[lhs.ty][0]})(#{a} #{op} #{expr(rhs)}))"
+      end
+      if op == "<<" || op == ">>"
+        a = in_order(expr(lhs), lhs, [rhs])
+        return "#{shift_op(op, lhs.ty, rhs.ty)}(#{a}, #{expr(rhs)})"
       end
       if op == "and" || op == "or"
         a = expr(lhs)

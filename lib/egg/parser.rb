@@ -528,14 +528,43 @@ module Egg
     CMP_OPS = %w[== != < <= > >=].freeze
 
     def parse_cmp
-      lhs = parse_add
+      lhs = parse_bits
       if at?(:op) && CMP_OPS.include?(cur.text)
         t = advance
         skip_nl
-        lhs = Binary.new(t.text, lhs, parse_add, t.line, t.col)
+        lhs = Binary.new(t.text, lhs, parse_bits, t.line, t.col)
         if at?(:op) && CMP_OPS.include?(cur.text)
           error_here("comparison operators cannot be chained; use 'and'")
         end
+      end
+      lhs
+    end
+
+    BIT_OPS = %w[& ^ |].freeze
+
+    # a & b, a | b, a ^ b: one of them per level of parentheses, so
+    # a | b & c must say which runs first.
+    def parse_bits
+      lhs = parse_shift
+      first = nil
+      while at?(:op) && BIT_OPS.include?(cur.text)
+        if !first.nil? && cur.text != first
+          error_here("'#{first}' and '#{cur.text}' cannot be mixed without parentheses: write a #{first} (b #{cur.text} c) or (a #{first} b) #{cur.text} c")
+        end
+        t = advance
+        first = t.text
+        skip_nl
+        lhs = Binary.new(t.text, lhs, parse_shift, t.line, t.col)
+      end
+      lhs
+    end
+
+    def parse_shift
+      lhs = parse_add
+      while op?("<<") || op?(">>")
+        t = advance
+        skip_nl
+        lhs = Binary.new(t.text, lhs, parse_add, t.line, t.col)
       end
       lhs
     end
@@ -561,7 +590,7 @@ module Egg
     end
 
     def parse_unary
-      if op?("-") || op?("!")
+      if op?("-") || op?("!") || op?("~")
         t = advance
         return Unary.new(t.text, parse_unary, t.line, t.col)
       end

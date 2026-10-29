@@ -1,0 +1,63 @@
+// Bitwise operators on integers: & | ^ ~ and shifts. << drops the bits
+// shifted out; >> on a negative number brings in ones. Hex and binary
+// literals take their type from context like any other.
+// expect: 10 207 53 53
+// expect: 148 25
+// expect: -4 -64 15 240
+// expect: 8 9223372036854775808
+// expect: 128 true
+// expect: 15 -1 0
+// expect: 8 16
+// expect: 3 0
+// expect: 8
+// expect: 2166136261 1501368774
+uses io
+
+fn bump(inout x: u8) u8 {
+    x = x + 1
+    return x
+}
+
+fn count_ones(v: u64) i64 {
+    var n = 0
+    var x = v
+    while (x != 0) {
+        n = n + @as(i64, x & 1)
+        x = x >> 1
+    }
+    return n
+}
+
+// FNV-1a over bytes, 32 bits: xor, then multiply keeping the low bits.
+fn fnv1a(s: []u8) u64 {
+    var h: u64 = 0x811c9dc5
+    for (s) |c| {
+        h = h ^ @as(u64, c)
+        h = (h * 0x01000193) & 0xffff_ffff
+    }
+    return h
+}
+
+fn main(out: Io) void {
+    const a: u8 = 0b1100_1010
+    out.print(a & 0x0f, " ", a | 0x0f, " ", a ^ 0xff, " ", ~a)
+    out.print(a << 1, " ", a >> 3)
+    const n: i64 = -16
+    out.print(n >> 2, " ", n << 2, " ", ~n, " ", n & 0xff)
+    // The amount is any integer type.
+    const i: u8 = 3
+    out.print(1 << i, " ", @as(u64, 1) << 63)
+    // A literal on the left takes the type the context expects; bitwise
+    // operators bind tighter than comparisons.
+    const m: u8 = 1 << 7
+    out.print(m, " ", 0xff & 7 == 7)
+    const k: i8 = -128
+    out.print(@as(u64, 0xffff_ffff_ffff_ffff) >> 60, " ", k >> 7, " ", k << 1)
+    // + binds tighter than <<; a | (b & c) needs its parentheses.
+    out.print(1 << 2 + 1, " ", 0 | (0x18 & 0x10))
+    // Operands run left to right: x is read before bump(&x) changes it.
+    var x: u8 = 2
+    out.print(x | bump(&x), " ", x >> bump(&x) - 2)
+    out.print(count_ones(0xf00f))
+    out.print(fnv1a(""), " ", fnv1a("egg"))
+}

@@ -54,7 +54,8 @@ fn add(a: i64, b: i64) i64 {
   true false and or struct enum union try catch orelse error inout sink comptime uses
   allow extern link owned null defer errdefer`.
 - Integer literals are decimal digits, optionally separated by `_`
-  (`1_000_000`), at most 18446744073709551615. A literal's type comes from
+  (`1_000_000`), at most 18446744073709551615; `0x` starts a hex one
+  (`0xff`, `0xffff_0000`) and `0b` a binary one (`0b1010`). A literal's type comes from
   context (section 7); it must fit that type (E003). `-5` is unary minus
   applied to `5`, but checked as one literal, so `-128` fits `i8`.
 - String literals are `"..."` on one line, with escapes `\n \r \t \\ \" \0`,
@@ -297,7 +298,9 @@ fn main(out: Io) void {
 ## 7. Expressions
 
 Precedence, lowest first; binary operators are left-associative except
-comparisons, which cannot be chained (`a < b < c` is E002):
+comparisons, which cannot be chained (`a < b < c` is E002), and `&`,
+`|` and `^`, which cannot be mixed without parentheses (`a | b & c` is
+E002; `a | b | c` is fine):
 
 | Level | Operators | Operand types | Result |
 | --- | --- | --- | --- |
@@ -306,13 +309,19 @@ comparisons, which cannot be chained (`a < b < c` is E002):
 | 3 | `and` | bool | bool |
 | 4 | `==` `!=` | both the same number type, bool, str, enum, pointer or function type; or both text (str, `[]u8`, `Buf(u8)`; section 8) | bool |
 | 4 | `<` `<=` `>` `>=` | both the same number type; or both text (str, `[]u8`, `Buf(u8)`; section 8) | bool |
-| 5 | `+` `-` | both the same number type | that type |
-| 6 | `*` `/` | both the same number type | that type |
-| 6 | `%` | both the same integer type | that type |
-| 7 | unary `-`, `!`, `try`, `&` | signed integer or float / bool / `!T` / place | |
-| 8 | `a.f`, `a.m(...)`, `a.*`, `a[i]`, `a[lo..hi]`, calls | | |
+| 5 | `&` `\|` `^` | both the same integer type | that type |
+| 6 | `<<` `>>` | an integer, shifted by any integer type | the left side's type |
+| 7 | `+` `-` | both the same number type | that type |
+| 8 | `*` `/` | both the same number type | that type |
+| 8 | `%` | both the same integer type | that type |
+| 9 | unary `-`, `!`, `~`, `try`, `&` | signed integer or float / bool / integer / `!T` / place | |
+| 10 | `a.f`, `a.m(...)`, `a.*`, `a[i]`, `a[lo..hi]`, calls | | |
 
 - `and` / `or` short-circuit: the right side is evaluated only if needed.
+- Bitwise operators bind tighter than comparisons, so `x & 1 == 0` is
+  `(x & 1) == 0`, and `+` tighter than a shift: `1 << n + 1` is
+  `1 << (n + 1)`. A literal on the left of a shift takes the type the
+  context expects (`const m: u8 = 1 << 7`).
 - Structs, unions and arrays cannot be compared with `==` (E103).
 - **Evaluation is left to right.** Operands and arguments are evaluated in
   the order they are written, so `f() + g()` always calls `f` first, and
@@ -475,15 +484,20 @@ fn main(out: Io) void {
 
 ### Integer arithmetic is checked
 
-Egg has no undefined behaviour. Every integer operation, in every integer
-type, either produces the mathematically correct result or stops the
-program with a panic:
+Egg has no undefined behaviour. Every arithmetic operation, in every
+integer type, either produces the mathematically correct result or stops
+the program with a panic; bitwise operations work on the value's bits in
+two's complement and are defined for every input except a shift amount
+out of range:
 
 | Operation | Result |
 | --- | --- |
 | `a + b`, `a - b`, `a * b`, `-a` | exact result, or panic `integer overflow` (for unsigned types, also when `a - b` is negative) |
 | `a / b` | quotient truncated toward zero; panic `division by zero` if `b == 0`; panic `integer overflow` for the minimum value of a signed type divided by `-1` |
 | `a % b` | remainder with the sign of `a` (so `a == (a / b) * b + a % b`); panic `division by zero` if `b == 0`; the minimum value `% -1` is `0` |
+| `a & b`, `a \| b`, `a ^ b`, `~a` | and, or, xor and not of each bit; never panic |
+| `a << n` | the bits of `a` moved up n places, the ones shifted out dropped (`@as(u8, 0x81) << 1` is `2`); panic `shift out of range` unless `0 <= n` and n is below the bit width of `a`'s type (E003 for a literal n) |
+| `a >> n` | the bits moved down n places, bringing in zeros, or ones for a negative `a` (`-16 >> 2` is `-4`); the same range for n |
 
 Indexing and slicing are checked too: panic `index out of bounds` or
 `slice out of bounds`. A panic prints `egg panic: <message>` to standard
@@ -511,6 +525,21 @@ uses io
 fn main(out: Io) void {
     const big = 9223372036854775807
     out.print(big + 1)
+}
+```
+
+```egg
+// expect: 10 207 53
+// expect: 2 -4 false
+// expect: 128
+uses io
+
+fn main(out: Io) void {
+    const a: u8 = 0b1100_1010
+    out.print(a & 0x0f, " ", a | 0x0f, " ", ~a)
+    out.print(@as(u8, 0x81) << 1, " ", -16 >> 2, " ", a & 1 == 1)
+    const m: u8 = 1 << 7
+    out.print(m)
 }
 ```
 
