@@ -211,6 +211,7 @@ Each phase ends at a gate that can be checked automatically. v3 completes memory
 - [x] A GC? Decided on 2026-10-27: none. Memory is managed only by ownership.
 - [ ] How are built strings freed: an owned string type checked like `Buf(T)`, with `str` left for literals and borrows, or something else? Part of v3.
 - [x] What does a read-only borrow parameter look like, and is it the default for `self`? Decided in v3: as in Hylo, a plain parameter (`self` too) borrows an owned value, `sink x: T` takes it over, and the call is written `f(x)` either way.
+- [x] Bitwise operators: which precedence, and does `<<` panic on lost bits? Decided on 2026-10-29: as in Zig, `& | ^` bind tighter than comparisons and `<< >>` sit between them and `+ -`, but `& | ^` cannot be mixed without parentheses (E002); `<<` drops the bits shifted out, and an amount below 0 or not below the width panics; operands are any integer type (signed in two's complement, `>>` sign-extending), the amount any integer type; `0x` and `0b` literals came with them.
 - [ ] Exceptions via `setjmp`/`longjmp` or a check after every call?
 - [ ] How does comptime run in the Spinel-written compiler: interpret the AST, or generate C and run it?
 - [ ] Can users define their own capabilities, or does the first version ship only built-in ones?

@@ -1,0 +1,8 @@
+// error: E002 @7
+uses io
+
+fn main(out: Io) void {
+    const a = true
+    const b = false
+    out.print(a || b)
+}

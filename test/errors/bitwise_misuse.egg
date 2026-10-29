@@ -1,0 +1,24 @@
+// Bitwise operators take integers, both of one type; a shift takes any
+// integer amount, and a literal one must be below the width.
+uses io
+
+fn main(out: Io) void {
+    const x: u8 = 1
+    out.print(x << 8)
+    out.print(x >> -1)
+    out.print(1.5 & 2)
+    out.print(~true)
+    out.print(x & @as(u16, 1))
+    out.print(1 << 2.0)
+    out.print("a" | "b")
+    const y: u8 = 0x100
+    out.print(y)
+}
+// error: E003 @7
+// error: E003 @8
+// error: E103 @9
+// error: E103 @10
+// error: E103 @11
+// error: E103 @12
+// error: E103 @13
+// error: E003 @14

@@ -101,6 +101,9 @@ module Egg
     RESERVED_TYPES = (PRIMS + ["Buf"]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
+    # Integers only, both sides of one type.
+    INT_OPS = %w[% & | ^].freeze
+    SHIFT_OPS = %w[<< >>].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
                       "replace" => 2, "take" => 1, "drop" => 1, "errorName" => 1, "compileError" => 1,
@@ -1452,8 +1455,14 @@ module Egg
           e.info[:neg_lit] = true
           return operand.ty
         end
-        t = check_expr(operand, op == "-" ? num_target(expected) : nil)
-        if op == "-"
+        t = check_expr(operand, op == "-" || op == "~" ? num_target(expected) : nil)
+        if op == "~"
+          if t != "error" && !int?(t)
+            err("E103", "'~' needs an integer, found #{t}", operand.line, operand.col)
+            return "error"
+          end
+          t
+        elsif op == "-"
           if t != "error" && !signed?(t) && !float?(t)
             err("E103", int?(t) ? "cannot negate a #{t}: it is unsigned" : "expected a signed integer or a float, found #{t}", line, col)
             return "error"
@@ -1725,9 +1734,10 @@ module Egg
     # type; a literal takes the other side's type (or, for arithmetic, the
     # type the context expects), so `x + 1` works for any integer x.
     def check_binary(op, lhs, rhs, line, col, expected = nil)
+      return check_shift(op, lhs, rhs, expected) if SHIFT_OPS.include?(op)
       arith = ARITH_OPS.include?(op)
-      typed_by_other = (op == "==" || op == "!=" || arith || ORDER_OPS.include?(op))
-      hint = arith ? num_target(expected) : nil
+      typed_by_other = (op == "==" || op == "!=" || arith || INT_OPS.include?(op) || ORDER_OPS.include?(op))
+      hint = arith || INT_OPS.include?(op) ? num_target(expected) : nil
       # The typed side goes first and types the literal; of two literals,
       # a float one does (2 * 1.5 is f64).
       # A slice may be compared directly (b[0..3] == "row"): it lives only
@@ -1743,14 +1753,15 @@ module Egg
         lt = operand.(lhs, hint)
         rt = operand.(rhs, typed_by_other ? lt : nil)
       end
-      if op == "%"
+      if INT_OPS.include?(op)
         # No float remainder: C's fmod (libm) is one extern fn away.
+        fmod = op == "%" ? " (for floats, declare fmod from libm)" : ""
         if lt != "error" && !int?(lt)
-          err("E103", "'%' needs integers, found #{lt}#{float?(lt) ? ' (for floats, declare fmod from libm)' : ''}", lhs.line, lhs.col)
+          err("E103", "'#{op}' needs integers, found #{lt}#{float?(lt) ? fmod : ''}", lhs.line, lhs.col)
         elsif rt != "error" && !int?(rt)
-          err("E103", "'%' needs integers, found #{rt}#{float?(rt) ? ' (for floats, declare fmod from libm)' : ''}", rhs.line, rhs.col)
+          err("E103", "'#{op}' needs integers, found #{rt}#{float?(rt) ? fmod : ''}", rhs.line, rhs.col)
         elsif lt != "error" && rt != "error" && lt != rt
-          err("E103", "'%' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
+          err("E103", "'#{op}' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
         end
         return int?(lt) ? lt : "error"
       elsif ORDER_OPS.include?(op) && (text?(lt) || text?(rt))
@@ -1800,6 +1811,33 @@ module Egg
       end
     end
 
+    # x << n, x >> n: x is any integer, and a literal x takes the type the
+    # context expects (const m: u8 = 1 << 7); n is any integer type. A
+    # literal n must be below x's width.
+    def check_shift(op, lhs, rhs, expected)
+      want = num_target(expected)
+      lt = check_expr(lhs, int?(want) ? want : nil)
+      rt = check_expr(rhs)
+      if lt != "error" && !int?(lt)
+        err("E103", "'#{op}' shifts an integer, found #{lt}", lhs.line, lhs.col)
+        return "error"
+      end
+      if rt != "error" && !int?(rt)
+        err("E103", "'#{op}' shifts by an integer, found #{rt}", rhs.line, rhs.col)
+      elsif lt != "error" && rt != "error"
+        n = rhs.is_a?(IntLit) ? rhs.value : (rhs.is_a?(Unary) && rhs.info&.[](:neg_lit) ? -rhs.operand.value : nil)
+        bits = int_bits(lt)
+        if !n.nil? && (n < 0 || n >= bits)
+          err("E003", "cannot shift a #{lt} by #{n}: the amount must be 0 to #{bits - 1}", rhs.line, rhs.col)
+        end
+      end
+      lt
+    end
+
+    def int_bits(t)
+      t == "usize" ? 64 : t[1..].to_i
+    end
+
     def comparable?(t)
       %w[bool str anyerror].include?(t) || num?(t) || [:enum, :ptr, :fn].include?(@types[t]&.kind)
     end
@@ -1839,8 +1877,9 @@ module Egg
     def literal_math?(e)
       return true if untyped_lit?(e)
       case e
-      in Unary[op: "-", operand:] then literal_math?(operand)
-      in Binary[op: "+" | "-" | "*" | "/" | "%", lhs:, rhs:] then literal_math?(lhs) && literal_math?(rhs)
+      in Unary[op: "-" | "~", operand:] then literal_math?(operand)
+      in Binary[op: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^", lhs:, rhs:] then literal_math?(lhs) && literal_math?(rhs)
+      in Binary[op: "<<" | ">>", lhs:] then literal_math?(lhs)
       else false
       end
     end
