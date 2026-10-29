@@ -2442,8 +2442,9 @@ module Egg
     end
 
     # The places e may change while it is computed: &x anywhere in it (an
-    # inout argument of a call inside it) and the receiver of an inout
-    # self method. Locals change no other way inside an expression: there
+    # inout argument of a call inside it), the receiver of an inout self
+    # method, and an owned place moved into a sink parameter (the callee
+    # may free it). Locals change no other way inside an expression: there
     # are no globals or closures. :block stands for a catch block, which
     # may assign anything, and :pointer for a write through a pointer
     # (&p.*), which may change whatever p points to.
@@ -2454,10 +2455,14 @@ module Egg
         inout_writes(expr, out)
       in MethodCall[obj:, args:, info:]
         out << (inout_path(obj) || :pointer) if info&.[](:self_inout)
+        moved_place(obj, out) if info&.[](:self_sink)
+        sink_args(info&.[](:args) || args, info).each { |x| moved_place(x, out) }
         [obj, *args].each { |x| inout_writes(x, out) }
       in Unary[operand:] then inout_writes(operand, out)
       in Binary[lhs:, rhs:] then [lhs, rhs].each { |x| inout_writes(x, out) }
-      in Call[args:] then args.each { |x| inout_writes(x, out) }
+      in Call[args:, info:]
+        sink_args(info&.[](:args) || args, info).each { |x| moved_place(x, out) }
+        args.each { |x| inout_writes(x, out) }
       in Builtin[args:] then args.each { |x| inout_writes(x, out) }
       in Field[obj:] then inout_writes(obj, out)
       in Index[obj:, index:] then [obj, index].each { |x| inout_writes(x, out) }
@@ -2478,9 +2483,23 @@ module Egg
     end
     public :inout_writes
 
+    # The arguments passed to sink parameters, when the parameters are
+    # known (unlike sunk, nothing when they are not).
+    def sink_args(args, info)
+      params = info&.[](:params)
+      return [] if params.nil? || params.length != args.length
+      args.each_index.select { |i| params[i][1] == "sink" }.map { |i| args[i] }
+    end
+
+    def moved_place(e, out)
+      p = place_path(e)
+      out << p unless p.nil? || !owned?(e.ty)
+    end
+
     # f(b[0..], g(&b)): one argument borrows what another changes deep
-    # inside it (a nested inout argument), so the borrow could see the
-    # buffer freed or moved by a resize. (A plain value read is a copy,
+    # inside it (a nested inout argument, or a move into a nested sink
+    # parameter), so the borrow could see the buffer freed or moved by a
+    # resize: f(b, eat(a, b)). (A plain value read is a copy,
     # taken in order.) Direct &x arguments are checked by the callers.
     def check_nested_writes(args)
       args.each_with_index do |w, i|
@@ -2488,7 +2507,7 @@ module Egg
           next unless path.is_a?(String)
           args.each_with_index do |o, j|
             next if i == j || o.is_a?(AddrOf) || !holds?(o, path)
-            err("E117", "this borrows '#{path}', which another operand of the same call or comparison changes (a call inside it takes '#{path}' as inout); compute that operand into a local first", o.line, o.col)
+            err("E117", "this borrows '#{path}', which another operand of the same call or comparison changes (a call inside it takes '#{path}' as inout or sink); compute that operand into a local first", o.line, o.col)
           end
         end
       end

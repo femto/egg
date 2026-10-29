@@ -297,10 +297,11 @@ comparisons, which cannot be chained (`a < b < c` is E002):
   the order they are written, so `f() + g()` always calls `f` first, and
   in `f(x, bump(&x))` the first argument is the value of `x` before
   `bump` changes it. An operand may not borrow what a later or earlier one
-  changes through an inout argument of a call inside it
-  (`first(b[0..], grow(a, &b))`, `b == grow(a, &b)`; E117): the borrow
-  would see the buffer before a resize. Read values are copies, so
-  `@len(b) + @len(grow(a, &b))` is fine.
+  changes through an inout argument of a call inside it, or moves into a
+  sink parameter of one (`first(b[0..], grow(a, &b))`, `b == grow(a, &b)`,
+  `first(b[0..], eat(a, b))`; E117): the borrow would see the buffer
+  before a resize, or after a free. Read values are copies, so
+  `@len(b) + @len(grow(a, &b))` and `@len(b) + eat(a, b)` are fine.
 
 ### if with a value
 
