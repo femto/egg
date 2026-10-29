@@ -143,8 +143,9 @@ v3 (memory without GC, and what realistic programs needed; under way):
 - `out.print(w, ": ", n)` prints several values and then a newline,
   allocating nothing; operands run left to right even when a later one
   changes a variable through `&x` (`f(x, bump(&x))` passes the old x);
-  an operand that borrows what a later one changes that way, such as a
-  slice in `f(b[0..], grow(a, &b))`, is E117
+  an operand that borrows what a later one changes that way, or moves
+  into a `sink` parameter, such as a slice in `f(b[0..], grow(a, &b))`
+  or `f(b, eat(a, b))`, is E117
 
 From v2:
 

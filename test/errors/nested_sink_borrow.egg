@@ -1,0 +1,53 @@
+// An operand may not borrow what another operand of the same call moves
+// into a nested sink parameter: the callee may free it before the outer
+// call reads the borrow.
+uses io, alloc
+
+const S = struct {
+    b: Buf(u8),
+
+    fn get(self: S, n: i64) i64 {
+        return @as(i64, self.b[0]) + n
+    }
+}
+
+fn eat(a: Allocator, sink b: Buf(u8)) i64 {
+    a.free(b)
+    return 0
+}
+
+fn eats(a: Allocator, sink s: S) i64 {
+    a.free(s)
+    return 0
+}
+
+fn id(n: i64) i64 {
+    return n
+}
+
+fn first(b: Buf(u8), n: i64) i64 {
+    return @as(i64, b[0]) + n
+}
+
+fn sfirst(s: []u8, n: i64) i64 {
+    return @as(i64, s[0]) + n
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(u8) = .empty
+    a.push(&b, 42)
+    var s = S{ .b = .empty }
+    a.push(&s.b, 7)
+    out.print(first(b, eat(a, b)))
+    out.print(sfirst(b[0..], id(eat(a, b))))
+    out.print(b, eat(a, b))
+    out.print(first(s.b, eats(a, s)))
+    out.print(s.get(eats(a, s)))
+    out.print(first(s.b, eat(a, s.b)))
+}
+// error: E117 @41
+// error: E117 @42
+// error: E117 @43
+// error: E117 @44
+// error: E117 @45
+// error: E117 @46

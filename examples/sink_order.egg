@@ -1,0 +1,25 @@
+// Operands run left to right: a value read from a buffer is taken before
+// a later operand moves the buffer into a sink parameter that frees it.
+// (Borrowing the buffer there instead, as f(b, eat(a, b)), is E117.)
+// expect: 44
+// expect: 3
+uses io, alloc
+
+fn eat(a: Allocator, sink b: Buf(u8)) i64 {
+    const n = @len(b)
+    a.free(b)
+    return n
+}
+
+fn add(x: i64, y: i64) i64 {
+    return x + y
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(u8) = .empty
+    a.push(&b, 42)
+    out.print(add(@as(i64, b[0]) + @len(b), eat(a, b)))
+    var c: Buf(u8) = .empty
+    a.append_str(&c, "abc")
+    out.print(add(0, eat(a, c)))
+}
