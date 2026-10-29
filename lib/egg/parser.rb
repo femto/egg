@@ -553,6 +553,11 @@ module Egg
         end
         t = advance
         first = t.text
+        # && and || from other languages: say which word Egg uses (a && b
+        # would otherwise read as a & (&b)).
+        if t.text != "^" && op?(t.text) && cur.line == t.line && cur.col == t.col + 1
+          error_at(t, "Egg has no '#{t.text * 2}'; write '#{t.text == '&' ? 'and' : 'or'}'")
+        end
         skip_nl
         lhs = Binary.new(t.text, lhs, parse_shift, t.line, t.col)
       end

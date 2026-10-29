@@ -71,7 +71,7 @@ or_expr     = and_expr , { "or" , nl , and_expr } ;
 and_expr    = cmp_expr , { "and" , nl , cmp_expr } ;
 cmp_expr    = bit_expr , [ cmp_op , nl , bit_expr ] ;   (* not chainable: a < b < c is E002 *)
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
-bit_expr    = shift_expr , { bit_op , nl , shift_expr } ;   (* one bit_op only: a | b & c is E002 *)
+bit_expr    = shift_expr , { bit_op , nl , shift_expr } ;   (* the parser allows one bit_op per bit_expr: a | b & c is E002 *)
 bit_op      = "&" | "|" | "^" ;
 shift_expr  = add_expr , { ( "<<" | ">>" ) , nl , add_expr } ;
 add_expr    = mul_expr , { ( "+" | "-" ) , nl , mul_expr } ;

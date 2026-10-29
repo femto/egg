@@ -12,7 +12,7 @@ program imports:
 | Code | Stage | Meaning | Typical fix |
 |------|-------|---------|-------------|
 | E001 | lexer | unexpected character; `0x` or `0b` without hex or binary digits after it (`0xfg`, `0b102`); a malformed character literal (`''`, `'ab'`, `'é'` of several bytes, `'\u{e9}'`, an unknown escape, no closing `'`); in a string, an unknown escape, `\x` without two hex digits, or `\u{N}` that is malformed, a surrogate or above `10ffff` | remove it; a character literal holds one byte (`'a'`, `'\n'`, `'\xff'`): use a string for more; in a string, correct the escape: two hex digits for a byte (`\xff`), a code point in braces (`\u{e9}`) |
-| E002 | parser | syntax error (also: chained comparison `a < b < c`; `&`, `\|` and `^` mixed without parentheses, `a \| b & c`; an if with a value without `else`, or with a block as a branch) | follow spec/grammar.ebnf |
+| E002 | parser | syntax error (also: chained comparison `a < b < c`; `&`, `\|` and `^` mixed without parentheses, `a \| b & c`; `&&` or `\|\|` for `and` or `or`; an if with a value without `else`, or with a block as a branch) | follow spec/grammar.ebnf |
 | E003 | parser, checker | integer literal does not fit its type (or is above u64's maximum), or a float literal is infinite in its type (`1e400`, `1e39` as `f32`) or rounds to zero though it is not zero (`1e-400`); a literal shift amount below 0 or not below the shifted type's width (`x << 8` for a u8 x) | use a smaller literal or a wider type; for one that rounds to zero, a larger literal, `0.0`, or `f64` instead of `f32` |
 | E101 | checker | undefined variable | declare it with `const` or `var` |
 | E102 | checker | undefined function, or calling a variable | define the function |
@@ -70,6 +70,7 @@ Runtime panics (the program aborts with `egg panic: <message>`):
 | division by zero | `/` or `%` with a zero divisor |
 | index out of bounds | `a[i]` with `i < 0` or `i >= @len(a)` |
 | slice out of bounds | `a[lo..hi]` unless `0 <= lo <= hi <= @len(a)` |
+| shift out of range | `x << n` or `x >> n` with `n < 0` or n not below the bit width of x's type |
 | integer cast out of range | `@as(T, x)` where x does not fit T |
 | float cast out of range | `@as(T, x)` from a float to an integer type T, where x truncated does not fit T, or x is nan or infinite |
 | null pointer dereference | `p.*` where p is `null` |
