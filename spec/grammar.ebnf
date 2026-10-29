@@ -101,7 +101,10 @@ IDENT       = letter_ , { letter_ | digit } ;      (* not a keyword *)
 INT         = digit , { digit | "_" } ;            (* at most u64's maximum; must fit its type *)
 FLOAT       = INT , ( "." , INT , [ exponent ] | exponent ) ;  (* f64, or f32 from context *)
 exponent    = ( "e" | "E" ) , [ "+" | "-" ] , INT ;
-STRING      = '"' , { char | escape } , '"' ;      (* one line; escapes \n \r \t \\ \" \0 *)
+STRING      = '"' , { char | escape | "\x" , hex , hex | "\u{" , hex , [ hex , [ hex , [ hex , [ hex , [ hex ] ] ] ] ] , "}" } , '"' ;
+                                                   (* one line; escapes \n \r \t \\ \" \0; \xNN is any byte,
+                                                      \u{N} a code point (not a surrogate, at most 10FFFF)
+                                                      written as its UTF-8 bytes *)
 CHAR        = "'" , ( byte | escape | "\x" , hex , hex ) , "'" ;  (* an INT: 'a' is 97; byte: one ASCII character
                                                        but ' \ and newline, so 'é' (two UTF-8 bytes) is E001;
                                                        escapes \n \r \t \\ \' \" \0 *)

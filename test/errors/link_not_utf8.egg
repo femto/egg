@@ -1,0 +1,7 @@
+// A library name is text: a \xNN byte that is not UTF-8 is E138.
+// error: E138 @4
+allow unsafe
+link "\xff"
+
+fn main() void {
+}

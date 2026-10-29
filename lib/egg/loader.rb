@@ -69,6 +69,11 @@ module Egg
     private
 
     def resolve_import(mod, imp, queue)
+      # A path is text: "\xff" would break the path checks and the
+      # diagnostics that quote it.
+      unless imp.path.valid_encoding?
+        fail_at(mod, imp, "E129", "an import path must be valid UTF-8; this one has a byte that is not (from a \\xNN escape)")
+      end
       if imp.path.end_with?(".egg")
         # A file of the same module, relative to the importing file.
         base_dir = mod.path.nil? ? Dir.pwd : File.dirname(mod.path)

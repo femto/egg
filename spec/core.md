@@ -57,12 +57,33 @@ fn add(a: i64, b: i64) i64 {
   (`1_000_000`), at most 18446744073709551615. A literal's type comes from
   context (section 7); it must fit that type (E003). `-5` is unary minus
   applied to `5`, but checked as one literal, so `-128` fits `i8`.
-- String literals are `"..."` on one line, with escapes `\n \r \t \\ \" \0`.
+- String literals are `"..."` on one line, with escapes `\n \r \t \\ \" \0`,
+  `\xNN` (any byte, two hex digits) and `\u{N}` (a Unicode code point,
+  1 to 6 hex digits, written as its UTF-8 bytes). A str is bytes, so
+  `"\xff\xfe"` need not be UTF-8; `"caf\u{e9}"` is the same 5 bytes as
+  `"café"`. A surrogate (`\u{d800}`) or a code point above `10ffff` is E001.
 - Character literals are one byte in single quotes, `'a'`, with escapes
   `\n \r \t \\ \' \" \0` and `\xNN` (two hex digits). One is an integer
   literal, `'a'` is `97`, so its type comes from the context like any
   other: `s[i] == 'a'` compares a byte, and `const c: u8 = 'z'` is a u8.
-  A character of several UTF-8 bytes (`'é'`), `''` and `'ab'` are E001.
+  A character of several UTF-8 bytes (`'é'`), `''`, `'ab'` and `'\u{e9}'`
+  (use a string for a code point) are E001.
+
+```egg
+// expect: 5 true
+// expect: 4 240 128
+// expect: 3 255 65
+uses io
+
+fn main(out: Io) void {
+    const s = "caf\u{e9}"
+    out.print(@len(s), " ", s == "café")
+    const smile = "\u{1f600}"
+    out.print(@len(smile), " ", smile[0], " ", smile[3])
+    const raw = "\xff\xfe\x41"         // not UTF-8
+    out.print(@len(raw), " ", raw[0], " ", raw[2])
+}
+```
 - `//` starts a comment that runs to the end of the line.
 - **Newlines end statements.** A newline may also appear after a binary
   operator, after `(` `[` `{` or `,`, before `)` `]` `}`, and before `else`.
