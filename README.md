@@ -109,7 +109,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
   `std/sort` sorts, reverses and checks a mutable slice in place
-  (`sort.sort(i64, &b[0..])`)
+  (`sort.sort(i64, &b[0..])`, numbers or text; `sort.sort_by(Row,
+  &rows[0..], less)` by any order)
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
@@ -136,6 +137,14 @@ v3 (memory without GC, and what realistic programs needed; under way):
   `a.append_int(&b, n)` and `a.append_float(&b, x)` and freed with
   `a.free(b)`; any text (str, `Buf(u8)`, a slice) is lent to a `[]u8`
   parameter, prints, and compares with `==`
+- Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
+  `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
+  a `str`
+- `out.print(w, ": ", n)` prints several values and then a newline,
+  allocating nothing; operands run left to right even when a later one
+  changes a variable through `&x` (`f(x, bump(&x))` passes the old x);
+  an operand that borrows what a later one changes that way, such as a
+  slice in `f(b[0..], grow(a, &b))`, is E117
 
 From v2:
 

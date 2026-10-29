@@ -551,8 +551,8 @@ module Egg
       in Field[info: { buf_empty: true }] then nil
       in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | NullLit | StructTypeExpr then nil
       in Unary[operand:] then walk(operand)
-      in Binary[op: "==" | "!=", lhs:, rhs:]
-        # Comparing (text, the only owned values == takes) only reads.
+      in Binary[op: "==" | "!=" | "<" | "<=" | ">" | ">=", lhs:, rhs:]
+        # Comparing (text, the only owned values these take) only reads.
         walk(lhs, true)
         walk(rhs, true)
       in Binary[op:, lhs:, rhs:, line:, col:]

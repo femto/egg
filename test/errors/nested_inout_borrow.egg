@@ -1,0 +1,27 @@
+// An operand may not borrow what another operand of the same call or
+// comparison changes through a nested inout argument: the borrow would
+// see the buffer before a resize freed or moved it.
+uses io, alloc
+
+fn grow(a: Allocator, inout b: Buf(u8)) str {
+    a.push(&b, 'x')
+    return "x"
+}
+
+fn first(s: []u8, t: str) i64 {
+    return @len(s) + @len(t)
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Buf(u8) = .empty
+    defer a.free(b)
+    a.append_str(&b, "ab")
+    out.print(b, grow(a, &b))
+    out.print(b == grow(a, &b))
+    out.print(first(b[0..], grow(a, &b)))
+    const n = @len(b) + @len(grow(a, &b))
+    out.print(n)
+}
+// error: E117 @19
+// error: E117 @20
+// error: E117 @21

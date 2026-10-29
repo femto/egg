@@ -1,0 +1,33 @@
+// Text orders by its bytes, as unsigned numbers; a text sorts before any
+// longer one it starts. Any kinds of text compare with each other, and
+// a.str(t) copies text into a str that outlives a freed Buf(u8).
+// expect: true false
+// expect: true true
+// expect: true false
+// expect: kept ep
+// expect: true
+uses io, alloc
+
+fn min_word(a: Allocator, words: []str) str {
+    var best = words[0]
+    for (words) |w| {
+        if (w < best) {
+            best = w
+        }
+    }
+    return a.str(best)
+}
+
+fn main(out: Io, a: Allocator) void {
+    out.print("ab" < "abc", " ", "abc" <= "ab")
+    out.print("B" < "a", " ", "" < "a")
+    var b: Buf(u8) = .empty
+    a.append_str(&b, "kept")
+    out.print(b > "abc", " ", b[1..3] >= "eq")
+    const s = a.str(b)
+    const t = a.str(b[1..3])
+    a.free(b)
+    out.print(s, " ", t)
+    const ws = [3]str{ "pear", "fig", "plum" }
+    out.print(min_word(a, ws[0..]) == "fig")
+}

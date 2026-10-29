@@ -8,6 +8,8 @@
 // expect: 104
 // expect: 13
 // expect: false
+// expect: 12
+// expect: 1 2
 
 uses io, alloc
 allow unsafe
@@ -48,6 +50,15 @@ fn bump(p: *i64) void {
     p.* = p.* + 1
 }
 
+fn inc(inout x: i64) i64 {
+    x = x + 1
+    return x
+}
+
+fn two(a: i64, b: i64) i64 {
+    return a * 10 + b
+}
+
 fn main(out: Io, a: Allocator) void {
     var list: *Node = null
     list = push(a, list, 1)
@@ -72,4 +83,11 @@ fn main(out: Io, a: Allocator) void {
     p.*.move(10)
     out.print(p.*.sum())
     out.print(null == p)
+    // A write through a pointer (&r.*) runs after the read of r.* to its
+    // left, as with &x.
+    var y = 1
+    const ry = &y
+    out.print(two(ry.*, inc(&ry.*)))
+    y = 1
+    out.print(ry.*, " ", inc(&ry.*))
 }

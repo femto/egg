@@ -79,7 +79,7 @@ module Egg
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
-                      egg_str_eq egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
+                      egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
                       egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float].freeze
@@ -168,17 +168,26 @@ module Egg
             return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
         }
       C
+      # Byte order, unsigned; a prefix sorts first. <0, 0 or >0 like memcmp.
+      "egg_str_cmp" => <<~C,
+        static int egg_str_cmp(egg_str a, egg_str b) {
+            int64_t n = a.len < b.len ? a.len : b.len;
+            int c = n == 0 ? 0 : memcmp(a.ptr, b.ptr, (size_t)n);
+            if (c != 0) return c;
+            return a.len < b.len ? -1 : (a.len > b.len ? 1 : 0);
+        }
+      C
       "egg_print_i64" => <<~C,
-        static void egg_print_i64(int64_t x) { printf("%" PRId64 "\\n", x); }
+        static void egg_print_i64(int64_t x, bool nl) { printf("%" PRId64 "%s", x, nl ? "\\n" : ""); }
       C
       "egg_print_bool" => <<~C,
-        static void egg_print_bool(bool x) { puts(x ? "true" : "false"); }
+        static void egg_print_bool(bool x, bool nl) { fputs(x ? "true" : "false", stdout); if (nl) putchar('\\n'); }
       C
       "egg_print_str" => <<~C,
-        static void egg_print_str(egg_str s) { fwrite(s.ptr, 1, (size_t)s.len, stdout); putchar('\\n'); }
+        static void egg_print_str(egg_str s, bool nl) { if (s.len > 0) fwrite(s.ptr, 1, (size_t)s.len, stdout); if (nl) putchar('\\n'); }
       C
       "egg_print_cstr" => <<~C,
-        static void egg_print_cstr(const char *s) { puts(s); }
+        static void egg_print_cstr(const char *s, bool nl) { fputs(s, stdout); if (nl) putchar('\\n'); }
       C
       "egg_alloc" => <<~C,
         static char *egg_alloc(int64_t n) {
@@ -212,7 +221,7 @@ module Egg
         }
       C
       "egg_print_u64" => <<~C,
-        static void egg_print_u64(uint64_t x) { printf("%" PRIu64 "\\n", x); }
+        static void egg_print_u64(uint64_t x, bool nl) { printf("%" PRIu64 "%s", x, nl ? "\\n" : ""); }
       C
       "egg_uint_str" => <<~C,
         static egg_str egg_uint_str(uint64_t x) {
@@ -242,10 +251,11 @@ module Egg
         }
       C
       "egg_print_float" => <<~C,
-        static void egg_print_float(double x, bool f32) {
+        static void egg_print_float(double x, bool f32, bool nl) {
             char buf[40];
             egg_fmt_float(buf, x, f32);
-            puts(buf);
+            fputs(buf, stdout);
+            if (nl) putchar('\\n');
         }
       C
       "egg_float_str" => <<~C,
@@ -335,7 +345,7 @@ module Egg
                     "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_fmt_float].freeze
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
@@ -580,7 +590,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -1192,7 +1202,7 @@ module Egg
       in MethodCall[obj:, info:]
         recv = []
         unless info[:static]
-          recv << (info[:self_inout] ? "&#{lvalue(obj)}" : expr(obj))
+          recv << (info[:self_inout] ? "&#{lvalue(obj)}" : in_order(expr(obj), obj, info[:args]))
         end
         call(info[:c_name], info[:args], info[:params], recv, e.ty)
       in Builtin[name:, args:]
@@ -1212,15 +1222,16 @@ module Egg
         "((#{c_type(e.ty)}){ .tag = #{tag}, .u.m_#{member} = #{coerce(expr(value), value.ty, payload)} })"
       in StructLit[fields:]
         info = @types[e.ty]
-        inits = fields.map do |fname, value, _, _|
+        inits = fields.each_with_index.map do |(fname, value, _, _), i|
           ftype = info.fields.find { |n, _| n == fname }[1]
-          ".f_#{fname} = #{coerce(expr(value), value.ty, ftype)}"
+          later = fields[(i + 1)..].map { |f| f[1] }
+          ".f_#{fname} = #{coerce(in_order(expr(value), value, later), value.ty, ftype)}"
         end
         inits = ["0"] if inits.empty?
         "((#{c_type(e.ty)}){ #{inits.join(', ')} })"
       in ArrayLit[items:]
         elem = @types[e.ty].elem
-        vals = items.map { |i| coerce(expr(i), i.ty, elem) }
+        vals = items.each_with_index.map { |it, i| coerce(in_order(expr(it), it, items[(i + 1)..]), it.ty, elem) }
         "((#{c_type(e.ty)}){ { #{vals.join(', ')} } })"
       in EnumLit[info: { buf_empty: true }]
         empty_buf(e.ty)
@@ -1324,7 +1335,7 @@ module Egg
 
     def binary(op, lhs, rhs)
       if ARITH_FN.key?(op)
-        a = expr(lhs)
+        a = in_order(expr(lhs), lhs, [rhs])
         b = expr(rhs)
         return "(#{a} #{op} #{b})" if FLOAT_C.key?(lhs.ty)
         return "#{int_op(op, lhs.ty)}(#{a}, #{b})"
@@ -1345,13 +1356,33 @@ module Egg
         line("}")
         return r
       end
-      a = expr(lhs)
+      a = in_order(expr(lhs), lhs, [rhs])
       b = expr(rhs)
+      if text_type?(lhs.ty) && op != "==" && op != "!="
+        return "(#{helper('egg_str_cmp')}(#{coerce(a, lhs.ty, 'str')}, #{coerce(b, rhs.ty, 'str')}) #{op} 0)"
+      end
       if text_type?(lhs.ty)
         call = "#{helper('egg_str_eq')}(#{coerce(a, lhs.ty, 'str')}, #{coerce(b, rhs.ty, 'str')})"
         return op == "==" ? call : "(!#{call})"
       end
       "(#{a} #{op} #{b})"
+    end
+
+    # Operands run left to right. A later operand may change a variable
+    # through an inout argument (&x) of a call inside it, and C would read
+    # an earlier operand that names x only afterwards: so when one may,
+    # the earlier value is taken into a temporary first. (A borrow of what
+    # a later operand changes is E117, so copying it here is sound.)
+    def in_order(code, e, later)
+      return code if constant?(e) || e.is_a?(AddrOf) || later.none? { |l| !@checker.inout_writes(l).empty? }
+      hoist(code, e.ty)
+    end
+
+    def constant?(e)
+      case e
+      in IntLit | FloatLit | BoolLit | StrLit | EnumLit | NullLit | ErrorLit then true
+      else false
+      end
     end
 
     # Arguments are evaluated left to right into the call; a non-void result
@@ -1360,11 +1391,12 @@ module Egg
       codes = receiver.dup
       args.each_with_index do |a, i|
         pt = params[i][0]
+        later = args[(i + 1)..]
         codes << case a
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
                  in AddrOf[expr: place] then "&#{lvalue(place)}"
-                 in SliceExpr then coerce(slice_expr(a), a.ty, pt)
-                 else coerce(expr(a), a.ty, pt)
+                 in SliceExpr then coerce(in_order(slice_expr(a), a, later), a.ty, pt)
+                 else coerce(in_order(expr(a), a, later), a.ty, pt)
                  end
       end
       text = "#{c_name}(#{codes.join(', ')})"
@@ -1376,22 +1408,14 @@ module Egg
     # data but is still evaluated, first, like any receiver.
     def cap_call(m, obj, args, ret)
       recv = expr(obj)
-      codes = args.map { |a| expr(a) }
+      codes = args.each_with_index.map { |a, i| in_order(expr(a), a, args[(i + 1)..]) }
       text = case m
              when "Io.print"
-               t = args[0].ty
-               case t
-               when "bool" then "#{helper('egg_print_bool')}(#{codes[0]})"
-               when "str" then "#{helper('egg_print_str')}(#{codes[0]})"
-               when ->(x) { text_type?(x) } then "#{helper('egg_print_str')}(#{coerce(codes[0], t, 'str')})"
-               when "i64" then "#{helper('egg_print_i64')}(#{codes[0]})"
-               when "i8", "i16", "i32" then "#{helper('egg_print_i64')}((int64_t)#{codes[0]})"
-               when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}((uint64_t)#{codes[0]})"
-               when "f32", "f64" then "#{helper('egg_print_float')}((double)#{codes[0]}, #{t == 'f32'})"
-               else
-                 @enum_names[t] = true
-                 "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{codes[0]}])"
-               end
+               # All arguments are computed first (codes), then printed one
+               # after another; only the last ends the line.
+               last = args.length - 1
+               codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false)};") unless i == last }
+               print_one(args[last].ty, codes[last], true)
              when "Allocator.create"
                # A copy of the value in the arena.
                t = args[0].ty
@@ -1465,6 +1489,10 @@ module Egg
                line("#{c_type(ret)} #{r} = { .has = false };")
                line("if (#{p}->len > 0) { #{p}->len--; #{r}.value = #{p}->ptr[#{p}->len]; #{r}.has = true; }")
                r
+             when "Allocator.str"
+               # A copy that lives as long as the program, even after a
+               # Buf(u8) it came from is freed.
+               "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, ((egg_str){ \"\", 0 }))"
              when "Allocator.concat"
                "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, #{coerce(codes[1], args[1].ty, 'str')})"
              when "Allocator.append_str", "Allocator.append_int", "Allocator.append_float"
@@ -1590,6 +1618,22 @@ module Egg
         "((#{c_type(e.ty)}){ #{lo} ? #{base}.ptr + #{lo} : #{base}.ptr, #{hi} - #{lo} })"
       else
         "((#{c_type(e.ty)}){ #{base}.a + #{lo}, #{hi} - #{lo} })"
+      end
+    end
+
+    # One value of out.print, ending the line if nl.
+    def print_one(t, code, nl)
+      case t
+      when "bool" then "#{helper('egg_print_bool')}(#{code}, #{nl})"
+      when "str" then "#{helper('egg_print_str')}(#{code}, #{nl})"
+      when ->(x) { text_type?(x) } then "#{helper('egg_print_str')}(#{coerce(code, t, 'str')}, #{nl})"
+      when "i64" then "#{helper('egg_print_i64')}(#{code}, #{nl})"
+      when "i8", "i16", "i32" then "#{helper('egg_print_i64')}((int64_t)#{code}, #{nl})"
+      when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}((uint64_t)#{code}, #{nl})"
+      when "f32", "f64" then "#{helper('egg_print_float')}((double)#{code}, #{t == 'f32'}, #{nl})"
+      else
+        @enum_names[t] = true
+        "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{code}], #{nl})"
       end
     end
 

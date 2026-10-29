@@ -87,7 +87,7 @@ module Egg
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
-      "Allocator" => { "concat" => [%w[text text], "str"], "int_str" => [["integer"], "str"],
+      "Allocator" => { "concat" => [%w[text text], "str"], "str" => [["text"], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
                        "append_float" => [%w[inout_buffer float], "void"],
@@ -1462,7 +1462,11 @@ module Egg
           "bool"
         end
       in Binary[op:, lhs:, rhs:, line:, col:]
-        check_binary(op, lhs, rhs, line, col, expected)
+        t = check_binary(op, lhs, rhs, line, col, expected)
+        # Text comparisons borrow both sides (and/or run the right side
+        # later, so they cannot clash).
+        check_nested_writes([lhs, rhs]) unless op == "and" || op == "or"
+        t
       in Call[name:, args:, line:, col:]
         check_call(e, name, args, line, col)
       in MethodCall[obj:, name:, args:, line:, col:]
@@ -1727,7 +1731,7 @@ module Egg
       # A slice may be compared directly (b[0..3] == "row"): it lives only
       # as long as the comparison.
       operand = lambda do |x, want|
-        op_eq = op == "==" || op == "!="
+        op_eq = op == "==" || op == "!=" || ORDER_OPS.include?(op)
         op_eq && x.is_a?(SliceExpr) ? check_slice_arg(x, nil) : check_expr(x, want)
       end
       if typed_by_other && untyped_lit?(lhs) && (!untyped_lit?(rhs) || (float_lit?(rhs) && !float_lit?(lhs)))
@@ -1747,6 +1751,19 @@ module Egg
           err("E103", "'%' needs both sides of one type, found #{lt} and #{rt}; convert one with @as", line, col)
         end
         return int?(lt) ? lt : "error"
+      elsif ORDER_OPS.include?(op) && (text?(lt) || text?(rt))
+        # Text orders by its bytes, as unsigned, the shorter of two with
+        # one start first ("ab" < "abc"), whichever kind each side is.
+        if lt == "error" || rt == "error"
+          # already reported
+        elsif !text?(lt) || !text?(rt)
+          other, side = text?(lt) ? [rt, rhs] : [lt, lhs]
+          err("E103", "'#{op}' compares text with text or numbers with numbers, found #{other}", side.line, side.col)
+        else
+          check_borrowed(lhs, lt)
+          check_borrowed(rhs, rt)
+        end
+        return "bool"
       elsif arith || ORDER_OPS.include?(op)
         if lt != "error" && !num?(lt)
           err("E103", "'#{op}' needs numbers, found #{lt}", lhs.line, lhs.col)
@@ -1998,7 +2015,11 @@ module Egg
       end
       t = check_expr(obj)
       return check_all_error(args) if t == "error"
-      return check_cap_method(e, obj, t, name, args, line, col, expected) if CAP_METHODS.key?(t)
+      if CAP_METHODS.key?(t)
+        r = check_cap_method(e, obj, t, name, args, line, col, expected)
+        check_nested_writes(args)
+        return r
+      end
       if t == "type"
         owner = obj.info[:type]
         sig = @sigs[method_key(owner, name)]
@@ -2052,7 +2073,7 @@ module Egg
       e.info[:args] = args
       e.info[:params] = sig.params.drop(1)
       rest = Sig.new(sig.name, sig.params.drop(1), sig.ret)
-      check_args(rest, args, name, line, col, [obj])
+      check_args(rest, args, name, line, col, [obj], self_inout: self_mode == "inout")
       if self_mode == "inout"
         # The arguments are computed before the call, so reading plain
         # values of self is fine; a slice of it or a buffer moved out of it
@@ -2085,6 +2106,8 @@ module Egg
       params, ret = m
       ret = ptr_type("u8") if ret == "*u8"
       pop = ret == "?T"
+      # out.print(x, y, ...) takes one or more values.
+      params = ["printable"] * args.length if t == "Io" && name == "print" && !args.empty?
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
@@ -2198,7 +2221,7 @@ module Egg
 
     # Check call arguments against a signature, including inout (&x) and
     # slice parameters, and the exclusivity rule (E117).
-    def check_args(sig, args, name, line, col, receivers = [])
+    def check_args(sig, args, name, line, col, receivers = [], self_inout: false)
       if sig.params.length != args.length
         err("E104", "'#{name}' takes #{sig.params.length} argument(s) but #{args.length} were given", line, col)
         args.each { |a| a.is_a?(AddrOf) ? check_expr(a.expr) : (a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)) }
@@ -2255,6 +2278,9 @@ module Egg
       # Exclusivity: a variable passed as inout may not appear anywhere else
       # in the same call, so the callee never sees two views of it.
       others = receivers + args
+      # An inout self, like an &x argument, is handed over as a pointer
+      # after the arguments are computed, so it borrows nothing early.
+      check_nested_writes((self_inout ? [] : receivers) + args)
       inout_roots.each do |path, a|
         clash = others.find { |o| !o.equal?(a) && mentions_path?(o, path) }
         next if clash.nil?
@@ -2413,6 +2439,59 @@ module Egg
       else nil
       end
       out
+    end
+
+    # The places e may change while it is computed: &x anywhere in it (an
+    # inout argument of a call inside it) and the receiver of an inout
+    # self method. Locals change no other way inside an expression: there
+    # are no globals or closures. :block stands for a catch block, which
+    # may assign anything, and :pointer for a write through a pointer
+    # (&p.*), which may change whatever p points to.
+    def inout_writes(e, out = [])
+      case e
+      in AddrOf[expr:]
+        out << (inout_path(expr) || :pointer)
+        inout_writes(expr, out)
+      in MethodCall[obj:, args:, info:]
+        out << (inout_path(obj) || :pointer) if info&.[](:self_inout)
+        [obj, *args].each { |x| inout_writes(x, out) }
+      in Unary[operand:] then inout_writes(operand, out)
+      in Binary[lhs:, rhs:] then [lhs, rhs].each { |x| inout_writes(x, out) }
+      in Call[args:] then args.each { |x| inout_writes(x, out) }
+      in Builtin[args:] then args.each { |x| inout_writes(x, out) }
+      in Field[obj:] then inout_writes(obj, out)
+      in Index[obj:, index:] then [obj, index].each { |x| inout_writes(x, out) }
+      in SliceExpr[obj:, lo:, hi:] then [obj, lo, hi].compact.each { |x| inout_writes(x, out) }
+      in StructLit[fields:] then fields.each { |f| inout_writes(f[1], out) }
+      in ArrayLit[items:] then items.each { |x| inout_writes(x, out) }
+      in Deref[expr:] then inout_writes(expr, out)
+      in Try[expr:] then inout_writes(expr, out)
+      in Catch | Orelse
+        expr = e.expr
+        fallback = e.fallback
+        inout_writes(expr, out)
+        fallback.is_a?(Block) ? (out << :block) : (f = fallback_expr(fallback)) && inout_writes(f, out)
+      in IfExpr[cond:, then_expr:, else_expr:] then [cond, then_expr, else_expr].each { |x| inout_writes(x, out) }
+      else nil
+      end
+      out
+    end
+    public :inout_writes
+
+    # f(b[0..], g(&b)): one argument borrows what another changes deep
+    # inside it (a nested inout argument), so the borrow could see the
+    # buffer freed or moved by a resize. (A plain value read is a copy,
+    # taken in order.) Direct &x arguments are checked by the callers.
+    def check_nested_writes(args)
+      args.each_with_index do |w, i|
+        inout_writes(w).each do |path|
+          next unless path.is_a?(String)
+          args.each_with_index do |o, j|
+            next if i == j || o.is_a?(AddrOf) || !holds?(o, path)
+            err("E117", "this borrows '#{path}', which another operand of the same call or comparison changes (a call inside it takes '#{path}' as inout); compute that operand into a local first", o.line, o.col)
+          end
+        end
+      end
     end
 
     def mark_root_used(e)

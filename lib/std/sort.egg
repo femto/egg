@@ -1,6 +1,8 @@
-// std/sort: in-place algorithms on a mutable slice of numbers.
+// std/sort: in-place algorithms on a mutable slice.
 // const sort = @import("std/sort")
-// sort.sort(i64, &b[0..]) sorts b ascending, by <.
+// sort.sort(i64, &b[0..]) sorts b ascending, by < (numbers or text);
+// sort.sort_by(Row, &rows[0..], by_count) by any order: less(x, y) is
+// true when x goes before y.
 
 fn swap(comptime T: type, inout xs: []T, i: i64, j: i64) void {
     const t = xs[i]
@@ -33,6 +35,38 @@ fn sift(comptime T: type, inout xs: []T, root: i64, end: i64) void {
             child = child + 1
         }
         if (!(xs[r] < xs[child])) {
+            return
+        }
+        swap(T, &xs[0..], r, child)
+        r = child
+    }
+}
+
+// Heapsort by less: O(n log n), allocates nothing. Not stable; to break
+// ties, compare more fields in less.
+fn sort_by(comptime T: type, inout xs: []T, less: fn(T, T) bool) void {
+    const n = @len(xs)
+    var i = n / 2 - 1
+    while (i >= 0) {
+        sift_by(T, &xs[0..], i, n, less)
+        i = i - 1
+    }
+    var end = n - 1
+    while (end > 0) {
+        swap(T, &xs[0..], 0, end)
+        sift_by(T, &xs[0..], 0, end, less)
+        end = end - 1
+    }
+}
+
+fn sift_by(comptime T: type, inout xs: []T, root: i64, end: i64, less: fn(T, T) bool) void {
+    var r = root
+    while (2 * r + 1 < end) {
+        var child = 2 * r + 1
+        if (child + 1 < end and less(xs[child], xs[child + 1])) {
+            child = child + 1
+        }
+        if (!less(xs[r], xs[child])) {
             return
         }
         swap(T, &xs[0..], r, child)

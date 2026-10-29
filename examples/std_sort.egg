@@ -14,9 +14,28 @@
 // expect: 1.5
 // expect: 0
 // expect: true
+// expect: fig kiwi pear
+// expect: b 3
+// expect: a 2
+// expect: c 2
+// expect: true
 uses io, alloc
 
 const sort = @import("std/sort")
+
+const Row = struct {
+    word: str
+    n: i64
+}
+
+fn greater(x: i64, y: i64) bool {
+    return x > y
+}
+
+// More first; ties by word.
+fn before(x: Row, y: Row) bool {
+    return x.n > y.n or (x.n == y.n and x.word < y.word)
+}
 
 fn main(out: Io, a: Allocator) void {
     var b: Buf(i64) = .empty
@@ -51,5 +70,17 @@ fn main(out: Io, a: Allocator) void {
         i = i + 1
     }
     sort.sort(i64, &none[0..])
+    out.print(sort.is_sorted(i64, none[0..]))
+    var words = [3]str{ "pear", "fig", "kiwi" }
+    sort.sort(str, &words[0..])
+    out.print(words[0], " ", words[1], " ", words[2])
+    var rows = [3]Row{ Row{ .word = "c", .n = 2 }, Row{ .word = "b", .n = 3 }, Row{ .word = "a", .n = 2 } }
+    sort.sort_by(Row, &rows[0..], before)
+    for (rows) |r| {
+        out.print(r.word, " ", r.n)
+    }
+    // the 200 numbers again, descending, then reversed
+    sort.sort_by(i64, &none[0..], greater)
+    sort.reverse(i64, &none[0..])
     out.print(sort.is_sorted(i64, none[0..]))
 }
