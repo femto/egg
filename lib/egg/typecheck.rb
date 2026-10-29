@@ -1833,6 +1833,16 @@ module Egg
         (e.is_a?(Unary) && e.op == "-" && (e.operand.is_a?(IntLit) || e.operand.is_a?(FloatLit)))
     end
 
+    # Literals and arithmetic on literals only: 300, -5, 1 / 2.
+    def literal_math?(e)
+      return true if untyped_lit?(e)
+      case e
+      in Unary[op: "-", operand:] then literal_math?(operand)
+      in Binary[op: "+" | "-" | "*" | "/" | "%", lhs:, rhs:] then literal_math?(lhs) && literal_math?(rhs)
+      else false
+      end
+    end
+
     def float_lit?(e)
       e.is_a?(FloatLit) || (e.is_a?(Unary) && e.op == "-" && e.operand.is_a?(FloatLit))
     end
@@ -2916,10 +2926,11 @@ module Egg
           check_expr(x)
           return "error"
         end
-        # Only a literal takes T from here (@as(u8, 300) is checked now);
-        # any other operand keeps its own type, which is then converted:
-        # @as(u8, if (c) x - 1 else x) with an i64 x.
-        xt = check_expr(x, t == "error" || !untyped_lit?(x) ? nil : t)
+        # Only literals take T from here (@as(u8, 300) is checked now, and
+        # @as(f64, 1 / 2) divides as f64); any other operand keeps its own
+        # type, which is then converted: @as(u8, if (c) x - 1 else x) with
+        # an i64 x.
+        xt = check_expr(x, t == "error" || !literal_math?(x) ? nil : t)
         if xt != "error" && !num?(xt)
           err("E103", "@as converts a number, found #{xt}", x.line, x.col)
           return "error"

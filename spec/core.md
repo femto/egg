@@ -377,9 +377,10 @@ fn main(out: Io) void {
 ```
 
 `@as(T, x)` converts the integer `x` to the integer type `T`, and panics
-`integer cast out of range` if the value does not fit. Only a literal
-`x` takes `T` as its type (`@as(u8, 300)` is E003); any other `x`, such
-as an `if` whose branches are `i64`, keeps its own type and is converted.
+`integer cast out of range` if the value does not fit. Only literals,
+and arithmetic on literals only, take `T` as their type (`@as(u8, 300)`
+is E003, and `@as(f64, 1 / 2)` is `0.5`); any other `x`, such as an `if`
+whose branches are `i64`, keeps its own type and is converted.
 Negating an unsigned value is E103.
 
 ### Floating-point types
@@ -411,6 +412,7 @@ back as the same value; a finite value always has a `.` or an exponent:
 // expect: 0.1
 // expect: inf
 // expect: -7
+// expect: 0.5
 uses io
 
 fn half(x: f64) f64 {
@@ -426,6 +428,7 @@ fn main(out: Io) void {
     const zero = 0.0
     out.print(1 / zero)
     out.print(@as(i64, -7.9))
+    out.print(@as(f64, 1 / 2))   // literals: divided as f64
 }
 ```
 
