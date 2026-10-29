@@ -363,6 +363,7 @@ nothing says otherwise:
 ```egg
 // expect: 255
 // expect: 248
+// expect: 125
 uses io
 
 fn main(out: Io) void {
@@ -370,12 +371,17 @@ fn main(out: Io) void {
     out.print(x + 55)        // so is 55
     const n = 1000           // i64
     out.print(@as(u8, n / 4 - 1) - 1)
+    const big = n > 10
+    out.print(@as(u8, if (big) n / 8 else n))
 }
 ```
 
 `@as(T, x)` converts the integer `x` to the integer type `T`, and panics
-`integer cast out of range` if the value does not fit. Negating an
-unsigned value is E103.
+`integer cast out of range` if the value does not fit. Only literals,
+and arithmetic on literals only, take `T` as their type (`@as(u8, 300)`
+is E003, and `@as(f64, 1 / 2)` is `0.5`); any other `x`, such as an `if`
+whose branches are `i64`, keeps its own type and is converted.
+Negating an unsigned value is E103.
 
 ### Floating-point types
 
@@ -406,6 +412,7 @@ back as the same value; a finite value always has a `.` or an exponent:
 // expect: 0.1
 // expect: inf
 // expect: -7
+// expect: 0.5
 uses io
 
 fn half(x: f64) f64 {
@@ -421,6 +428,7 @@ fn main(out: Io) void {
     const zero = 0.0
     out.print(1 / zero)
     out.print(@as(i64, -7.9))
+    out.print(@as(f64, 1 / 2))   // literals: divided as f64
 }
 ```
 
