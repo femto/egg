@@ -1,0 +1,6 @@
+// An import path is text: a \xNN byte that is not UTF-8 is E129.
+// error: E129 @3
+const m = @import("std/\xff")
+
+fn main() void {
+}

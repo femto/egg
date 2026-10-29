@@ -297,7 +297,9 @@ module Egg
       m.links.each do |l|
         next unless require_unsafe("`link`", l.line, l.col)
         # Passed to the C compiler as -l<name>, so it must not read as a flag.
-        unless l.name.match?(/\A[A-Za-z0-9_][A-Za-z0-9_.+-]*\z/)
+        if !l.name.valid_encoding?
+          err("E138", "a library name must be valid UTF-8; this one has a byte that is not (from a \\xNN escape): write the part after -l, as in link \"m\" for -lm", l.line, l.col)
+        elsif !l.name.match?(/\A[A-Za-z0-9_][A-Za-z0-9_.+-]*\z/)
           err("E138", "'#{l.name}' is not a library name: write the part after -l, as in link \"m\" for -lm", l.line, l.col)
         end
       end
