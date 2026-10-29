@@ -2916,7 +2916,10 @@ module Egg
           check_expr(x)
           return "error"
         end
-        xt = check_expr(x, t == "error" ? nil : t)
+        # Only a literal takes T from here (@as(u8, 300) is checked now);
+        # any other operand keeps its own type, which is then converted:
+        # @as(u8, if (c) x - 1 else x) with an i64 x.
+        xt = check_expr(x, t == "error" || !untyped_lit?(x) ? nil : t)
         if xt != "error" && !num?(xt)
           err("E103", "@as converts a number, found #{xt}", x.line, x.col)
           return "error"
