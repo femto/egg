@@ -240,6 +240,13 @@ end
 # v1 syntax: types and methods in the outline, method and type navigation.
 # Fs errors a program cannot set up by itself. As root permissions do not
 # apply, and /dev/full is only on some systems.
+def fs_readable?(path)
+  File.read(path)
+  true
+rescue SystemCallError
+  false
+end
+
 def check_fs_errors(dir)
   work = File.join(dir, "fs_errors")
   FileUtils.mkdir_p(work)
@@ -249,8 +256,11 @@ def check_fs_errors(dir)
   keep = File.join(work, "keep.txt")
   File.write(keep, "keep")
   File.chmod(0o444, keep)
+  # chmod cannot stop Windows reading a file; a deny rule can.
+  deny = Gem.win_platform? ? "#{ENV["USERNAME"]}:(R)" : nil
+  system("icacls", locked, "/deny", deny, out: File::NULL) if deny
   begin
-    if File.readable?(locked)
+    if fs_readable?(locked)
       puts "  skip  fs permission errors (the file is readable anyway)"
     else
       check_program("fs_permission", <<~EGG, work)
@@ -272,6 +282,7 @@ def check_fs_errors(dir)
       report(File.read(keep) == "keep", "a refused fs.write leaves the file as it was", File.read(keep))
     end
   ensure
+    system("icacls", locked, "/remove:d", ENV["USERNAME"], out: File::NULL) if deny
     File.chmod(0o644, locked, keep)
   end
   unless File.exist?("/dev/full")
@@ -416,6 +427,36 @@ def check_stdin(dir)
   pid = spawn(exe, in: :close, out: out_path, err: out_path)
   Process.wait(pid)
   report($?.exitstatus == 1 && File.read(out_path).include?("error: IoFailed"), "reading a closed standard input is IoFailed", File.read(out_path))
+end
+
+# Paths and arguments are UTF-8 on every system: Windows would otherwise
+# read them in its ANSI code page, whatever that is on the machine.
+def check_utf8(dir)
+  work = File.join(dir, "utf8")
+  FileUtils.mkdir_p(work)
+  File.binwrite(File.join(work, "读.txt"), "你好")
+  path = File.join(work, "utf8.egg")
+  File.write(path, <<~EGG)
+    uses alloc, args, fs, io
+
+    fn main(io: Io, args: Args, files: Fs, a: Allocator) !void {
+        const b = try files.read(a, "读.txt")
+        defer a.free(b)
+        try files.write("写.txt", b)
+        const c = try files.read(a, args.get(1))
+        defer a.free(c)
+        io.print(@len(args.get(1)), " ", @len(c))
+        try files.write(args.get(2), args.get(1))
+    }
+  EGG
+  exe = File.join(work, "utf8")
+  _, status = Open3.capture2e(*eggc_command, "build", path, "-o", exe)
+  return report(false, "build utf8", "failed") unless status.success?
+  out, err, status = Open3.capture3(exe, "读.txt", "参数.txt", chdir: work)
+  names = Dir.children(work).map { |n| n.encode("UTF-8").unicode_normalize(:nfc) }
+  ok = status.success? && out.strip == "#{"读.txt".bytesize} 6" && names.include?("写.txt") && names.include?("参数.txt") &&
+       File.binread(File.join(work, "参数.txt")).force_encoding("UTF-8") == "读.txt"
+  report(ok, "fs and args take UTF-8 names", "#{out.inspect}, #{names.inspect}, stderr: #{err}")
 end
 
 def check_lsp_alias
@@ -845,6 +886,7 @@ Dir.mktmpdir do |dir|
   check_fs_errors(dir)
   check_args(dir)
   check_stdin(dir)
+  check_utf8(dir)
   check_lsp_char
   check_lsp_modules
   check_lsp_extern

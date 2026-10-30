@@ -155,9 +155,35 @@ module Egg
             return true;
         }
       C
+      # Arguments are UTF-8. Windows gives main the ANSI code page, so take
+      # them again as UTF-16. Declared here: windows.h defines too many names.
       "egg_args_state" => <<~C,
         static int egg_argc;
         static char **egg_argv;
+        #ifdef _WIN32
+        #include <wchar.h>
+        __declspec(dllimport) wchar_t *__stdcall GetCommandLineW(void);
+        __declspec(dllimport) wchar_t **__stdcall CommandLineToArgvW(const wchar_t *, int *);
+        __declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned int, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+        #endif
+        static void egg_args_init(int argc, char **argv) {
+            egg_argc = argc;
+            egg_argv = argv;
+        #ifdef _WIN32
+            int n;
+            wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
+            char **utf8 = w == NULL ? NULL : (char **)malloc((size_t)n * sizeof(char *));
+            if (utf8 == NULL) return;
+            for (int i = 0; i < n; i++) {
+                int size = WideCharToMultiByte(65001, 0, w[i], -1, NULL, 0, NULL, NULL);
+                utf8[i] = size == 0 ? NULL : (char *)malloc((size_t)size);
+                if (utf8[i] == NULL) return;
+                WideCharToMultiByte(65001, 0, w[i], -1, utf8[i], size, NULL, NULL);
+            }
+            egg_argc = n;
+            egg_argv = utf8;
+        #endif
+        }
       C
       "egg_args_len" => <<~C,
         static int64_t egg_args_len(void) { return egg_argc; }
@@ -396,6 +422,9 @@ module Egg
         #ifdef ENAMETOOLONG
             if (e == ENAMETOOLONG) return 4;
         #endif
+        #ifdef EINVAL
+            if (e == EINVAL) return 4;
+        #endif
             (void)e;
             return 5;
         }
@@ -412,16 +441,32 @@ module Egg
       C
       # fopen, and the errno it failed with. Windows refuses to open a
       # directory with EACCES, so there the path is looked at.
+      # Paths are UTF-8. Windows' fopen reads them in the ANSI code page, so
+      # go through UTF-16. Declared here: windows.h defines too many names.
       "egg_fs_open" => <<~C,
         #ifdef _WIN32
         #include <sys/stat.h>
+        #include <wchar.h>
+        __declspec(dllimport) int __stdcall MultiByteToWideChar(unsigned int, unsigned long, const char *, int, wchar_t *, int);
         #endif
         static FILE *egg_fs_open(const char *path, const char *mode, int *e) {
+        #ifdef _WIN32
+            /* 65001 is UTF-8, 8 refuses bytes that are not. */
+            int n = MultiByteToWideChar(65001, 8, path, -1, NULL, 0);
+            if (n == 0) {
+                *e = EINVAL;
+                return NULL;
+            }
+            wchar_t *w = (wchar_t *)egg_buf_resize(NULL, n, sizeof(wchar_t));
+            MultiByteToWideChar(65001, 8, path, -1, w, n);
+            FILE *f = _wfopen(w, mode[0] == 'r' ? L"rb" : L"wb");
+            *e = errno;
+            struct _stat st;
+            if (f == NULL && *e == EACCES && _wstat(w, &st) == 0 && (st.st_mode & _S_IFDIR)) *e = EISDIR;
+            free(w);
+        #else
             FILE *f = fopen(path, mode);
             *e = errno;
-        #ifdef _WIN32
-            struct _stat st;
-            if (f == NULL && *e == EACCES && _stat(path, &st) == 0 && (st.st_mode & _S_IFDIR)) *e = EISDIR;
         #endif
             return f;
         }
@@ -992,7 +1037,7 @@ module Egg
       mark(main.func.line)
       if @used["egg_args_state"]
         @out << "int main(int argc, char **argv) {\n"
-        @out << "    egg_argc = argc;\n    egg_argv = argv;\n"
+        @out << "    egg_args_init(argc, argv);\n"
       else
         @out << "int main(void) {\n"
       end

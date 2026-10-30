@@ -1388,7 +1388,7 @@ file incomplete. A failure is one of these errors:
 | `error.NotFound` | no such file, or a directory on the path is missing |
 | `error.PermissionDenied` | the system refused access |
 | `error.IsDirectory` | the path names a directory |
-| `error.InvalidPath` | the path holds a 0 byte or is too long |
+| `error.InvalidPath` | the path holds a 0 byte, is too long, or is not a name the system accepts (on Windows, a path that is not UTF-8) |
 | `error.IoFailed` | anything else, such as a full disk |
 
 ```egg
