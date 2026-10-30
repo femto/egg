@@ -27,6 +27,7 @@
 # Usage: ruby test/run.rb
 
 require "json"
+require "rbconfig"
 require "open3"
 require "tmpdir"
 require_relative "../lib/egg"
@@ -153,6 +154,12 @@ def check_errors(name, src, path = nil)
   report(!want.empty? && missing.empty?, name, detail)
 end
 
+# bin/eggc as a command. EGGC names a native build; a script runs through
+# Ruby, since Windows has no #! lines.
+def eggc_command
+  ENV["EGGC"] ? [ENV["EGGC"]] : [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
+end
+
 # Run one LSP session against bin/eggc lsp; returns responses by id and
 # the diagnostics notifications in order.
 def lsp_session(messages)
@@ -160,7 +167,7 @@ def lsp_session(messages)
     body = JSON.generate(m.merge("jsonrpc" => "2.0"))
     "Content-Length: #{body.bytesize}\r\n\r\n#{body}"
   end.join
-  out, err, status = Open3.capture3(ENV["EGGC"] || File.join(ROOT, "bin", "eggc"), "lsp", stdin_data: input)
+  out, err, status = Open3.capture3(*eggc_command, "lsp", stdin_data: input)
   replies = {}
   diags = []
   out.split(/Content-Length: \d+\r\n\r\n/).reject(&:empty?).each do |text|
@@ -593,15 +600,15 @@ def check_link(dir)
   main = File.join(link, "main.egg")
   check_program("link/main.egg", File.read(main), dir, main, lib_dirs: [dir])
   check_program("link/main.egg -g", File.read(main), dir, main, debug: true, lib_dirs: [dir])
-  eggc = File.join(ROOT, "bin", "eggc")
-  out, err, st = Open3.capture3(eggc, "run", main, "-L", dir)
+  eggc = [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
+  out, err, st = Open3.capture3(*eggc, "run", main, "-L", dir)
   report(st.success? && out == "42\n", "eggc run links what `link` names", "#{out}#{err}")
   cli = File.join(link, "cli.egg")
-  out, err, st = Open3.capture3(eggc, "run", cli, "-L#{dir}", "-llinktest")
+  out, err, st = Open3.capture3(*eggc, "run", cli, "-L#{dir}", "-llinktest")
   report(st.success? && out == "73\n", "eggc run -L DIR -lLIB", "#{out}#{err}")
-  out, err, st = Open3.capture3(eggc, "run", cli, "-L", dir, "-l", "linktest")
+  out, err, st = Open3.capture3(*eggc, "run", cli, "-L", dir, "-l", "linktest")
   report(st.success? && out == "73\n", "eggc run -L DIR -l LIB", "#{out}#{err}")
-  _, _, st = Open3.capture3(eggc, "run", cli)
+  _, _, st = Open3.capture3(*eggc, "run", cli)
   report(!st.success?, "eggc run without -l fails to link", "status #{st.exitstatus}")
 end
 

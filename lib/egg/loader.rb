@@ -176,9 +176,9 @@ module Egg
 
     # The imported file's path as reached from the root file's path, so a
     # diagnostic in it points at the right file from the user's shell. An
-    # absolute import path is kept as it is.
+    # absolute import path, "/x" or Windows's "D:/x", is kept as it is.
     def display_path(mod, rel)
-      return Egg.normalize_path(rel) if rel.start_with?("/")
+      return Egg.normalize_path(rel) if rel.start_with?("/") || rel.match?(/\A[A-Za-z]:[\/\\]/)
       from = mod.file || @display
       dir = from.nil? ? "" : File.dirname(from)
       Egg.normalize_path(dir == "." || dir.empty? ? rel : "#{dir}/#{rel}")
