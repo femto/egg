@@ -70,13 +70,13 @@ fn hash(bytes: []const u8) u64 {
 }
 ```
 
-声明需要的能力（文件读写之后才加；缓冲区、`free` 和 `defer` 在 v2 已有）：
+声明需要的能力：
 
 ```
-uses alloc, io
+uses alloc, fs
 
-fn read_config(io: Io, a: Allocator, path: str) !Config {
-    const text = try io.read_file(a, path)   // 调用者拥有的 Buf(u8)
+fn read_config(files: Fs, a: Allocator, path: str) !Config {
+    const text = try files.read(a, path)   // 调用者拥有的 Buf(u8)
     defer a.free(text)
     return parse(text[0..])
 }
@@ -87,7 +87,8 @@ fn read_config(io: Io, a: Allocator, path: str) !Config {
 | 能力 | 提供什么 | 计划版本 |
 | --- | --- | --- |
 | `alloc` | 堆分配，分配器显式传递 | v2（字符串放在程序级 arena；可释放的独占缓冲区 `Buf(T)`，带所有权检查） |
-| `io` | 文件、标准输入输出，按操作系统各有实现 | v2（先做标准输出，文件之后再加） |
+| `io` | 标准输入输出，按操作系统各有实现 | v2（先做标准输出） |
+| `fs` | 文件，按操作系统各有实现 | 先做整文件 `read` 和 `write`，之后加句柄 |
 | `raise` | 异常抛出与捕获，用核心代码实现 | v3 之后 |
 
 检查规则：
@@ -195,7 +196,7 @@ Egg 自己生成的 C 代码必须从第一天起保持可移植：
 
 - [ ] 语句结尾是否需要分号？示例暂时省略分号，需要和解析器的简单性一起权衡。
 - [x] 能力写在签名上的语法：`fn f() !void with io`，还是只在模块头部声明、由工具生成文档？v2 已定：模块级 `uses alloc, io`，能力值显式传递；签名上不写能力列表，由工具展示每个函数的能力集合。
-- [ ] 能力的粒度：`io` 是一个能力，还是拆成 `fs`、`net`、`stdio`？v2 先只做一个 `io`（只有标准输出），加入文件时再重新考虑。
+- [x] 能力的粒度：`io` 是一个能力，还是拆成 `fs`、`net`、`stdio`？加入文件时决定：拆开。`fs` 有自己的值类型 `Fs`，这样 `uses` 一行就能看出文件能碰到什么；`net` 之后沿用同样的做法。
 - [x] 释放内存后如何保证安全？v2 已定：独占的 `Buf(T)`，线性检查（只移动、不复制；每条路径上恰好释放或传走一次），配合 `defer`/`errdefer`；释放从不隐式发生。字符串仍放在永不释放的 arena 里。
 - [x] 要不要 GC？2026-10-27 已定：不要，内存只靠所有权管理。
 - [ ] 拼出来的字符串怎么释放：像 `Buf(T)` 一样检查的 owned 字符串类型、`str` 只留给字面量和借用，还是别的办法？属于 v3。

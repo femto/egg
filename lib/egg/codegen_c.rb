@@ -72,7 +72,8 @@ module Egg
     STR_TYPEDEF = "typedef struct { const char *ptr; int64_t len; } egg_str;\n"
     CAP_TYPEDEFS = {
       "Io" => "typedef struct { char unused; } egg_io;\n",
-      "Allocator" => "typedef struct { char unused; } egg_allocator;\n"
+      "Allocator" => "typedef struct { char unused; } egg_allocator;\n",
+      "Fs" => "typedef struct { char unused; } egg_fs;\n"
     }.freeze
 
     # Runtime helpers, emitted only when the program uses them
@@ -82,7 +83,8 @@ module Egg
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
                       egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
-                      egg_append egg_append_int egg_append_uint egg_append_float].freeze
+                      egg_append egg_append_int egg_append_uint egg_append_float
+                      egg_fs_class egg_fs_path egg_fs_read egg_fs_write].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -298,6 +300,90 @@ module Egg
             return q;
         }
       C
+      # What an Fs method failed with: the index into FS_ERRORS, plus 1.
+      "egg_fs_class" => <<~C,
+        #include <errno.h>
+        static int egg_fs_class(int e) {
+            /* ISO C names none of these, so each may be missing. */
+        #ifdef ENOENT
+            if (e == ENOENT) return 1;
+        #endif
+        #ifdef ENOTDIR
+            if (e == ENOTDIR) return 1;
+        #endif
+        #ifdef EACCES
+            if (e == EACCES) return 2;
+        #endif
+        #ifdef EPERM
+            if (e == EPERM) return 2;
+        #endif
+        #ifdef EISDIR
+            if (e == EISDIR) return 3;
+        #endif
+        #ifdef ENAMETOOLONG
+            if (e == ENAMETOOLONG) return 4;
+        #endif
+            (void)e;
+            return 5;
+        }
+      C
+      # A path for fopen, 0-terminated, or NULL if it holds a 0 byte.
+      "egg_fs_path" => <<~C,
+        static char *egg_fs_path(egg_str s) {
+            if (s.len > 0 && memchr(s.ptr, 0, (size_t)s.len) != NULL) return NULL;
+            char *p = (char *)egg_buf_resize(NULL, s.len + 1, 1);
+            if (s.len > 0) memcpy(p, s.ptr, (size_t)s.len);
+            p[s.len] = 0;
+            return p;
+        }
+      C
+      # The size is not asked for first: a pipe or /proc file has none.
+      "egg_fs_read" => <<~C,
+        static int egg_fs_read(egg_str path, uint8_t **ptr, int64_t *len, int64_t *capacity) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            FILE *f = fopen(p, "rb");
+            int e = errno;
+            free(p);
+            if (f == NULL) return egg_fs_class(e);
+            int64_t cap = 4096, n = 0;
+            uint8_t *b = (uint8_t *)egg_buf_resize(NULL, cap, 1);
+            for (;;) {
+                n += (int64_t)fread(b + n, 1, (size_t)(cap - n), f);
+                if (n < cap) break;
+                cap *= 2;
+                b = (uint8_t *)egg_buf_resize(b, cap, 1);
+            }
+            int bad = ferror(f);
+            e = errno;
+            fclose(f);
+            if (bad) {
+                free(b);
+                return egg_fs_class(e);
+            }
+            *ptr = b;
+            *len = n;
+            *capacity = cap;
+            return 0;
+        }
+      C
+      "egg_fs_write" => <<~C,
+        static int egg_fs_write(egg_str path, egg_str data) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            FILE *f = fopen(p, "wb");
+            int e = errno;
+            free(p);
+            if (f == NULL) return egg_fs_class(e);
+            int bad = data.len > 0 && fwrite(data.ptr, 1, (size_t)data.len, f) != (size_t)data.len;
+            e = errno;
+            if (fclose(f) != 0 && !bad) {
+                bad = 1;
+                e = errno;
+            }
+            return bad ? egg_fs_class(e) : 0;
+        }
+      C
       # n bytes from src at the end of a Buf(u8) (its ptr, len and cap),
       # doubling the capacity (at least 4, at least enough) when they do
       # not fit.
@@ -343,7 +429,9 @@ module Egg
                     "egg_print_float" => ["egg_fmt_float"], "egg_float_str" => %w[egg_alloc egg_fmt_float],
                     "egg_cstr" => ["egg_alloc"], "egg_str_from_c" => ["egg_alloc"],
                     "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
-                    "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float] }.freeze
+                    "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float],
+                    "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path],
+                    "egg_fs_write" => %w[egg_fs_class egg_fs_path] }.freeze
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -617,7 +705,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c egg_fs_path egg_fs_read egg_fs_write].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -646,6 +734,9 @@ module Egg
       when "Allocator"
         @need_cap[t] = true
         "egg_allocator"
+      when "Fs"
+        @need_cap[t] = true
+        "egg_fs"
       when *INT_C.keys then INT_C[t][0]
       when *FLOAT_C.keys then FLOAT_C[t]
       else
@@ -1441,6 +1532,12 @@ module Egg
       hoist(text, ret)
     end
 
+    # The error id of what an egg_fs_ helper returned; 0 is success.
+    def fs_error(code)
+      ids = TypeChecker::FS_ERRORS.map { |n| @checker.error_names.index(n) + 1 }
+      "((const int32_t[]){ 0, #{ids.join(', ')} })[#{code}]"
+    end
+
     # out.print(x), a.concat(s, t), a.int_str(n). The receiver carries no
     # data but is still evaluated, first, like any receiver.
     def cap_call(m, obj, args, ret)
@@ -1453,6 +1550,16 @@ module Egg
                last = args.length - 1
                codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false)};") unless i == last }
                print_one(args[last].ty, codes[last], true)
+             when "Fs.read"
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{fs_error("#{helper('egg_fs_read')}(#{coerce(codes[1], args[1].ty, 'str')}, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)")};")
+               r
+             when "Fs.write"
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{fs_error("#{helper('egg_fs_write')}(#{coerce(codes[0], args[0].ty, 'str')}, #{coerce(codes[1], args[1].ty, 'str')})")};")
+               r
              when "Allocator.create"
                # A copy of the value in the arena.
                t = args[0].ty

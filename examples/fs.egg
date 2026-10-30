@@ -1,0 +1,61 @@
+// The fs capability: a whole file read into a Buf(u8), or written from
+// text. Failures are errors you can tell apart. The file is left behind in
+// the current directory; the tests run this in a private temporary one.
+// expect: hello
+// expect: 6 true
+// expect: NotFound
+// expect: IsDirectory
+// expect: InvalidPath
+// expect: NotFound
+// expect: 0
+// expect: 200000 255 0
+uses alloc, fs, io
+
+fn scratch() str {
+    return "egg_example_fs.txt"
+}
+
+// A file's size, or 0 if it cannot be read.
+fn size(files: Fs, a: Allocator, path: str) i64 {
+    const b = files.read(a, path) catch {
+        return 0
+    }
+    defer a.free(b)
+    return @len(b)
+}
+
+fn why(files: Fs, a: Allocator, path: str) str {
+    const b = files.read(a, path) catch |e| {
+        return @errorName(e)
+    }
+    defer a.free(b)
+    return "read it"
+}
+
+fn main(out: Io, files: Fs, a: Allocator) !void {
+    try files.write(scratch(), "hello\n")
+    const text = try files.read(a, scratch())
+    defer a.free(text)
+    out.print(text[0..5])
+    out.print(@len(text), " ", text[5] == '\n')
+
+    out.print(why(files, a, "/nonexistent/egg/file"))
+    out.print(why(files, a, "."))
+    out.print(why(files, a, "no\x00such"))
+    files.write("/nonexistent/egg/file", "x") catch |e| {
+        out.print(@errorName(e))
+    }
+
+    // write replaces the whole file.
+    try files.write(scratch(), "")
+    out.print(size(files, a, scratch()))
+
+    // Any bytes, more than one read gets at once.
+    var big: Buf(u8) = a.alloc(200000, 0)
+    defer a.free(big)
+    big[1] = 255
+    try files.write(scratch(), big)
+    const back = try files.read(a, scratch())
+    defer a.free(back)
+    out.print(@len(back), " ", back[1], " ", back[199999])
+}
