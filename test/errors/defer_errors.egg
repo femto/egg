@@ -10,14 +10,14 @@ fn f(a: Allocator) void {
     errdefer a.free(b)
 }
 
-fn g(out: Io) !void {
-    defer out.print(try parse(1))
+fn g(io: Io) !void {
+    defer io.print(try parse(1))
     defer parse(2)
 }
 
-fn main(out: Io, a: Allocator) !void {
+fn main(io: Io, a: Allocator) !void {
     f(a)
-    try g(out)
+    try g(io)
 }
 
 // error: E118 @10

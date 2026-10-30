@@ -14,11 +14,11 @@ fn drop_data(a: Allocator, inout l: List) void {
     a.free(l.data)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var l = List{ .data = a.alloc(2, 0), .len = 0 }
     a.free(l.data)
     give(a, l)
-    out.print(l.len)
+    io.print(l.len)
     l.data = a.alloc(1, 0)
     l.data = a.alloc(1, 0)
     a.free(l)
@@ -26,14 +26,14 @@ fn main(out: Io, a: Allocator) void {
     var m = List{ .data = a.alloc(2, 0), .len = 0 }
     give(a, m)
     m.data = a.alloc(1, 0)
-    out.print(m.len)
+    io.print(m.len)
 
     const k = List{ .data = a.alloc(2, 0), .len = 0 }
     if (k.len > 0) {
         a.free(k.data)
     }
     const n = List{ .data = a.alloc(2, 0), .len = 0 }
-    out.print(n.len)
+    io.print(n.len)
 }
 
 // error: E135 @13

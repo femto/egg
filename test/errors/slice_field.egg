@@ -4,6 +4,6 @@ uses io
 const View = struct {
     items: []i64
 }
-fn main(out: Io) void {
-    out.print(1)
+fn main(io: Io) void {
+    io.print(1)
 }

@@ -35,7 +35,7 @@ const Vm = struct {
         return a.pop(&self.stack) orelse return error.StackUnderflow
     }
 
-    fn run(inout self: Vm, a: Allocator, out: Io) !i64 {
+    fn run(inout self: Vm, a: Allocator, io: Io) !i64 {
         var pc: i64 = 0
         var steps: i64 = 0
         while (pc < @len(self.code)) {
@@ -79,7 +79,7 @@ const Vm = struct {
                         pc = t
                     }
                 }
-                .print => { out.print(try self.pop(a)) }
+                .print => { io.print(try self.pop(a)) }
                 .halt => { return steps }
             }
         }
@@ -89,8 +89,8 @@ const Vm = struct {
 }
 
 // Prints the error and gives -1 in place of a step count.
-fn report(out: Io, e: anyerror) i64 {
-    out.print(@errorName(e))
+fn report(io: Io, e: anyerror) i64 {
+    io.print(@errorName(e))
     return -1
 }
 
@@ -98,7 +98,7 @@ fn emit(a: Allocator, inout code: Buf(Ins), i: Ins) void {
     a.push(&code, i)
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     // i = 1; f = 1; while (i < 6) { f = f * i; i = i + 1 }; print f   -> 5! = 120
     var code: Buf(Ins) = .empty
     emit(a, &code, Ins{ .push = 1 })
@@ -131,25 +131,25 @@ fn main(a: Allocator, out: Io) void {
     emit(a, &code, .halt)
     var vm = Vm{ .code = code, .stack = .empty, .locals = @splat(0) }
     defer a.free(vm)
-    const steps = vm.run(a, out) catch |e| {
-        out.print(@errorName(e))
+    const steps = vm.run(a, io) catch |e| {
+        io.print(@errorName(e))
         return
     }
-    out.print(steps)
+    io.print(steps)
     // a program that runs off its end
     var open_end = Vm{ .code = .empty, .stack = .empty, .locals = @splat(0) }
     defer a.free(open_end)
     a.push(&open_end.code, Ins{ .push = 7 })
     a.push(&open_end.code, .print)
-    const m = open_end.run(a, out) catch |e| report(out, e)
-    out.print(m)
+    const m = open_end.run(a, io) catch |e| report(io, e)
+    io.print(m)
     // a broken program: add with an empty stack
     var bad = Vm{ .code = .empty, .stack = .empty, .locals = @splat(0) }
     defer a.free(bad)
     a.push(&bad.code, .add)
-    const n = bad.run(a, out) catch |e| {
-        out.print(@errorName(e))
+    const n = bad.run(a, io) catch |e| {
+        io.print(@errorName(e))
         return
     }
-    out.print(n)
+    io.print(n)
 }

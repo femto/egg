@@ -2,7 +2,7 @@
 uses io
 
 const Color = enum { red, green }
-fn main(out: Io) void {
+fn main(io: Io) void {
     const c = .red
-    out.print(c)
+    io.print(c)
 }

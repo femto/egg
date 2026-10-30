@@ -39,9 +39,9 @@ fn total(shapes: []Shape) i64 {
     return sum
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
-    out.print(total(shapes[0..]))   // 24
+    io.print(total(shapes[0..]))   // 24
 }
 ```
 
@@ -144,7 +144,7 @@ v3 (memory without GC, and what realistic programs needed; under way):
 - Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
   `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
   a `str`
-- `out.print(w, ": ", n)` prints several values and then a newline,
+- `io.print(w, ": ", n)` prints several values and then a newline,
   allocating nothing; operands run left to right even when a later one
   changes a variable through `&x` (`f(x, bump(&x))` passes the old x);
   an operand that borrows what a later one changes through `&` or moves
@@ -155,9 +155,9 @@ v3 (memory without GC, and what realistic programs needed; under way):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
-- Standard error: `out.eprint(x, ...)`. Standard input (needs `uses alloc`
-  too; failures are `error.IoFailed`): `out.read_line(a, &line) !bool` returns
-  false at the end, `out.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`
+- Standard error: `io.eprint(x, ...)`. Standard input (needs `uses alloc`
+  too; failures are `error.IoFailed`): `io.read_line(a, &line) !bool` returns
+  false at the end, `io.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
   with the program's name at 0 and the first argument at 1
 - Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole
@@ -172,8 +172,8 @@ From v2:
   `m.Pair(i64)`; each file loaded once, cycles allowed; diagnostics name
   the file
 - Capabilities: a file declares `uses alloc, io`; `main` receives the
-  capability values (`fn main(out: Io, a: Allocator)`) and passes them
-  down; `out.print(x)` replaces `@print`; `a.concat(s, t)` and
+  capability values (`fn main(io: Io, a: Allocator)`) and passes them
+  down; `io.print(x)` replaces `@print`; `a.concat(s, t)` and
   `a.int_str(n)`, `a.float_str(x)` build strings in a program-lifetime arena
 - **Capability check** (E130): following the call graph across files and
   generic instances, a function that uses a capability its file does not

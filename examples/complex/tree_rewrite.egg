@@ -48,14 +48,14 @@ fn simplify(a: Allocator, inout n: Node) void {
     }
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     // (2 + 3) * (4 * 1)
     const e = bin(a, .mul, bin(a, .add, num(2), num(3)), bin(a, .mul, num(4), num(1)))
     var root: Buf(Node) = .empty
     a.push(&root, e)
-    out.print(eval(root[0..], 0))
+    io.print(eval(root[0..], 0))
     simplify(a, &root[0])
-    out.print(eval(root[0..], 0))
-    out.print(@len(root[0].kids[1].kids))
+    io.print(eval(root[0..], 0))
+    io.print(@len(root[0].kids[1].kids))
     a.free(root)
 }

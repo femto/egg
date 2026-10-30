@@ -5,7 +5,7 @@ uses io
 const a = @import("lib/write_a.egg")
 const b = @import("lib/write_b.egg")
 
-fn main(out: Io) i64 {
-    out.print(1)
+fn main(io: Io) i64 {
+    io.print(1)
     return b.say("hi")
 }

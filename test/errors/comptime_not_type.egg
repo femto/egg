@@ -4,6 +4,6 @@ uses io
 fn id(comptime T: type, x: T) T {
     return x
 }
-fn main(out: Io) void {
-    out.print(id(5, 5))
+fn main(io: Io) void {
+    io.print(id(5, 5))
 }

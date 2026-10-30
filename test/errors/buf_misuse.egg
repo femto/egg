@@ -14,7 +14,7 @@ fn sum(xs: []i64, n: i64) i64 {
 fn keep(sink b: Buf(i64), n: i64) void {
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b = a.alloc(3, 0)
     a.free(7)
     a.resize(b, 4, 0)
@@ -22,8 +22,8 @@ fn main(out: Io, a: Allocator) void {
     const c: Buf = 1
     const d = a.alloc(2, true)
     const e = a.alloc(2, 0)
-    out.print(sum(e[0..], 1) + d[0])
-    out.print(e == e)
+    io.print(sum(e[0..], 1) + d[0])
+    io.print(e == e)
     a.free(e)
 }
 

@@ -1,6 +1,6 @@
 // error: E122 @5
 uses io
 
-fn main(out: Io) void {
-    out.write("x")
+fn main(io: Io) void {
+    io.write("x")
 }

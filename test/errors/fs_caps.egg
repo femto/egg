@@ -16,8 +16,8 @@ fn load(files: Fs, a: Allocator) void {
     a.free(b)
 }
 
-fn main(out: Io, files: Fs, a: Allocator) void {
+fn main(io: Io, files: Fs, a: Allocator) void {
     save(files)
     load(files, a)
-    out.print(1)
+    io.print(1)
 }

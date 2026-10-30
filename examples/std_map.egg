@@ -36,7 +36,7 @@ fn point_eq(p: Point, q: Point) bool {
     return p.x == q.x and p.y == q.y
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     // counting words
     var counts = map.HashMap(str, i64).init()
     defer a.free(counts)
@@ -45,7 +45,7 @@ fn main(out: Io, a: Allocator) void {
         counts.put(a, w, (counts.get(w) orelse 0) + 1)
     }
     for (counts.entries) |e| {
-        out.print(a.concat(a.concat(e.key, " "), a.int_str(e.val)))
+        io.print(a.concat(a.concat(e.key, " "), a.int_str(e.val)))
     }
 
     // many integer keys, so the index grows
@@ -56,9 +56,9 @@ fn main(out: Io, a: Allocator) void {
         squares.put(a, i, i * i)
         i = i + 1
     }
-    out.print(squares.count())
-    out.print(squares.get(-21) orelse -1)
-    out.print(squares.contains(500))
+    io.print(squares.count())
+    io.print(squares.get(-21) orelse -1)
+    io.print(squares.contains(500))
     var removed: i64 = 0
     var k: i64 = -500
     while (k < 500) {
@@ -67,10 +67,10 @@ fn main(out: Io, a: Allocator) void {
         }
         k = k + 1
     }
-    out.print(removed)
-    out.print(squares.count())
-    out.print(squares.get(7) orelse -1)
-    out.print(squares.get(8) orelse -1)
+    io.print(removed)
+    io.print(squares.count())
+    io.print(squares.get(7) orelse -1)
+    io.print(squares.get(8) orelse -1)
     // every odd key still maps to its square; evens come back
     var wrong: i64 = 0
     var j: i64 = -500
@@ -87,8 +87,8 @@ fn main(out: Io, a: Allocator) void {
         }
         j = j + 1
     }
-    out.print(wrong)
-    out.print(squares.count())
+    io.print(wrong)
+    io.print(squares.count())
     // churn: add and remove the same keys many times
     var round: i64 = 0
     while (round < 200) {
@@ -106,9 +106,9 @@ fn main(out: Io, a: Allocator) void {
         }
         round = round + 1
     }
-    out.print(wrong)
-    out.print(squares.count())
-    out.print(@len(squares.index) <= 8192)
+    io.print(wrong)
+    io.print(squares.count())
+    io.print(@len(squares.index) <= 8192)
 
     // struct keys with their own hash and eq
     var grid = map.HashMap(Point, str).init_with(point_hash, point_eq)
@@ -116,8 +116,8 @@ fn main(out: Io, a: Allocator) void {
     grid.put(a, Point{ .x = 1, .y = 2 }, "a")
     grid.put(a, Point{ .x = 3, .y = 4 }, "b")
     grid.put(a, Point{ .x = 1, .y = 2 }, "c")
-    out.print(grid.count())
-    out.print(grid.get(Point{ .x = 1, .y = 2 }) orelse "none")
+    io.print(grid.count())
+    io.print(grid.get(Point{ .x = 1, .y = 2 }) orelse "none")
 
     // values that own buffers: grouping by first letter
     var groups = map.HashMap(str, Buf(str)).init()
@@ -128,8 +128,8 @@ fn main(out: Io, a: Allocator) void {
         a.push(&groups.entries[g].val, n)
     }
     for (groups.entries) |e| {
-        out.print(a.concat(a.concat(e.key, ": "), a.int_str(@len(e.val))))
+        io.print(a.concat(a.concat(e.key, ": "), a.int_str(@len(e.val))))
     }
-    out.print(groups.remove(a, "a"))
-    out.print(groups.count())
+    io.print(groups.remove(a, "a"))
+    io.print(groups.count())
 }

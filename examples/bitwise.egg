@@ -38,26 +38,26 @@ fn fnv1a(s: []u8) u64 {
     return h
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a: u8 = 0b1100_1010
-    out.print(a & 0x0f, " ", a | 0x0f, " ", a ^ 0xff, " ", ~a)
-    out.print(a << 1, " ", a >> 3)
+    io.print(a & 0x0f, " ", a | 0x0f, " ", a ^ 0xff, " ", ~a)
+    io.print(a << 1, " ", a >> 3)
     const n: i64 = -16
-    out.print(n >> 2, " ", n << 2, " ", ~n, " ", n & 0xff)
+    io.print(n >> 2, " ", n << 2, " ", ~n, " ", n & 0xff)
     // The amount is any integer type.
     const i: u8 = 3
-    out.print(1 << i, " ", @as(u64, 1) << 63)
+    io.print(1 << i, " ", @as(u64, 1) << 63)
     // A literal on the left takes the type the context expects; bitwise
     // operators bind tighter than comparisons.
     const m: u8 = 1 << 7
-    out.print(m, " ", 0xff & 7 == 7)
+    io.print(m, " ", 0xff & 7 == 7)
     const k: i8 = -128
-    out.print(@as(u64, 0xffff_ffff_ffff_ffff) >> 60, " ", k >> 7, " ", k << 1)
+    io.print(@as(u64, 0xffff_ffff_ffff_ffff) >> 60, " ", k >> 7, " ", k << 1)
     // + binds tighter than <<; a | (b & c) needs its parentheses.
-    out.print(1 << 2 + 1, " ", 0 | (0x18 & 0x10))
+    io.print(1 << 2 + 1, " ", 0 | (0x18 & 0x10))
     // Operands run left to right: x is read before bump(&x) changes it.
     var x: u8 = 2
-    out.print(x | bump(&x), " ", x >> bump(&x) - 2)
-    out.print(count_ones(0xf00f))
-    out.print(fnv1a(""), " ", fnv1a("egg"))
+    io.print(x | bump(&x), " ", x >> bump(&x) - 2)
+    io.print(count_ones(0xf00f))
+    io.print(fnv1a(""), " ", fnv1a("egg"))
 }

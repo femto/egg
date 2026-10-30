@@ -31,30 +31,30 @@ const Point = struct {
     }
 }
 
-fn main(out: Io, a: Allocator) void {
-    out.print(0.1 + 0.2)
+fn main(io: Io, a: Allocator) void {
+    io.print(0.1 + 0.2)
     const t: f32 = 0.1
-    out.print(t + 0.2)
-    out.print(100.0)
-    out.print(1_234_567.0)
-    out.print(1e16)
-    out.print(0.0001)
-    out.print(0.00001)
-    out.print(-0.0)
+    io.print(t + 0.2)
+    io.print(100.0)
+    io.print(1_234_567.0)
+    io.print(1e16)
+    io.print(0.0001)
+    io.print(0.00001)
+    io.print(-0.0)
     const nz: f64 = -0               // an integer literal keeps the sign too
-    out.print(nz)
-    out.print(5e-324)
+    io.print(nz)
+    io.print(5e-324)
     const zero = 0.0
-    out.print(zero / zero)
-    out.print(-1 / zero)
+    io.print(zero / zero)
+    io.print(-1 / zero)
     const big: f32 = 16777217        // rounds: f32 has 24 bits of mantissa
-    out.print(big)
-    out.print(@as(u8, 255.9))
-    out.print(@as(i8, -128.9))
-    out.print(@as(i64, 9223372036854774784.0))
-    out.print(@as(u64, 18446744073709549568.0))
+    io.print(big)
+    io.print(@as(u8, 255.9))
+    io.print(@as(i8, -128.9))
+    io.print(@as(i64, 9223372036854774784.0))
+    io.print(@as(u64, 18446744073709549568.0))
     const p = Point{ .x = 1.5, .y = 2 }
-    out.print(p.dot(p) == 6.25)
-    out.print(zero / zero == zero / zero)
-    out.print(a.concat(a.float_str(2.5), a.concat(" of ", a.float_str(10))))
+    io.print(p.dot(p) == 6.25)
+    io.print(zero / zero == zero / zero)
+    io.print(a.concat(a.float_str(2.5), a.concat(" of ", a.float_str(10))))
 }

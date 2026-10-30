@@ -11,12 +11,12 @@ uses io
 
 const math = @import("std/math")
 
-fn main(out: Io) void {
-    out.print(math.min(i64, 2, 9))
-    out.print(math.max(i64, 2, 9))
-    out.print(math.abs(i64, -7))
-    out.print(math.clamp(i64, 42, 0, 10))
-    out.print(math.abs(f64, -1.5))
-    out.print(math.abs(f64, -0.0))
-    out.print(math.abs(u64, 5))
+fn main(io: Io) void {
+    io.print(math.min(i64, 2, 9))
+    io.print(math.max(i64, 2, 9))
+    io.print(math.abs(i64, -7))
+    io.print(math.clamp(i64, 42, 0, 10))
+    io.print(math.abs(f64, -1.5))
+    io.print(math.abs(f64, -0.0))
+    io.print(math.abs(u64, 5))
 }

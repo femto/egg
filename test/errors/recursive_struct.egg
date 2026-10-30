@@ -5,6 +5,6 @@ const Node = struct {
     value: i64
     next: Node
 }
-fn main(out: Io) void {
-    out.print(1)
+fn main(io: Io) void {
+    io.print(1)
 }

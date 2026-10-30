@@ -35,21 +35,21 @@ fn pick(big: bool) fn(i64, i64) i64 {
     return add
 }
 
-fn shout(out: Io) void {
-    out.print("hi")
+fn shout(io: Io) void {
+    io.print("hi")
 }
 
-fn main(out: Io) void {
-    out.print(apply(add, 4))
-    out.print(apply(mul, 4))
+fn main(io: Io) void {
+    io.print(apply(add, 4))
+    io.print(apply(mul, 4))
     const ops = [2]Op{ Op{ .name = "add", .run = add }, Op{ .name = "mul", .run = mul } }
     for (ops) |op| {
-        out.print(op.name)
-        out.print(op.run(3, 5))
+        io.print(op.name)
+        io.print(op.run(3, 5))
     }
     const f = pick(true)
-    out.print(f(6, 7))
-    out.print(f == mul)
+    io.print(f(6, 7))
+    io.print(f == mul)
     const s: fn(Io) void = shout
-    s(out)
+    s(io)
 }

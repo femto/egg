@@ -43,15 +43,15 @@ fn stays_too(xs: []i64) i64 {
     return v
 }
 
-fn in_defer(out: Io) !void {
+fn in_defer(io: Io) !void {
     defer f(1) catch return
-    out.print(1)
+    io.print(1)
 }
 
-fn main(out: Io) void {
-    out.print(@errorName(5))
+fn main(io: Io) void {
+    io.print(@errorName(5))
     const v = f(1) catch |e| e == 3
-    out.print(v)
+    io.print(v)
 }
 // error: E127 @12
 // error: E127 @20

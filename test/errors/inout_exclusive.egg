@@ -4,8 +4,8 @@ uses io
 fn add_into(inout acc: i64, x: i64) void {
     acc = acc + x
 }
-fn main(out: Io) void {
+fn main(io: Io) void {
     var total = 1
     add_into(&total, total)
-    out.print(total)
+    io.print(total)
 }

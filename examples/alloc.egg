@@ -8,11 +8,11 @@
 uses alloc, io
 
 const Log = struct {
-    out: Io
+    io: Io
     a: Allocator
 
     fn line(self: Log, label: str, n: i64) void {
-        self.out.print(self.a.concat(label, self.a.int_str(n)))
+        self.io.print(self.a.concat(label, self.a.int_str(n)))
     }
 }
 
@@ -20,10 +20,10 @@ fn pair(a: Allocator, x: i64, y: i64) str {
     return a.concat(a.int_str(x), a.concat(" and ", a.int_str(y)))
 }
 
-fn main(out: Io, a: Allocator) void {
-    const log = Log{ .out = out, .a = a }
+fn main(io: Io, a: Allocator) void {
+    const log = Log{ .io = io, .a = a }
     log.line("n = ", 42)
-    out.print(pair(a, -7, 0))
-    out.print(a.concat(a.int_str(3), " lines"))
-    out.print(a.concat("", ""))
+    io.print(pair(a, -7, 0))
+    io.print(a.concat(a.int_str(3), " lines"))
+    io.print(a.concat("", ""))
 }

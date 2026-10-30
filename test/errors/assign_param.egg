@@ -5,6 +5,6 @@ fn inc(n: i64) i64 {
     n = n + 1
     return n
 }
-fn main(out: Io) void {
-    out.print(inc(1))
+fn main(io: Io) void {
+    io.print(inc(1))
 }

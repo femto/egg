@@ -8,19 +8,19 @@ fn f(x: i64) !i64 {
 fn g() !void {
     return
 }
-fn h(out: Io) !void {
+fn h(io: Io) !void {
     defer g() catch {
         while ((try f(1)) > 5) {
-            out.print(1)
+            io.print(1)
         }
     }
     const v = f(2) catch |e|
         0
-    out.print(v)
+    io.print(v)
 }
-fn main(out: Io) void {
-    h(out) catch |_| {
-        out.print(0)
+fn main(io: Io) void {
+    h(io) catch |_| {
+        io.print(0)
     }
 }
 // error: E118 @12

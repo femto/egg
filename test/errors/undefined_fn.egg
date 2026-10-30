@@ -1,6 +1,6 @@
 // error: E102 @5
 uses io
 
-fn main(out: Io) void {
-    out.print(nope(1))
+fn main(io: Io) void {
+    io.print(nope(1))
 }

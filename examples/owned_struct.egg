@@ -19,24 +19,24 @@ const Session = struct {
 }
 
 // Takes the Conn: it must end it or pass it on.
-fn finish(sink c: conn.Conn, out: Io) void {
-    c.close(out)
+fn finish(sink c: conn.Conn, io: Io) void {
+    c.close(io)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var c = conn.open(1)
-    defer c.close(out)          // runs last
-    c.send(out, 2)
+    defer c.close(io)          // runs last
+    c.send(io, 2)
 
     var s = Session{ .c = conn.open(2), .log = a.alloc(3, 0) }
-    s.c.send(out, 5)
+    s.c.send(io, 5)
     s.log[0] = 7
-    out.print(s.log[0])
-    finish(s.c, out)            // s.c moved; s.log still owned
+    io.print(s.log[0])
+    finish(s.c, io)            // s.c moved; s.log still owned
     a.free(s.log)
 
     var d = conn.open(3)
-    d.send(out, 3)
+    d.send(io, 3)
     const e = d                 // a move, not a copy
-    finish(e, out)
+    finish(e, io)
 }

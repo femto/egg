@@ -46,20 +46,20 @@ fn grow(a: Allocator, inout b: Buf(i64)) void {
     fill(&b[0..], 3)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var arr = [4]i64{ 0, 0, 0, 0 }
     fill(&arr[1..3], 7)
     for (arr) |x| {
-        out.print(x)
+        io.print(x)
     }
     var b = a.alloc(4, 0)
     defer a.free(b)
     fill_tail(&b[0..], 9)
-    out.print(b[1])
-    out.print(b[2])
-    out.print(b[3])
-    out.print(b[0])
-    out.print(total(b[0..]))
+    io.print(b[1])
+    io.print(b[2])
+    io.print(b[3])
+    io.print(b[0])
+    io.print(total(b[0..]))
     grow(a, &b)
-    out.print(@len(b) - 2)
+    io.print(@len(b) - 2)
 }

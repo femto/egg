@@ -1,6 +1,6 @@
 // error: E001 @5
 uses io
 
-fn main(out: Io) void {
-    out.print(0xfg)
+fn main(io: Io) void {
+    io.print(0xfg)
 }

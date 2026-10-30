@@ -2,7 +2,7 @@
 // The branches of an if with a value are expressions, not blocks.
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x: i64 = 1
-    out.print(if (x > 0) { 1 } else { 2 })
+    io.print(if (x > 0) { 1 } else { 2 })
 }

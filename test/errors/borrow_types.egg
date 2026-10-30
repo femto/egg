@@ -43,11 +43,11 @@ fn make() Res {
     return Res{ .id = 1 }
 }
 
-fn main(out: Io, a: Allocator) void {
-    out.print(twice(2))
-    out.print(count(a.alloc(2, 0)))
-    out.print(make().id_of())
-    out.print(count(.empty))
+fn main(io: Io, a: Allocator) void {
+    io.print(twice(2))
+    io.print(count(a.alloc(2, 0)))
+    io.print(make().id_of())
+    io.print(count(.empty))
     const bag = Bag{ .data = a.alloc(2, 0) }
     bag.consume(a, bag.data[0..])
 }

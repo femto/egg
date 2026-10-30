@@ -37,7 +37,7 @@ fn before(x: Row, y: Row) bool {
     return x.n > y.n or (x.n == y.n and x.word < y.word)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(i64) = .empty
     defer a.free(b)
     for ([6]i64{ 5, 9, 1, 8, 2, 3 }) |x| {
@@ -45,23 +45,23 @@ fn main(out: Io, a: Allocator) void {
     }
     sort.sort(i64, &b[0..])
     for (b) |x| {
-        out.print(x)
+        io.print(x)
     }
-    out.print(sort.is_sorted(i64, b[0..]))
+    io.print(sort.is_sorted(i64, b[0..]))
     sort.reverse(i64, &b[0..])
-    out.print(b[0])
-    out.print(b[5])
+    io.print(b[0])
+    io.print(b[5])
     var arr = [5]u8{ 9, 4, 2, 3, 0 }
     sort.reverse(u8, &arr[1..4])
-    out.print(arr[1])
-    out.print(arr[2])
+    io.print(arr[1])
+    io.print(arr[2])
     var fs = [2]f64{ 2.5, 1.5 }
     sort.sort(f64, &fs[0..])
-    out.print(fs[0])
+    io.print(fs[0])
     var none: Buf(i64) = .empty
     defer a.free(none)
     sort.sort(i64, &none[0..])
-    out.print(@len(none))
+    io.print(@len(none))
     var seed: i64 = 7
     var i = 0
     while (i < 200) {
@@ -70,17 +70,17 @@ fn main(out: Io, a: Allocator) void {
         i = i + 1
     }
     sort.sort(i64, &none[0..])
-    out.print(sort.is_sorted(i64, none[0..]))
+    io.print(sort.is_sorted(i64, none[0..]))
     var words = [3]str{ "pear", "fig", "kiwi" }
     sort.sort(str, &words[0..])
-    out.print(words[0], " ", words[1], " ", words[2])
+    io.print(words[0], " ", words[1], " ", words[2])
     var rows = [3]Row{ Row{ .word = "c", .n = 2 }, Row{ .word = "b", .n = 3 }, Row{ .word = "a", .n = 2 } }
     sort.sort_by(Row, &rows[0..], before)
     for (rows) |r| {
-        out.print(r.word, " ", r.n)
+        io.print(r.word, " ", r.n)
     }
     // the 200 numbers again, descending, then reversed
     sort.sort_by(i64, &none[0..], greater)
     sort.reverse(i64, &none[0..])
-    out.print(sort.is_sorted(i64, none[0..]))
+    io.print(sort.is_sorted(i64, none[0..]))
 }

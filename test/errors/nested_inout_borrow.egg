@@ -12,15 +12,15 @@ fn first(s: []u8, t: str) i64 {
     return @len(s) + @len(t)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     defer a.free(b)
     a.append_str(&b, "ab")
-    out.print(b, grow(a, &b))
-    out.print(b == grow(a, &b))
-    out.print(first(b[0..], grow(a, &b)))
+    io.print(b, grow(a, &b))
+    io.print(b == grow(a, &b))
+    io.print(first(b[0..], grow(a, &b)))
     const n = @len(b) + @len(grow(a, &b))
-    out.print(n)
+    io.print(n)
 }
 // error: E117 @19
 // error: E117 @20

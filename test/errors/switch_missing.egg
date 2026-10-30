@@ -10,6 +10,6 @@ fn f(l: Light) i64 {
     }
     return 0
 }
-fn main(out: Io) void {
-    out.print(f(.red))
+fn main(io: Io) void {
+    io.print(f(.red))
 }

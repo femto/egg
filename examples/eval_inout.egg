@@ -1,7 +1,7 @@
 // Operands run left to right even when a later one changes a variable
 // through an inout argument of a call inside it: x is read before
 // bump(&x) runs, in arguments, arithmetic, struct and array literals,
-// and the values of out.print.
+// and the values of io.print.
 // expect: 12
 // expect: 12
 // expect: 12
@@ -28,19 +28,19 @@ const P = struct {
     }
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var x = 1
-    out.print(two(x, bump(&x)))
+    io.print(two(x, bump(&x)))
     x = 1
-    out.print(x * 10 + bump(&x))
+    io.print(x * 10 + bump(&x))
     x = 1
     const p = P{ .a = x, .b = bump(&x) }
-    out.print(p.a * 10 + p.b)
+    io.print(p.a * 10 + p.b)
     x = 1
     const arr = [2]i64{ x, bump(&x) }
-    out.print(arr[0] * 10 + arr[1])
+    io.print(arr[0] * 10 + arr[1])
     var q = P{ .a = 1, .b = 0 }
-    out.print(q.with(bump(&q.a)))
+    io.print(q.with(bump(&q.a)))
     x = 1
-    out.print(x, " ", bump(&x))
+    io.print(x, " ", bump(&x))
 }

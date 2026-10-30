@@ -5,6 +5,6 @@ uses io
 
 const relay = @import("lib/relay.egg")
 
-fn main(out: Io) void {
-    relay.twice(out)
+fn main(io: Io) void {
+    relay.twice(io)
 }

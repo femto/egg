@@ -1,5 +1,5 @@
 uses io
 
-fn say(out: Io) void {
-    out.print("loud")
+fn say(io: Io) void {
+    io.print("loud")
 }

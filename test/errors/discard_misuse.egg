@@ -8,9 +8,9 @@ fn may(fail: bool) !i64 {
     return 1
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     _ = may(true)
-    _ = out.print(1)
+    _ = io.print(1)
     _ = a.alloc(2, 0)
     var bs: Buf(Buf(i64)) = .empty
     defer a.free(bs)

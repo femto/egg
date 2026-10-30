@@ -17,13 +17,13 @@ fn maybe(a: Allocator) !Buf(i64) {
 fn takes(r: !Buf(i64)) void {
 }
 
-fn main(out: Io, a: Allocator) !void {
-    out.print(@len(make(a)))
+fn main(io: Io, a: Allocator) !void {
+    io.print(@len(make(a)))
     const r = maybe(a)
     const bs: [2]Buf(i64) = @splat(make(a))
     const p = a.create(make(a))
     const nested = a.alloc(2, make(a))
-    out.print(make(a)[0])
+    io.print(make(a)[0])
 }
 
 // error: E133 @5

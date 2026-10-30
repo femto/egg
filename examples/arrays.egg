@@ -69,29 +69,29 @@ fn count_char(s: str, c: i64) i64 {
     return n
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var a = [4]i64{ 5, 9, 2, 7 }
-    out.print(sum(a[0..]))
-    out.print(sum(a[1..3]))
-    out.print(max_index(a[0..]))
+    io.print(sum(a[0..]))
+    io.print(sum(a[1..3]))
+    io.print(max_index(a[0..]))
     bump_all(&a, 10)
-    out.print(a[3])
+    io.print(a[3])
     var x = 1
     var y = 2
     swap(&x, &y)
-    out.print(x * 10 + y)
-    out.print(first_over(a[0..], 16))
+    io.print(x * 10 + y)
+    io.print(first_over(a[0..], 16))
     const zeros: [3]i64 = @splat(0)
-    out.print(sum(zeros[0..]))
+    io.print(sum(zeros[0..]))
     const s = "banana"
-    out.print(count_char(s, 97))
-    out.print(s[1..4])
+    io.print(count_char(s, 97))
+    io.print(s[1..4])
     const words = [_]str{ "egg", "flow" }
     for (words) |w| {
-        out.print(w)
+        io.print(w)
     }
-    out.print(@len(a[1..]))
+    io.print(@len(a[1..]))
     const grid: [
         2]i64 = @splat(1)
-    out.print(@len(grid))
+    io.print(@len(grid))
 }

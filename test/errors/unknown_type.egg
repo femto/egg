@@ -1,9 +1,9 @@
 // error: E108 @4
 uses io
 
-fn f(out: Io, a: byte) void {
-    out.print(a)
+fn f(io: Io, a: byte) void {
+    io.print(a)
 }
-fn main(out: Io) void {
-    f(out, 1)
+fn main(io: Io) void {
+    f(io, 1)
 }

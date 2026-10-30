@@ -33,17 +33,17 @@ fn sfirst(s: []u8, n: i64) i64 {
     return @as(i64, s[0]) + n
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     a.push(&b, 42)
     var s = S{ .b = .empty }
     a.push(&s.b, 7)
-    out.print(first(b, eat(a, b)))
-    out.print(sfirst(b[0..], id(eat(a, b))))
-    out.print(b, eat(a, b))
-    out.print(first(s.b, eats(a, s)))
-    out.print(s.get(eats(a, s)))
-    out.print(first(s.b, eat(a, s.b)))
+    io.print(first(b, eat(a, b)))
+    io.print(sfirst(b[0..], id(eat(a, b))))
+    io.print(b, eat(a, b))
+    io.print(first(s.b, eats(a, s)))
+    io.print(s.get(eats(a, s)))
+    io.print(first(s.b, eat(a, s.b)))
 }
 // error: E117 @41
 // error: E117 @42

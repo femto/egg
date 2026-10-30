@@ -43,9 +43,9 @@ fn classify(n: i64) i64 {
     }
 }
 
-fn main(out: Io) void {
-    out.print(sum_to(100))
-    out.print(fib_iter(10))
-    out.print(is_even(42) and !is_even(7))
-    out.print(classify(9))
+fn main(io: Io) void {
+    io.print(sum_to(100))
+    io.print(fib_iter(10))
+    io.print(is_even(42) and !is_even(7))
+    io.print(classify(9))
 }

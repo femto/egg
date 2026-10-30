@@ -30,7 +30,7 @@ fn multiply(a: Allocator, x: Buf(i64), y: Buf(i64), n: i64) Buf(i64) {
     return z
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const n = 800
     var x = a.alloc(n * n, 0)
     fill(&x, n, 3)
@@ -42,5 +42,5 @@ fn main(out: Io, a: Allocator) void {
         sum = (sum + v) % 1000000007
     }
     a.free(z)
-    out.print(sum)
+    io.print(sum)
 }

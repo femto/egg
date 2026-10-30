@@ -2,6 +2,6 @@
 // io is declared, alloc is not.
 uses io
 
-fn main(out: Io, a: Allocator) void {
-    out.print(a.int_str(5))
+fn main(io: Io, a: Allocator) void {
+    io.print(a.int_str(5))
 }

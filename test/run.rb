@@ -210,12 +210,12 @@ def check_lsp_catch
 
     fn f() !i64 { return error.Bad }
 
-    fn main(out: Io) void {
+    fn main(io: Io) void {
         const v = f() catch |e| {
-            out.print(@errorName(e))
+            io.print(@errorName(e))
             return
         }
-        out.print(v)
+        io.print(v)
     }
   EGG
   doc = { "uri" => uri }
@@ -258,11 +258,11 @@ def check_fs_errors(dir)
         // expect: PermissionDenied
         uses alloc, fs, io
 
-        fn main(out: Io, files: Fs, a: Allocator) void {
+        fn main(io: Io, files: Fs, a: Allocator) void {
             const b = files.read(a, "locked.txt") catch |e| {
-                out.print(@errorName(e))
+                io.print(@errorName(e))
                 files.write("keep.txt", "new") catch |e2| {
-                    out.print(@errorName(e2))
+                    io.print(@errorName(e2))
                 }
                 return
             }
@@ -282,9 +282,9 @@ def check_fs_errors(dir)
     // expect: IoFailed
     uses fs, io
 
-    fn main(out: Io, files: Fs) void {
+    fn main(io: Io, files: Fs) void {
         files.write("/dev/full", "data") catch |e| {
-            out.print(@errorName(e))
+            io.print(@errorName(e))
         }
     }
   EGG
@@ -296,17 +296,17 @@ def check_args(dir)
   src = <<~EGG
     uses args, io
 
-    fn main(out: Io, args: Args) void {
+    fn main(io: Io, args: Args) void {
         var i = 1
         while (i < args.len()) {
-            out.print("[", args.get(i), "]")
+            io.print("[", args.get(i), "]")
             i = i + 1
         }
-        out.eprint("to stderr ", args.len())
+        io.eprint("to stderr ", args.len())
         if (@len(args.get(0)) == 0) {
-            out.print("no name")
+            io.print("no name")
         }
-        out.print("after")
+        io.print("after")
     }
   EGG
   path = File.join(dir, "args_run.egg")
@@ -322,10 +322,10 @@ def check_args(dir)
   File.write(order, <<~EGG)
     uses io
 
-    fn main(out: Io) void {
-        out.print("first")
-        out.eprint("second")
-        out.print("third")
+    fn main(io: Io) void {
+        io.print("first")
+        io.eprint("second")
+        io.print("third")
     }
   EGG
   out, status = Open3.capture2e(*eggc_command, "run", order)
@@ -342,13 +342,13 @@ def check_stdin(dir)
   File.write(lines, <<~EGG)
     uses alloc, io
 
-    fn main(out: Io, a: Allocator) !void {
+    fn main(io: Io, a: Allocator) !void {
         var line: Buf(u8) = .empty
         defer a.free(line)
-        while (try out.read_line(a, &line)) {
-            out.print("[", line, "]")
+        while (try io.read_line(a, &line)) {
+            io.print("[", line, "]")
         }
-        out.print("end ", @len(line))
+        io.print("end ", @len(line))
     }
   EGG
   [["one\ntwo\n", %w[[one] [two] end\ 0]],
@@ -365,14 +365,14 @@ def check_stdin(dir)
   File.write(all, <<~EGG)
     uses alloc, io
 
-    fn main(out: Io, a: Allocator) !void {
-        const data = try out.read_all(a)
+    fn main(io: Io, a: Allocator) !void {
+        const data = try io.read_all(a)
         defer a.free(data)
         var sum = 0
         for (data) |b| {
             sum = sum + @as(i64, b)
         }
-        out.print(@len(data), " ", sum)
+        io.print(@len(data), " ", sum)
     }
   EGG
   # Long enough to grow the buffer; \r\n and Ctrl-Z change in text mode.
@@ -385,12 +385,12 @@ def check_stdin(dir)
   File.write(prompt, <<~EGG)
     uses alloc, io
 
-    fn main(out: Io, a: Allocator) !void {
-        out.print("name?")
+    fn main(io: Io, a: Allocator) !void {
+        io.print("name?")
         var line: Buf(u8) = .empty
         defer a.free(line)
-        if (try out.read_line(a, &line)) {
-            out.print("hello ", line)
+        if (try io.read_line(a, &line)) {
+            io.print("hello ", line)
         }
     }
   EGG
@@ -466,11 +466,11 @@ def check_lsp_v1
         }
     }
 
-    fn main(out: Io) void {
+    fn main(io: Io) void {
         var p = Point{ .x = 1 }
         p.bump()
         for ([2]i64{ 1, 2 }) |v| {
-            out.print(v + p.x)
+            io.print(v + p.x)
         }
     }
   EGG
@@ -526,12 +526,12 @@ def check_lsp_generics
         }
     }
 
-    fn main(out: Io) void {
+    fn main(io: Io) void {
         const p = Pair(i64){ .a = 1, .b = 2 }
         const q: Pair(i64) = p.swap()
-        out.print(q.a + area(.empty))
+        io.print(q.a + area(.empty))
         for ([2]i64{ 3, 4 }) |_, i| {
-            out.print(i)
+            io.print(i)
         }
     }
   EGG
@@ -546,7 +546,7 @@ def check_lsp_generics
     { "id" => 5, "method" => "textDocument/definition", "params" => at.(15, 11) }, # s: Shape
     { "id" => 6, "method" => "textDocument/definition", "params" => at.(28, 13) }, # q: Pair(i64)
     { "id" => 7, "method" => "textDocument/definition", "params" => at.(18, 19) }, # r in r * r
-    { "id" => 8, "method" => "textDocument/definition", "params" => at.(31, 18) }, # i in out.print(i)
+    { "id" => 8, "method" => "textDocument/definition", "params" => at.(31, 18) }, # i in io.print(i)
     { "id" => 9, "method" => "textDocument/definition", "params" => at.(30, 26) }, # the _ binding
     { "id" => 10, "method" => "shutdown" },
     { "method" => "exit" }
@@ -589,12 +589,12 @@ def check_lsp_modules
   replies, diags, status, err = lsp_session(req)
   report(diags[0] == [], "lsp resolves imports next to the file", diags[0].inspect)
   hover = replies.dig(3, "result", "contents", "value").to_s.lines[1].to_s.strip
-  report(hover == "fn main(out: Io) void  // uses io", "lsp hover shows capabilities despite E130", hover.inspect)
+  report(hover == "fn main(io: Io) void  // uses io", "lsp hover shows capabilities despite E130", hover.inspect)
   at = ->(id) { replies.dig(id, "result", "contents", "value").to_s.lines[1].to_s.strip }
   report(at.(4) == "extern fn toupper(c: i32) i32  // allow unsafe" && at.(5) == "fn upper(b: u8) u8  // allow unsafe",
          "lsp hover marks extern fns and unsafe files", [at.(4), at.(5)].inspect)
   d = diags[1]&.first
-  ok = d && d["code"] == "E130" && d["range"]["start"] == { "line" => 0, "character" => 0 } && d["message"].include?("lib/quiet_print.egg:3:9: ")
+  ok = d && d["code"] == "E130" && d["range"]["start"] == { "line" => 0, "character" => 0 } && d["message"].include?("lib/quiet_print.egg:3:8: ")
   report(ok, "lsp shows an error in an imported file at the top", diags[1].inspect)
   report(status.success? && err.empty?, "lsp modules session ends cleanly", err)
 end
@@ -658,11 +658,11 @@ def check_lsp_pointers
     uses io
     allow unsafe
 
-    fn main(out: Io) void {
+    fn main(io: Io) void {
         var x = 1
         const p = &x
-        defer out.print(p.* + 1)
-        out.print(p == null)
+        defer io.print(p.* + 1)
+        io.print(p == null)
         x = 2
     }
   EGG
@@ -716,10 +716,10 @@ def check_lsp
         return a + b
     }
 
-    fn main(out: Io) void {
+    fn main(io: Io) void {
         var total = 0
         total = add(total, 2)
-        out.print(total + @len("x"))
+        io.print(total + @len("x"))
     }
   EGG
   doc = { "uri" => uri }
@@ -729,7 +729,7 @@ def check_lsp
     { "id" => 1, "method" => "initialize", "params" => {} },
     { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
     { "id" => 2, "method" => "textDocument/definition", "params" => at.(8, 13) },  # add( in main
-    { "id" => 3, "method" => "textDocument/definition", "params" => at.(9, 14) },  # total in out.print
+    { "id" => 3, "method" => "textDocument/definition", "params" => at.(9, 14) },  # total in io.print
     { "id" => 4, "method" => "textDocument/definition", "params" => at.(8, 4) },   # total = ...
     { "id" => 5, "method" => "textDocument/definition", "params" => at.(3, 11) },  # a in add
     { "id" => 6, "method" => "textDocument/definition", "params" => at.(9, 23) },  # @len: nothing
@@ -753,7 +753,7 @@ def check_lsp
   report(start.(5) == [2, 7], "lsp definition of a parameter", start.(5).inspect)
   report(replies.key?(6) && result.(6).nil?, "lsp definition on a builtin is empty", replies[6].inspect)
   report(hover.(7) == "fn add(a: i64, b: i64) i64" && hover.(8) == "var total: i64", "lsp hover", [hover.(7), hover.(8)].inspect)
-  report(hover.(12) == "fn main(out: Io) void  // uses io", "lsp hover shows the capabilities a function uses", hover.(12).inspect)
+  report(hover.(12) == "fn main(io: Io) void  // uses io", "lsp hover shows the capabilities a function uses", hover.(12).inspect)
   names = (result.(9) || []).map { |sym| sym["name"] }
   report(names == %w[add main], "lsp document symbols", names.inspect)
   codes = diags.map { |ds| ds.map { |d| d["code"] } }

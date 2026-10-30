@@ -3,6 +3,6 @@ uses io
 
 const quiet = @import("lib/quiet_print.egg")
 
-fn main(out: Io) void {
-    quiet.shout(out)
+fn main(io: Io) void {
+    quiet.shout(io)
 }

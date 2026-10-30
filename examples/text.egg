@@ -39,27 +39,27 @@ fn join(a: Allocator, xs: []i64, sep: []u8) Buf(u8) {
     return b
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var line: Buf(u8) = .empty
     defer a.free(line)
     a.append_str(&line, "id=")
     a.append_int(&line, 7)
     a.append_str(&line, ", score=")
     a.append_float(&line, 91.5)
-    out.print(line)
-    out.print(@len(line))
-    out.print(count(line, 61))
-    out.print(count("a=b=c=", 61))
-    out.print(count("a=b=c="[0..4], 61))
-    out.print(line[0..4] == "id=7")
-    out.print(line != "id=7")
-    out.print(line == "")
+    io.print(line)
+    io.print(@len(line))
+    io.print(count(line, 61))
+    io.print(count("a=b=c=", 61))
+    io.print(count("a=b=c="[0..4], 61))
+    io.print(line[0..4] == "id=7")
+    io.print(line != "id=7")
+    io.print(line == "")
     const nums = [5]i64{ 1, 2, 3, 4, 5 }
     const csv = join(a, nums[0..], ",")
     defer a.free(csv)
-    out.print(csv)
+    io.print(csv)
     // A str that outlives line: copied into the program's arena.
     const kept = a.concat(line[0..4], "!")
-    out.print(kept)
-    out.print(line[6..])
+    io.print(kept)
+    io.print(line[6..])
 }

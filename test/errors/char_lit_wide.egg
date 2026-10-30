@@ -2,6 +2,6 @@
 // A character of several UTF-8 bytes is not one byte.
 uses io
 
-fn main(out: Io) void {
-    out.print('é')
+fn main(io: Io) void {
+    io.print('é')
 }

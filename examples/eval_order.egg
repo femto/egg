@@ -10,23 +10,23 @@
 
 uses io
 
-fn one(out: Io) i64 {
-    out.print(1)
+fn one(io: Io) i64 {
+    io.print(1)
     return 1
 }
 
-fn two(out: Io) i64 {
-    out.print(2)
+fn two(io: Io) i64 {
+    io.print(2)
     return 2
 }
 
-fn show(out: Io, a: i64, b: i64) i64 {
-    out.print(a * 10)
-    out.print(b * 10)
+fn show(io: Io, a: i64, b: i64) i64 {
+    io.print(a * 10)
+    io.print(b * 10)
     return a + b
 }
 
-fn main(out: Io) void {
-    out.print(one(out) + two(out))
-    out.print(show(out, one(out) - 0, two(out) * 1) * 10)
+fn main(io: Io) void {
+    io.print(one(io) + two(io))
+    io.print(show(io, one(io) - 0, two(io) * 1) * 10)
 }

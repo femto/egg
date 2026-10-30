@@ -1,7 +1,7 @@
 # Capability check (design rule 1 and 2).
 #
 # A function uses a capability directly when it calls a method of a
-# capability value (`out.print(x)` uses io, `a.concat(s, t)` uses alloc)
+# capability value (`io.print(x)` uses io, `a.concat(s, t)` uses alloc)
 # or is an `extern fn ... uses io`, and indirectly when it calls a
 # function that uses it, or takes a function as a value. The type checker
 # records both per function (Sig#direct, Sig#calls); this pass closes them

@@ -2,7 +2,7 @@
 uses io
 
 const U = union(enum) { a: i64, b }
-fn main(out: Io) void {
+fn main(io: Io) void {
     const u = U{ .a = 1 }
-    out.print(u.a)
+    io.print(u.a)
 }

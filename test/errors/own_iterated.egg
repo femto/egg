@@ -6,7 +6,7 @@ fn grow(a: Allocator, inout b: Buf(i64)) void {
     a.resize(&b, n + 1, 0)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b = a.alloc(3, 1)
     for (b) |x, i| {
         b[i] = x + 1
@@ -17,7 +17,7 @@ fn main(out: Io, a: Allocator) void {
         }
     }
     for (b[0..2]) |x| {
-        out.print(x)
+        io.print(x)
         const n = @len(b)
         a.resize(&b, n, 0)
     }

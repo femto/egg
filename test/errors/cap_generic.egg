@@ -3,6 +3,6 @@ uses io
 
 const g = @import("lib/emit.egg")
 
-fn main(out: Io) void {
-    g.emit(Io, out, 1)
+fn main(io: Io) void {
+    g.emit(Io, io, 1)
 }

@@ -2,17 +2,17 @@
 // integer amount, and a literal one must be below the width.
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x: u8 = 1
-    out.print(x << 8)
-    out.print(x >> -1)
-    out.print(1.5 & 2)
-    out.print(~true)
-    out.print(x & @as(u16, 1))
-    out.print(1 << 2.0)
-    out.print("a" | "b")
+    io.print(x << 8)
+    io.print(x >> -1)
+    io.print(1.5 & 2)
+    io.print(~true)
+    io.print(x & @as(u16, 1))
+    io.print(1 << 2.0)
+    io.print("a" | "b")
     const y: u8 = 0x100
-    out.print(y)
+    io.print(y)
 }
 // error: E003 @7
 // error: E003 @8

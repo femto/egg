@@ -29,9 +29,9 @@ fn unused_helper() i64 {
     return 1
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const n = Box(i64){ .a = 7, .b = 3 }
-    out.print(n.bigger())
+    io.print(n.bigger())
     const t = Box(Tag){ .a = .first, .b = .second }
-    out.print(t.last())
+    io.print(t.last())
 }

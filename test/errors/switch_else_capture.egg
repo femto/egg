@@ -2,13 +2,13 @@
 uses io
 
 const Color = enum { red, green }
-fn main(out: Io) void {
+fn main(io: Io) void {
     const c = Color.green
     switch (c) {
         .red => {
         }
         else => |x| {
-            out.print(x)
+            io.print(x)
         }
     }
 }

@@ -53,12 +53,12 @@ fn maybe(a: Allocator) !Buf(i64) {
     return a.alloc(1, 0)
 }
 
-fn main(out: Io, a: Allocator) !void {
+fn main(io: Io, a: Allocator) !void {
     const p = pick(a, a.alloc(2, 0), Mode.keep)
-    out.print(@len(p))
+    io.print(@len(p))
     a.free(p)
     uneven(a, Mode.drop)
-    out.print(rescue(a))
+    io.print(rescue(a))
     const e = try either(a)
     a.free(e)
 }

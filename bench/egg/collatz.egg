@@ -15,7 +15,7 @@ fn steps(start: i64) i64 {
     return s
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var best = 0
     var best_n = 0
     var i = 1
@@ -27,6 +27,6 @@ fn main(out: Io) void {
         }
         i = i + 1
     }
-    out.print(best_n)
-    out.print(best)
+    io.print(best_n)
+    io.print(best)
 }

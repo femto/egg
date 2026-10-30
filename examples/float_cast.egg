@@ -3,8 +3,8 @@
 // panic: float cast out of range
 uses io
 
-fn main(out: Io) void {
-    out.print(@as(i8, 127.99))
+fn main(io: Io) void {
+    io.print(@as(i8, 127.99))
     const x = 128.0
-    out.print(@as(i8, x))
+    io.print(@as(i8, x))
 }

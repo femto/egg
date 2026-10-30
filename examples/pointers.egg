@@ -59,35 +59,35 @@ fn two(a: i64, b: i64) i64 {
     return a * 10 + b
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var list: *Node = null
     list = push(a, list, 1)
     list = push(a, list, 2)
     list = push(a, list, 3)
-    out.print(sum(list))
+    io.print(sum(list))
     var x = 41
     bump(&x)
-    out.print(x)
+    io.print(x)
     var arr = [3]i64{ 10, 20, 30 }
     const q = &arr[0]
-    out.print(@ptrAdd(q, 2).*)
+    io.print(@ptrAdd(q, 2).*)
     // Through a *u8 and back: which byte r points to depends on the
     // machine's byte order, so only read it as the i64 it is.
     const r: *u8 = @ptrCast(*u8, q)
-    out.print(@ptrCast(*i64, r).*)
+    io.print(@ptrCast(*i64, r).*)
     const back = @ptrFromInt(*i64, @intFromPtr(q))
-    out.print(back.* + arr[1])
+    io.print(back.* + arr[1])
     list.*.next.*.value = 100
-    out.print(sum(list))
+    io.print(sum(list))
     const p = a.create(Point{ .x = 1, .y = 2 })
     p.*.move(10)
-    out.print(p.*.sum())
-    out.print(null == p)
+    io.print(p.*.sum())
+    io.print(null == p)
     // A write through a pointer (&r.*) runs after the read of r.* to its
     // left, as with &x.
     var y = 1
     const ry = &y
-    out.print(two(ry.*, inc(&ry.*)))
+    io.print(two(ry.*, inc(&ry.*)))
     y = 1
-    out.print(ry.*, " ", inc(&ry.*))
+    io.print(ry.*, " ", inc(&ry.*))
 }

@@ -16,18 +16,18 @@ fn mk(a: Allocator) List {
     return List{ .data = a.alloc(1, 0), .len = 0 }
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var k = mk(a)
     k.grow(a, k.data[0..])
     k.grow(a, k.data[k.len..@len(k.data)])
     const ls = a.alloc(2, mk(a))
     a.free(ls)
-    out.print(mk(a).len)
+    io.print(mk(a).len)
     a.free(@take(&k.len))
     a.free(@replace(k.data, Buf(i64).empty))
     a.free(@replace(&k.data, Buf(u8).empty))
-    out.print(@len(Buf(i64).nothing))
-    out.print(k == k)
+    io.print(@len(Buf(i64).nothing))
+    io.print(k == k)
     a.free(k)
 }
 

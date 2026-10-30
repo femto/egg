@@ -4,6 +4,6 @@ uses io
 fn sum(xs: []i64) i64 {
     return @len(xs)
 }
-fn main(out: Io) void {
-    out.print(sum([2]i64{ 1, 2 }))
+fn main(io: Io) void {
+    io.print(sum([2]i64{ 1, 2 }))
 }

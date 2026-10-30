@@ -1,6 +1,6 @@
 // error: E130 @5
 // main prints without declaring io.
-fn main(out: Io) void {
+fn main(io: Io) void {
     const n = 1
-    out.print(n)
+    io.print(n)
 }

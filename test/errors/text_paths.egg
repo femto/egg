@@ -2,14 +2,14 @@
 // no use after it is freed.
 uses io, alloc
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     a.append_str(&b, "x")
     for (b) |ch| {
         a.append_int(&b, ch)
     }
     a.free(b)
-    out.print(b)
+    io.print(b)
 }
 
 // error: E137 @9

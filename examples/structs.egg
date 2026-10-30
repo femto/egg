@@ -44,18 +44,18 @@ fn describe(c: Color) str {
     return "cool"
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var p = Point.origin()
     p.move(3, 4)
-    out.print(p.len2())
+    io.print(p.len2())
     var px = Pixel{ .at = p, .color = .blue, .name = "corner" }
     px.at.x = 10
-    out.print(px.at.x)
-    out.print(p.x)
-    out.print(px.color)
-    out.print(describe(px.color))
-    out.print(px.name)
-    out.print(px.color == Color.blue)
-    out.print("hi" == "hi")
-    out.print(@len(px.name))
+    io.print(px.at.x)
+    io.print(p.x)
+    io.print(px.color)
+    io.print(describe(px.color))
+    io.print(px.name)
+    io.print(px.color == Color.blue)
+    io.print("hi" == "hi")
+    io.print(@len(px.name))
 }

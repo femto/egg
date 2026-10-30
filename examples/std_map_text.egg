@@ -16,7 +16,7 @@ uses io, alloc
 
 const map = @import("std/map")
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var counts = map.HashMap(Buf(u8), i64).init()
     defer a.free(counts)
     // Words cut out of one line, counted without a str per word.
@@ -31,30 +31,30 @@ fn main(out: Io, a: Allocator) void {
         }
         i = i + 1
     }
-    out.print(counts.count())
+    io.print(counts.count())
     for (counts.entries) |e| {
         var row: Buf(u8) = .empty
         defer a.free(row)
         a.append_str(&row, e.key)
         a.append_str(&row, " ")
         a.append_int(&row, e.val)
-        out.print(row)
+        io.print(row)
     }
-    out.print(counts.get_text("apple") orelse 0)
+    io.print(counts.get_text("apple") orelse 0)
     var key: Buf(u8) = .empty
     defer a.free(key)
     a.append_str(&key, "fig")
-    out.print(counts.contains_text(key))
-    out.print(counts.contains_text("kiwi"))
+    io.print(counts.contains_text(key))
+    io.print(counts.contains_text("kiwi"))
     counts.put_text(a, "pear", 1)
     _ = counts.remove_text(a, "apple")
-    out.print(counts.count())
+    io.print(counts.count())
     for (counts.entries) |e| {
         var row: Buf(u8) = .empty
         defer a.free(row)
         a.append_str(&row, e.key)
         a.append_str(&row, " ")
         a.append_int(&row, e.val)
-        out.print(row)
+        io.print(row)
     }
 }

@@ -27,12 +27,12 @@ fn first(a: Allocator, xs: []i64) void {
     }
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     maybe_free(a, a.alloc(1, 0), true)
     each(a, 2)
     const xs = [3]i64{ 1, 2, 3 }
     first(a, xs[0..])
-    out.print(1)
+    io.print(1)
 }
 
 // error: E134 @6

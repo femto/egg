@@ -1,7 +1,7 @@
 // error: E002 @5
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a = [2]i64{ 1 2 }
-    out.print(a[0])
+    io.print(a[0])
 }

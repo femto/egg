@@ -15,11 +15,11 @@ fn add(x: i64, y: i64) i64 {
     return x + y
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     a.push(&b, 42)
-    out.print(add(@as(i64, b[0]) + @len(b), eat(a, b)))
+    io.print(add(@as(i64, b[0]) + @len(b), eat(a, b)))
     var c: Buf(u8) = .empty
     a.append_str(&c, "abc")
-    out.print(add(0, eat(a, c)))
+    io.print(add(0, eat(a, c)))
 }

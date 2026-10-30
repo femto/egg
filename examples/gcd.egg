@@ -15,10 +15,10 @@ fn gcd(a: i64, b: i64) i64 {
     return x
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const g = gcd(1071,
                   462)
-    out.print(g)
-    out.print(g > 100 or
+    io.print(g)
+    io.print(g > 100 or
            g < 0)
 }

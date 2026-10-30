@@ -11,13 +11,13 @@ fn give(a: Allocator, sink b: Buf(u8)) void {
     a.free(b)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var bs = a.alloc(2, Buf(u8).empty)
     defer a.free(bs)
     give(a, bs[0])
     bs[1] = a.alloc(3, 0)
     const first = bs[0]
-    out.print(@len(bs[0]) + @len(first))
+    io.print(@len(bs[0]) + @len(first))
     a.free(first)
     for (bs) |b, i| {
         give(a, b)
@@ -26,7 +26,7 @@ fn main(out: Io, a: Allocator) void {
     var ls: [2]List = @splat(List{ .data = Buf(i64).empty, .len = 0 })
     defer a.free(ls)
     const d = ls[0].data
-    out.print(@len(d))
+    io.print(@len(d))
     a.free(d)
     ls[1].data = a.alloc(1, 0)
     ls[1].len = 1
