@@ -11,6 +11,7 @@
 // expect: 2
 // expect: 3 pear
 // expect: 1
+// expect: 6
 // expect: 3
 uses io, alloc
 
@@ -46,9 +47,21 @@ fn Pool(comptime T: type) type {
     return struct {
         items: Buf(T)
 
-        // A method may name the alias of its own type.
-        fn count(self: Boxes) i64 {
+        fn count(self: Pool(T)) i64 {
             return @len(self.items)
+        }
+    }
+}
+
+// A type function's method may name the alias of its own type.
+const Tag = Tagged()
+
+fn Tagged() type {
+    return struct {
+        n: i64
+
+        fn get(self: Tag) i64 {
+            return self.n
         }
     }
 }
@@ -101,6 +114,7 @@ fn main(out: Io, a: Allocator) void {
     defer a.free(boxes)
     a.push(&boxes.items, 9)
     out.print(boxes.count())
+    out.print(Tag{ .n = 6 }.get())
     var root = Node{ .v = 1, .kids = .empty }
     defer a.free(root)
     a.push(&root.kids, Node{ .v = 2, .kids = .empty })
