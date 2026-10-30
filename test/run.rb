@@ -232,7 +232,7 @@ end
 def check_lsp_alias
   uri = "file:///t/a.egg"
   src = <<~EGG
-    const Op = fn(i64, Buf(u8)) i64
+    const Op = fn(i64, Buf(u8)) ?i64
     const Id = i64
 
     fn main() Id {
@@ -253,12 +253,14 @@ def check_lsp_alias
   ]
   replies, diags, status, err = lsp_session(req)
   hover = ->(id) { replies.dig(id, "result", "contents", "value").to_s }
-  range = replies[5]["result"].find { |s| s["name"] == "Op" }&.dig("range", "end")
+  op = replies[5]["result"].find { |s| s["name"] == "Op" }
+  range = op&.dig("range", "end")
   report(diags.first == [], "lsp alias source has no errors", diags.first.inspect)
   report(replies.dig(2, "result", "range", "start", "line") == 1, "lsp definition of a type alias", replies[2].inspect)
   report(hover.(3).include?("const Id = i64"), "lsp hover on a type alias", hover.(3))
-  report(hover.(4).include?("const Op = fn(i64, Buf(u8)) i64"), "lsp hover spells out the aliased type", hover.(4))
-  report(range == { "line" => 0, "character" => 31 }, "lsp alias symbol ends with its type", range.inspect)
+  report(hover.(4).include?("const Op = fn(i64, Buf(u8)) ?i64"), "lsp hover spells out the aliased type", hover.(4))
+  report(range == { "line" => 0, "character" => 32 }, "lsp alias symbol ends with its type", range.inspect)
+  report(op&.fetch("kind") == 11, "lsp outline gives an alias its own symbol kind", op.inspect)
   report(status.success? && err.empty?, "lsp alias session ends cleanly", err)
 end
 

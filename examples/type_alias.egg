@@ -5,6 +5,7 @@
 // expect: 7
 // expect: 12
 // expect: 15
+// expect: 104
 // expect: 5
 // expect: 42
 // expect: 2
@@ -45,7 +46,8 @@ fn Pool(comptime T: type) type {
     return struct {
         items: Buf(T)
 
-        fn count(self: Pool(T)) i64 {
+        // A method may name the alias of its own type.
+        fn count(self: Boxes) i64 {
             return @len(self.items)
         }
     }
@@ -82,6 +84,7 @@ fn main(out: Io, a: Allocator) void {
     defer a.free(counts)
     counts.put_text(a, b, 15)
     out.print(counts.get_text(b) orelse 0)
+    out.print(first(b))
 
     const none: MaybeId = null
     out.print(none orelse 5)

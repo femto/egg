@@ -979,10 +979,12 @@ module Egg
       info.fn_line = f.line
       info.return_line = body[0].line
       outside_aliases { with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) } }
-      in_module(f.mod) do
-        st.fns.each do |m|
-          m.owner = canon
-          add_method(canon, m, tenv, canon, false)
+      outside_aliases do
+        in_module(f.mod) do
+          st.fns.each do |m|
+            m.owner = canon
+            add_method(canon, m, tenv, canon, false)
+          end
         end
       end
       canon

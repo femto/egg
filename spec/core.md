@@ -265,7 +265,8 @@ type carries over, so an alias of an owned struct can no more build one
 than any other file can (E142).
 
 A literal may use an alias of a struct or union (`Dot{ .x = 1, .y = 2 }`),
-but an array literal is always written `[N]T{ ... }`. An alias cannot take
+but an array literal is always written `[N]T{ ... }` or `[_]T{ ... }`: an
+alias cannot stand for that prefix. An alias cannot take
 type parameters: use a type function (section 14). Aliases that go round in
 a circle are E119; a struct may reach itself through one
 (`const Kids = Buf(Node)`, with `kids: Kids` in `Node`).

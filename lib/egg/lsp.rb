@@ -203,7 +203,6 @@ module Egg
         @tokens[i]
       end
 
-      # The '}' that closes the body of the function whose 'fn' is token i.
       # The tokens of an alias's type, from its first token to the end of
       # the statement.
       def alias_tokens(i)
@@ -224,12 +223,14 @@ module Egg
         s = +""
         toks.each_with_index do |t, i|
           prev = i.zero? ? nil : toks[i - 1]
-          s << " " if !prev.nil? && (prev.text == "," || (prev.text == ")" && t.kind == :ident))
+          # After ")" a space starts a function type's result.
+          s << " " if !prev.nil? && (prev.text == "," || (prev.text == ")" && ![")", ",", "]"].include?(t.text)))
           s << (t.kind == :builtin ? "@#{t.text}" : t.text)
         end
         s
       end
 
+      # The '}' that closes the body of the function whose 'fn' is token i.
       def closing_brace(i)
         i += 1 until @tokens[i].kind == :op && @tokens[i].text == "{"
         depth = 0
@@ -454,7 +455,7 @@ module Egg
     # JSON-RPC over stdio, one file at a time (v0 programs are one file).
     class Server
       # LSP SymbolKind values.
-      SYMBOL_KINDS = { fn: 12, method: 6, struct: 23, union: 23, enum: 10 }.freeze
+      SYMBOL_KINDS = { fn: 12, method: 6, struct: 23, union: 23, enum: 10, alias: 11 }.freeze
 
       def initialize(input = $stdin, output = $stdout)
         @in = input
