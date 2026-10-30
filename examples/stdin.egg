@@ -1,0 +1,16 @@
+// Standard input, line by line: a line goes into one buffer that is used
+// again for the next, so the loop allocates only when a line is the longest
+// yet. Try it: printf 'one\n\ntwo' | eggc run examples/stdin.egg
+// expect: 0 lines
+uses alloc, io
+
+fn main(out: Io, a: Allocator) !void {
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    var n = 0
+    while (try out.read_line(a, &line)) {
+        n = n + 1
+        out.print(n, ": ", line)
+    }
+    out.print(n, " lines")
+}

@@ -1,0 +1,15 @@
+// The path is computed by a call, so the allocator before it is evaluated first.
+// expect: NotFound
+uses alloc, fs, io
+
+fn path(a: Allocator) str {
+    return a.str("/nonexistent/egg/file")
+}
+
+fn main(out: Io, files: Fs, a: Allocator) void {
+    const b = files.read(a, path(a)) catch |e| {
+        out.print(@errorName(e))
+        return
+    }
+    a.free(b)
+}
