@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Windows is new: it reports what fails without blocking a merge.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CC: ${{ matrix.os == 'windows-latest' && 'gcc' || 'cc' }}
+    steps:
+      # The tests compare exact source lines, so no CRLF on checkout.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - run: cc --version || gcc --version
+        shell: bash
+      - run: ruby test/run.rb
