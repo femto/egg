@@ -2,7 +2,7 @@
 
 This is the complete definition of the v2 core: the v1 language plus
 integer types of every width (section 7), modules (section 16), the `io`,
-`fs` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
+`args`, `fs` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
 (section 18), function values (section 19), `extern fn` (section 20), and
 owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
