@@ -1,0 +1,5 @@
+const Conn = owned struct { v: i64 }
+
+fn open() Conn {
+    return Conn{ .v = 1 }
+}

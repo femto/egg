@@ -18,7 +18,7 @@ required output; `// error: CODE` means it must fail with that code;
 
 A program is a root file plus the files it imports (section 16). A file
 holds, in any order, functions, type declarations (`const Name = struct /
-enum / union(enum) { ... }`), imports (`const m = @import("m.egg")`) and
+enum / union(enum) { ... }`), type aliases (`const Name = T`), imports (`const m = @import("m.egg")`) and
 `uses` lines naming the capabilities it needs (section 17). Every function
 can call every other function of its file, including itself.
 
@@ -215,6 +215,68 @@ fn main(out: Io) void {
         const x = 2    // shadows the outer x
         out.print(x)
     }
+}
+```
+
+### Type aliases
+
+`const Name = T` at the top level of a file gives the type `T` a second
+name. `T` is any type, and it means what it means where the alias is
+written, wherever the alias is used. Aliases are visible everywhere in
+their file and through an import, like types.
+
+```egg
+// expect: 3 2
+// expect: 7
+uses io, alloc
+
+const Bytes = Buf(u8)
+const Id = i64
+const Op = fn(i64, i64) i64
+const Dot = Point              // may come before what it names
+const Point = struct {
+    x: i64
+    y: i64
+
+    fn sum(self: Point) i64 {
+        return self.x + self.y
+    }
+}
+
+fn add(x: i64, y: i64) i64 {
+    return x + y
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Bytes = .empty
+    defer a.free(b)
+    a.push(&b, 1)
+    a.push(&b, 2)
+    const f: Op = add
+    const n: Id = f(1, 2)
+    out.print(n, " ", @len(b))
+    out.print(Dot{ .x = 3, .y = 4 }.sum())
+}
+```
+
+An alias is the same type, not a new one: a value of `Id` is an `i64`, they
+mix without `@as`, and messages name the type itself. Everything about the
+type carries over, so an alias of an owned struct can no more build one
+than any other file can (E142).
+
+A literal may use an alias of a struct or union (`Dot{ .x = 1, .y = 2 }`),
+but an array literal is always written `[N]T{ ... }`. An alias cannot take
+type parameters: use a type function (section 14). Aliases that go round in
+a circle are E119; a struct may reach itself through one
+(`const Kids = Buf(Node)`, with `kids: Kids` in `Node`).
+
+```egg
+// error: E119
+const A = B
+const B = A
+
+fn main() i64 {
+    return 0
 }
 ```
 
@@ -2007,7 +2069,9 @@ fn main(out: Io, a: Allocator) void {
 Closures, unwrapping an optional by capture (`if (x) |v|`, `while (x)
 |v|`) or `x.?`, optional owned fields (`?Db` in a struct), many-item
 pointers, reflection beyond
-`@sizeOf`/`@typeName`, private (non-`pub`) names, and capabilities other
+`@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
+over an existing one; an `owned struct` covers those that hold a buffer, but
+not a plain `UserId`), and capabilities other
 than `io` and `alloc`. See the design document's roadmap for when each
 arrives.
 

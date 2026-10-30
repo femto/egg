@@ -1,0 +1,17 @@
+// error: E119 @7
+// error: E119 @9
+// error: E108 @10
+// error: E108 @11
+// error: E108 @12
+// error: E108 @13
+const A = B
+const B = A
+const C = []C
+const D = Nope
+const E = Buf
+const F = type
+const G = @This()
+
+fn main() i64 {
+    return 0
+}

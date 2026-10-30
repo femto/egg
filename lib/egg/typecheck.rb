@@ -152,6 +152,8 @@ module Egg
       @types = {}          # canon -> TInfo
       @type_order = []     # canons in registration order
       @decls = {}          # name -> TypeDecl
+      @alias_types = {}    # alias name -> canon, once resolved
+      @alias_path = []     # aliases being resolved, to catch A = B, B = A
       @type_fns = {}       # name -> Func returning `type`
       @generic_fns = {}    # name -> Func with comptime parameters
       @sigs = {}           # key -> Sig ("f", "Point.len", "max(i64)", "Pair(i64).sum")
@@ -226,7 +228,7 @@ module Egg
         end
       end
       # Types first (so signatures can refer to them), then signatures.
-      @decls.each_value { |d| register_decl(d) }
+      @decls.each_value { |d| decl_type(d) }
       @program.funcs.each do |f|
         sig = @sigs[f.name]
         next if sig.nil? || sig.func != f
@@ -475,6 +477,39 @@ module Egg
       name
     end
 
+    # The canon of a declared type; an alias is the type it names.
+    def decl_type(d)
+      d.kind == :alias ? alias_type(d) : register_decl(d).canon
+    end
+
+    # const Name = T resolves T where it was written, whatever is being
+    # checked now. A cycle is only one made of aliases: a struct on the way
+    # is already registered, and containing itself is E119.
+    def alias_type(d)
+      return @alias_types[d.name] if @alias_types.key?(d.name)
+      if @alias_path.include?(d.name)
+        in_module(d.mod) { err("E119", "alias '#{base_name(d.name)}' is defined in terms of itself", d.line, d.col) }
+        return @alias_types[d.name] = "error"
+      end
+      @alias_path.push(d.name)
+      t = with_env({}, nil, d.mod) { resolve_type(d.members, d.line, d.col) }
+      @alias_path.pop
+      if t == "type"
+        in_module(d.mod) { err("E108", "an alias names a value type, not 'type'", d.line, d.col) }
+        t = "error"
+      end
+      @alias_types[d.name] ||= t
+    end
+
+    # Declarations reached from here start a fresh alias path.
+    def outside_aliases
+      saved = @alias_path
+      @alias_path = []
+      yield
+    ensure
+      @alias_path = saved
+    end
+
     def register_decl(d)
       return @types[d.name] if @types.key?(d.name)
       info = register(d.name, d.kind, d.line, d.col)
@@ -484,7 +519,7 @@ module Egg
       # own errors belong to its file.
       @registering += 1
       begin
-        in_module(d.mod) { register_members(d, info) }
+        in_module(d.mod) { outside_aliases { register_members(d, info) } }
       ensure
         @registering -= 1
       end
@@ -608,7 +643,7 @@ module Egg
         end
         q = qualify(t)
         decl = @decls[q]
-        return register_decl(decl).canon unless decl.nil?
+        return decl_type(decl) unless decl.nil?
         if @type_fns.key?(q)
           err("E108", "'#{t}' is a type function; write #{t}(...) with its arguments", line, col)
         else
@@ -943,7 +978,7 @@ module Egg
       info.mod = f.mod || ""
       info.fn_line = f.line
       info.return_line = body[0].line
-      with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) }
+      outside_aliases { with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) } }
       in_module(f.mod) do
         st.fns.each do |m|
           m.owner = canon
@@ -1690,8 +1725,7 @@ module Egg
       return @tenv[name] if @tenv.key?(name)
       return name if PRIMS.include?(name)
       d = @decls[qualify(name)]
-      return register_decl(d).canon unless d.nil?
-      nil
+      d.nil? ? nil : decl_type(d)
     end
 
     # "; there is no import named 'u'" for "u.Point" without the import.
@@ -3148,6 +3182,9 @@ module Egg
     end
 
     def err(code, msg, line, col)
+      # An alias a struct reaches through itself is resolved twice.
+      last = @diagnostics.last
+      return if !last.nil? && last.code == code && last.message == msg && last.line == line && last.col == col && last.file == @mod&.file
       @diagnostics << Diagnostic.new(code, msg, line, col, @mod&.file)
     end
   end

@@ -193,6 +193,7 @@ module Egg
     # const Name = owned struct { ... }
     # const Name = enum { a, b, c }
     # const name = @import("file.egg")
+    # const Name = T, another name for the type T
     def parse_type_decl
       expect_kw("const")
       name = expect(:ident, "type name")
@@ -251,8 +252,13 @@ module Egg
         expect_op("}")
         error_here("an enum needs at least one member") if members.empty?
         TypeDecl.new(name.text, :enum, members, [], t.line, t.col)
+      elsif at?(:ident) || kw?("fn") || op?("!") || op?("?") || op?("*") || op?("[") || (at?(:builtin) && cur.text == "This")
+        t = cur
+        target = parse_type
+        end_stmt
+        TypeDecl.new(name.text, :alias, target, [], t.line, t.col)
       else
-        error_here("expected 'struct', 'enum', 'union(enum)' or '@import' (a top-level const declares a type or a module)")
+        error_here("expected a type, 'struct', 'enum', 'union(enum)' or '@import' (a top-level const declares a type or a module)")
       end
     end
 

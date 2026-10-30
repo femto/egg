@@ -1,0 +1,9 @@
+// error: E142 @7
+// error: E110 @7
+const db = @import("lib/alias_db.egg")
+const Conn = db.Conn
+
+fn main() i64 {
+    const c = Conn{ .v = 1 }
+    return 0
+}

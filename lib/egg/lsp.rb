@@ -96,9 +96,11 @@ module Egg
         (program.types || []).each do |td|
           i = @by_pos["#{td.line}:#{td.col}"]
           name_tok = @tokens[i - 2]
-          close = closing_brace(i)
+          alias_toks = td.kind == :alias ? alias_tokens(i) : nil
+          close = alias_toks.nil? ? closing_brace(i) : alias_toks.last
+          what = alias_toks.nil? ? "#{td.owned ? 'owned ' : ''}#{td.kind}" : alias_text(alias_toks)
           decl = Decl.new(td.kind, td.name, name_tok.line, name_tok.col,
-                          "const #{td.name} = #{td.owned ? 'owned ' : ''}#{td.kind}", close.line, close.col + 1)
+                          "const #{td.name} = #{what}", close.line, close.col + close.text.length)
           @funcs << [decl, name_tok.line, name_tok.col]
           @types[td.name] ||= decl
           ref(decl.line, decl.col, decl)
@@ -202,6 +204,32 @@ module Egg
       end
 
       # The '}' that closes the body of the function whose 'fn' is token i.
+      # The tokens of an alias's type, from its first token to the end of
+      # the statement.
+      def alias_tokens(i)
+        toks = []
+        depth = 0
+        loop do
+          t = @tokens[i]
+          break if t.kind == :eof || (t.kind == :nl && depth.zero?)
+          depth += 1 if t.kind == :op && (t.text == "(" || t.text == "[")
+          depth -= 1 if t.kind == :op && (t.text == ")" || t.text == "]")
+          toks << t unless t.kind == :nl
+          i += 1
+        end
+        toks
+      end
+
+      def alias_text(toks)
+        s = +""
+        toks.each_with_index do |t, i|
+          prev = i.zero? ? nil : toks[i - 1]
+          s << " " if !prev.nil? && (prev.text == "," || (prev.text == ")" && t.kind == :ident))
+          s << (t.kind == :builtin ? "@#{t.text}" : t.text)
+        end
+        s
+      end
+
       def closing_brace(i)
         i += 1 until @tokens[i].kind == :op && @tokens[i].text == "{"
         depth = 0

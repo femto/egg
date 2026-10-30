@@ -1,0 +1,105 @@
+// const Name = T gives a type a second name. It is the same type: values
+// mix freely, methods work, and T can be any type at all, written where the
+// alias is declared.
+// expect: 3 1 1
+// expect: 7
+// expect: 12
+// expect: 15
+// expect: 5
+// expect: 42
+// expect: 2
+// expect: 3 pear
+// expect: 1
+// expect: 3
+uses io, alloc
+
+const map = @import("std/map")
+const am = @import("lib/alias_mod.egg")
+
+const Bytes = Buf(u8)
+const Id = i64
+const Counts = map.HashMap(Buf(u8), i64)
+const Op = fn(i64, i64) i64
+const MaybeId = ?Id
+const Grid = [2][2]i64
+const Text = []u8
+// An alias may come before what it names, and name another alias.
+const Dot = Vec
+const Vec = struct {
+    x: i64
+    y: i64
+
+    fn sum(self: Vec) i64 {
+        return self.x + self.y
+    }
+}
+// A struct can reach itself through an alias, whichever comes first.
+const Kids = Buf(Node)
+const Node = struct {
+    v: i64
+    kids: Kids
+}
+const Boxes = Pool(i64)
+
+fn Pool(comptime T: type) type {
+    return struct {
+        items: Buf(T)
+
+        fn count(self: Pool(T)) i64 {
+            return @len(self.items)
+        }
+    }
+}
+
+fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn apply(f: Op, x: Id, y: Id) Id {
+    return f(x, y)
+}
+
+fn first(t: Text) u8 {
+    return t[0]
+}
+
+fn main(out: Io, a: Allocator) void {
+    var b: Bytes = .empty
+    defer a.free(b)
+    a.push(&b, 104)
+    var plain: Buf(u8) = Bytes.empty
+    defer a.free(plain)
+    a.push(&plain, 105)
+    const n: Id = 3
+    const m: i64 = n
+    out.print(m, " ", @len(b), " ", @len(plain))
+
+    const v = Dot{ .x = 3, .y = 4 }
+    out.print(v.sum())
+    out.print(apply(add, 5, 7))
+
+    var counts = Counts.init()
+    defer a.free(counts)
+    counts.put_text(a, b, 15)
+    out.print(counts.get_text(b) orelse 0)
+
+    const none: MaybeId = null
+    out.print(none orelse 5)
+    const g: Grid = [2][2]i64{ [2]i64{ 1, 2 }, [2]i64{ 3, 42 } }
+    out.print(g[1][1])
+
+    const p = am.Pair{ .a = 2, .b = 3 }
+    const metres: am.Meters = p.a
+    out.print(metres)
+    const names: am.Names = [2]str{ "fig", "pear" }
+    out.print(p.b, " ", names[1])
+
+    var boxes = Boxes{ .items = .empty }
+    defer a.free(boxes)
+    a.push(&boxes.items, 9)
+    out.print(boxes.count())
+    var root = Node{ .v = 1, .kids = .empty }
+    defer a.free(root)
+    a.push(&root.kids, Node{ .v = 2, .kids = .empty })
+    out.print(root.v + root.kids[0].v)
+}

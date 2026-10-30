@@ -1,0 +1,7 @@
+// error: E108 @3
+const Self = struct { n: Next }
+const Next = ?*Self
+
+fn main() i64 {
+    return 0
+}

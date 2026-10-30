@@ -1,0 +1,4 @@
+// Aliases of this module, used by examples/type_alias.egg.
+const Meters = i64
+const Pair = struct { a: Meters, b: Meters }
+const Names = [2]str
