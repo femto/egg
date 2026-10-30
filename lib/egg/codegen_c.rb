@@ -84,7 +84,7 @@ module Egg
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
                       egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float
-                      egg_fs_class egg_fs_path egg_fs_read egg_fs_write].freeze
+                      egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -337,13 +337,29 @@ module Egg
             return p;
         }
       C
+      # fopen, and the errno it failed with. Windows refuses to open a
+      # directory with EACCES, so there the path is looked at.
+      "egg_fs_open" => <<~C,
+        #ifdef _WIN32
+        #include <sys/stat.h>
+        #endif
+        static FILE *egg_fs_open(const char *path, const char *mode, int *e) {
+            FILE *f = fopen(path, mode);
+            *e = errno;
+        #ifdef _WIN32
+            struct _stat st;
+            if (f == NULL && *e == EACCES && _stat(path, &st) == 0 && (st.st_mode & _S_IFDIR)) *e = EISDIR;
+        #endif
+            return f;
+        }
+      C
       # The size is not asked for first: a pipe or /proc file has none.
       "egg_fs_read" => <<~C,
         static int egg_fs_read(egg_str path, uint8_t **ptr, int64_t *len, int64_t *capacity) {
             char *p = egg_fs_path(path);
             if (p == NULL) return 4;
-            FILE *f = fopen(p, "rb");
-            int e = errno;
+            int e;
+            FILE *f = egg_fs_open(p, "rb", &e);
             free(p);
             if (f == NULL) return egg_fs_class(e);
             int64_t cap = 4096, n = 0;
@@ -371,8 +387,8 @@ module Egg
         static int egg_fs_write(egg_str path, egg_str data) {
             char *p = egg_fs_path(path);
             if (p == NULL) return 4;
-            FILE *f = fopen(p, "wb");
-            int e = errno;
+            int e;
+            FILE *f = egg_fs_open(p, "wb", &e);
             free(p);
             if (f == NULL) return egg_fs_class(e);
             int bad = data.len > 0 && fwrite(data.ptr, 1, (size_t)data.len, f) != (size_t)data.len;
@@ -430,8 +446,8 @@ module Egg
                     "egg_cstr" => ["egg_alloc"], "egg_str_from_c" => ["egg_alloc"],
                     "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float],
-                    "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path],
-                    "egg_fs_write" => %w[egg_fs_class egg_fs_path] }.freeze
+                    "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path egg_fs_open],
+                    "egg_fs_write" => %w[egg_fs_class egg_fs_path egg_fs_open] }.freeze
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
