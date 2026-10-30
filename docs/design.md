@@ -69,7 +69,7 @@ fn main() i64 {
 
 ## Capability system
 
-A module (a file) declares its capabilities at the top with `uses`; the compiler infers what each function actually uses and checks it recursively along the call graph. A capability is used through a value (`Io`, `Allocator`) that only `main` receives from the runtime and that is passed down explicitly, so code without the value cannot reach the capability, and code in a module without the declaration cannot use the value. A module that declares none is pure core code.
+A module (a file) declares its capabilities at the top with `uses`; the compiler infers what each function actually uses and checks it recursively along the call graph. A capability is used through a value (`Io`, `Allocator`, `Fs`, `Args`) that only `main` receives from the runtime and that is passed down explicitly, so code without the value cannot reach the capability, and code in a module without the declaration cannot use the value. A module that declares none is pure core code.
 
 Core only, no capabilities:
 
@@ -99,7 +99,7 @@ First capabilities:
 | --- | --- | --- |
 | `alloc` | heap allocation, allocator passed explicitly | v2 (strings in a program-lifetime arena; owned buffers `Buf(T)` that are freed, with ownership checking) |
 | `io` | standard streams, one implementation per OS | v2 (standard output first); standard error added; standard input next |
-| `args` | command-line arguments | `len` and `get` |
+| `args` | command-line arguments | done (`len` and `get`) |
 | `fs` | files, one implementation per OS | whole-file `read` and `write`; handles next |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 

@@ -8,7 +8,7 @@
 nl          = { NL } ;
 
 program     = { NL } , { ( func | extern_fn | type_decl | type_alias | import | uses | allow | link ) , { NL } } , EOF ;
-uses        = "uses" , IDENT , { "," , IDENT } , NL ;          (* capabilities: alloc fs io *)
+uses        = "uses" , IDENT , { "," , IDENT } , NL ;          (* capabilities: alloc args fs io *)
 allow       = "allow" , IDENT , NL ;                           (* only: allow unsafe *)
 link        = "link" , STRING , NL ;                           (* C library; needs allow unsafe *)
 extern_fn   = "extern" , "fn" , IDENT , params , type ,

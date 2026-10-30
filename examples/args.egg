@@ -1,5 +1,5 @@
-// Command-line arguments and standard error. Run without arguments it only
-// says so, on standard error: eggc run examples/args.egg -- one two
+// Command-line arguments and standard error. Without arguments it says so
+// on standard error; try it with some: eggc run examples/args.egg -- one two
 // expect: 0 arguments
 uses args, io
 
