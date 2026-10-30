@@ -296,12 +296,15 @@ def check_args(dir)
     uses args, io
 
     fn main(out: Io, args: Args) void {
-        var i = 0
+        var i = 1
         while (i < args.len()) {
             out.print("[", args.get(i), "]")
             i = i + 1
         }
         out.eprint("to stderr ", args.len())
+        if (@len(args.get(0)) == 0) {
+            out.print("no name")
+        }
         out.print("after")
     }
   EGG
@@ -309,11 +312,11 @@ def check_args(dir)
   File.write(path, src)
   out, err, status = Open3.capture3(*eggc_command, "run", path, "--", "-g", "a b", "", "--")
   got = out.lines.map(&:chomp)
-  ok = status.success? && got == ["[-g]", "[a b]", "[]", "[--]", "after"] && err.lines.map(&:chomp) == ["to stderr 4"]
+  ok = status.success? && got == ["[-g]", "[a b]", "[]", "[--]", "after"] && err.lines.map(&:chomp) == ["to stderr 5"]
   report(ok, "eggc run passes what follows -- to the program", "status #{status.exitstatus}, #{got.inspect}, stderr: #{err}")
   out, status = Open3.capture2e(*eggc_command, "run", path)
   got = out.lines.map(&:chomp)
-  report(status.success? && got == ["to stderr 0", "after"], "eprint with no arguments", got.inspect)
+  report(status.success? && got == ["to stderr 1", "after"], "eprint with no arguments", got.inspect)
   order = File.join(dir, "args_order.egg")
   File.write(order, <<~EGG)
     uses io

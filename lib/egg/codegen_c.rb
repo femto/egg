@@ -932,8 +932,7 @@ module Egg
       mark(main.func.line)
       if @used["egg_args_state"]
         @out << "int main(int argc, char **argv) {\n"
-        # The program's name is not an argument.
-        @out << "    egg_argc = argc > 1 ? argc - 1 : 0;\n    egg_argv = argv + 1;\n"
+        @out << "    egg_argc = argc;\n    egg_argv = argv;\n"
       else
         @out << "int main(void) {\n"
       end

@@ -156,7 +156,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
 - Standard error: `out.eprint(x, ...)`. Command-line arguments: `uses args`
-  gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`
+  gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
+  with the program's name at 0 and the first argument at 1
 - Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole
   file as a `Buf(u8)` (so it needs `uses alloc` too), `fs.write(path, data)`
   replaces it, and failures are
