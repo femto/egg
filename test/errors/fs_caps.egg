@@ -4,13 +4,13 @@ uses io
 
 fn save(files: Fs) void {
     // no `uses fs`
-    files.write("/tmp/x", "y") catch {
+    files.write("x.txt", "y") catch {
         return
     }
 }
 
 fn load(files: Fs, a: Allocator) void {
-    const b = files.read(a, "/tmp/x") catch {
+    const b = files.read(a, "x.txt") catch {
         return
     }
     a.free(b)

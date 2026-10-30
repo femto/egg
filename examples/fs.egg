@@ -1,5 +1,6 @@
 // The fs capability: a whole file read into a Buf(u8), or written from
-// text. Failures are errors you can tell apart.
+// text. Failures are errors you can tell apart. The file is left behind in
+// the current directory; the tests run this in a private temporary one.
 // expect: hello
 // expect: 6 true
 // expect: NotFound
@@ -11,7 +12,7 @@
 uses alloc, fs, io
 
 fn scratch() str {
-    return "/tmp/egg_example_fs.txt"
+    return "egg_example_fs.txt"
 }
 
 // A file's size, or 0 if it cannot be read.
@@ -39,7 +40,7 @@ fn main(out: Io, files: Fs, a: Allocator) !void {
     out.print(@len(text), " ", text[5] == '\n')
 
     out.print(why(files, a, "/nonexistent/egg/file"))
-    out.print(why(files, a, "/tmp"))
+    out.print(why(files, a, "."))
     out.print(why(files, a, "no\x00such"))
     files.write("/nonexistent/egg/file", "x") catch |e| {
         out.print(@errorName(e))

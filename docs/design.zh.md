@@ -70,7 +70,7 @@ fn hash(bytes: []const u8) u64 {
 }
 ```
 
-声明需要的能力（文件读写之后才加；缓冲区、`free` 和 `defer` 在 v2 已有）：
+声明需要的能力：
 
 ```
 uses alloc, fs

@@ -304,13 +304,27 @@ module Egg
       "egg_fs_class" => <<~C,
         #include <errno.h>
         static int egg_fs_class(int e) {
-            switch (e) {
-            case ENOENT: case ENOTDIR: return 1;
-            case EACCES: case EPERM: return 2;
-            case EISDIR: return 3;
-            case ENAMETOOLONG: return 4;
-            default: return 5;
-            }
+            /* ISO C names none of these, so each may be missing. */
+        #ifdef ENOENT
+            if (e == ENOENT) return 1;
+        #endif
+        #ifdef ENOTDIR
+            if (e == ENOTDIR) return 1;
+        #endif
+        #ifdef EACCES
+            if (e == EACCES) return 2;
+        #endif
+        #ifdef EPERM
+            if (e == EPERM) return 2;
+        #endif
+        #ifdef EISDIR
+            if (e == EISDIR) return 3;
+        #endif
+        #ifdef ENAMETOOLONG
+            if (e == ENAMETOOLONG) return 4;
+        #endif
+            (void)e;
+            return 5;
         }
       C
       # A path for fopen, 0-terminated, or NULL if it holds a 0 byte.
@@ -325,7 +339,7 @@ module Egg
       C
       # The size is not asked for first: a pipe or /proc file has none.
       "egg_fs_read" => <<~C,
-        static int egg_fs_read(egg_str path, uint8_t **ptr, int64_t *len) {
+        static int egg_fs_read(egg_str path, uint8_t **ptr, int64_t *len, int64_t *capacity) {
             char *p = egg_fs_path(path);
             if (p == NULL) return 4;
             FILE *f = fopen(p, "rb");
@@ -349,6 +363,7 @@ module Egg
             }
             *ptr = b;
             *len = n;
+            *capacity = cap;
             return 0;
         }
       C
@@ -1538,8 +1553,7 @@ module Egg
              when "Fs.read"
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("#{r}.err = #{fs_error("#{helper('egg_fs_read')}(#{coerce(codes[1], args[1].ty, 'str')}, &#{r}.value.ptr, &#{r}.value.len)")};")
-               line("#{r}.value.cap = #{r}.value.len;")
+               line("#{r}.err = #{fs_error("#{helper('egg_fs_read')}(#{coerce(codes[1], args[1].ty, 'str')}, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)")};")
                r
              when "Fs.write"
                r = tmp

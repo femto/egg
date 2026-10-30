@@ -77,7 +77,8 @@ def check_program(name, src, dir, path = nil, debug: false, lib_dirs: [])
   links = lib_dirs.map { |d| "-L#{d}" } + result.links.map { |l| "-l#{l}" }
   _, cc_err, cc_status = Open3.capture3(CC, *flags, "-o", base, "#{base}.c", *links)
   return report(false, name, "C compiler failed:\n#{cc_err}") unless cc_status.success?
-  out, err, status = Open3.capture3(base)
+  # In its scratch directory: a program may leave files behind.
+  out, err, status = Open3.capture3(File.expand_path(base), chdir: dir)
   panic = comment_values(src, "panic").first
   fails = comment_values(src, "fails").first
   if panic

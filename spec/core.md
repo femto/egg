@@ -1,8 +1,8 @@
 # Egg core language specification (v2)
 
 This is the complete definition of the v2 core: the v1 language plus
-integer types of every width (section 7), modules (section 16), the `io`
-and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
+integer types of every width (section 7), modules (section 16), the `io`,
+`fs` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
 (section 18), function values (section 19), `extern fn` (section 20), and
 owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
@@ -147,6 +147,7 @@ fn main(out: Io) void {
 | `type` | a type, at compile time only | `comptime` parameters; section 14 |
 | `Io` | the io capability | received by `main`, passed down; section 17 |
 | `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
+| `Fs` | the fs capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 
 Every type that has runtime values, except slices and buffers, is a **value type**:
@@ -1367,8 +1368,8 @@ reach: a program that only prints cannot touch a file.
 uses alloc, fs, io
 
 fn main(out: Io, files: Fs, a: Allocator) !void {
-    try files.write("/tmp/egg_spec_fs.txt", "hello")
-    const text = try files.read(a, "/tmp/egg_spec_fs.txt")
+    try files.write("egg_spec_fs.txt", "hello")
+    const text = try files.read(a, "egg_spec_fs.txt")
     defer a.free(text)
     out.print(@len(text))
 }
