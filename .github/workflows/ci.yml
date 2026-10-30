@@ -24,8 +24,10 @@ jobs:
     steps:
       # The tests compare exact source lines, so no CRLF on checkout.
       - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v5
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
         with:
           ruby-version: "3.3"
       - run: cc --version || gcc --version

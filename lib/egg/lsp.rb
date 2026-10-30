@@ -458,8 +458,9 @@ module Egg
       SYMBOL_KINDS = { fn: 12, method: 6, struct: 23, union: 23, enum: 10, alias: 11 }.freeze
 
       def initialize(input = $stdin, output = $stdout)
-        @in = input
-        @out = output
+        # Content-Length counts bytes, and Windows would change the newlines.
+        @in = input.binmode
+        @out = output.binmode
         @in.binmode
         @out.binmode
         @docs = {}   # uri -> latest Index

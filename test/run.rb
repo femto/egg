@@ -167,7 +167,7 @@ def lsp_session(messages)
     body = JSON.generate(m.merge("jsonrpc" => "2.0"))
     "Content-Length: #{body.bytesize}\r\n\r\n#{body}"
   end.join
-  out, err, status = Open3.capture3(*eggc_command, "lsp", stdin_data: input)
+  out, err, status = Open3.capture3(*eggc_command, "lsp", stdin_data: input, binmode: true)
   replies = {}
   diags = []
   out.split(/Content-Length: \d+\r\n\r\n/).reject(&:empty?).each do |text|
