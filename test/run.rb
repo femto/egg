@@ -453,7 +453,7 @@ def check_utf8(dir)
   _, status = Open3.capture2e(*eggc_command, "build", path, "-o", exe)
   return report(false, "build utf8", "failed") unless status.success?
   out, err, status = Open3.capture3(exe, "读.txt", "参数.txt", chdir: work)
-  names = Dir.children(work).map { |n| n.encode("UTF-8").unicode_normalize(:nfc) }
+  names = Dir.children(work).map { |n| (n.encoding == Encoding::US_ASCII ? n.dup.force_encoding("UTF-8") : n.encode("UTF-8")).unicode_normalize(:nfc) }
   ok = status.success? && out.strip == "#{"读.txt".bytesize} 6" && names.include?("写.txt") && names.include?("参数.txt") &&
        File.binread(File.join(work, "参数.txt")).force_encoding("UTF-8") == "读.txt"
   report(ok, "fs and args take UTF-8 names", "#{out.inspect}, #{names.inspect}, stderr: #{err}")

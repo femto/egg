@@ -165,21 +165,30 @@ module Egg
         __declspec(dllimport) wchar_t *__stdcall GetCommandLineW(void);
         __declspec(dllimport) wchar_t **__stdcall CommandLineToArgvW(const wchar_t *, int *);
         __declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned int, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+        __declspec(dllimport) void *__stdcall LocalFree(void *);
+        #ifdef _MSC_VER
+        #pragma comment(lib, "shell32")
+        #endif
+        static void *egg_args_block(void *p) {
+            /* Nothing is printed yet, and egg_panic exists only if the program can panic. */
+            if (p != NULL) return p;
+            fputs("egg panic: out of memory\\n", stderr);
+            abort();
+        }
         #endif
         static void egg_args_init(int argc, char **argv) {
             egg_argc = argc;
             egg_argv = argv;
         #ifdef _WIN32
             int n;
-            wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
-            char **utf8 = w == NULL ? NULL : (char **)malloc((size_t)n * sizeof(char *));
-            if (utf8 == NULL) return;
+            wchar_t **w = (wchar_t **)egg_args_block(CommandLineToArgvW(GetCommandLineW(), &n));
+            char **utf8 = (char **)egg_args_block(malloc((size_t)n * sizeof(char *)));
             for (int i = 0; i < n; i++) {
                 int size = WideCharToMultiByte(65001, 0, w[i], -1, NULL, 0, NULL, NULL);
-                utf8[i] = size == 0 ? NULL : (char *)malloc((size_t)size);
-                if (utf8[i] == NULL) return;
+                utf8[i] = (char *)egg_args_block(malloc((size_t)size));
                 WideCharToMultiByte(65001, 0, w[i], -1, utf8[i], size, NULL, NULL);
             }
+            LocalFree(w);
             egg_argc = n;
             egg_argv = utf8;
         #endif
