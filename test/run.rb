@@ -118,9 +118,10 @@ def bad_line_marks(c_source, src, path)
     # (String literals are blanked first, so a " else " in one does not count.)
     bare = prev.gsub(/"(?:\\.|[^"\\])*"/, '""')
     continued ||= (bare.match?(/\bif \(.*\)\z/) && !bare.include?(" else ")) || prev == "else" || text == "else" || text.start_with?("else if (")
-    # `uses`, `allow`, `@import` and `extern fn` lines declare, and
-    # generate no code (an extern fn only a prototype).
-    declares = text.match?(/\A(uses|allow|extern|link)\s/) || text.match?(/\Aconst \w+ = @import\(/)
+    # `uses`, `allow`, `@import`, `extern fn` and type alias lines declare,
+    # and generate no code (an extern fn only a prototype). Only a const at
+    # the top level, not indented, can be an alias.
+    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst \w+ = (?!(owned )?struct\b|enum\b|union\b)/)
     # An else-if comparing types (K == i64) is decided at compile time, and
     # @compileError stands only in a branch that is never generated.
     # The right side must name a type, so a runtime `x == y` is not taken
@@ -228,6 +229,41 @@ def check_lsp_catch
 end
 
 # v1 syntax: types and methods in the outline, method and type navigation.
+def check_lsp_alias
+  uri = "file:///t/a.egg"
+  src = <<~EGG
+    const Op = fn(i64, Buf(u8)) ?i64
+    const Id = i64
+
+    fn main() Id {
+        return 0
+    }
+  EGG
+  doc = { "uri" => uri }
+  at = ->(line, ch) { { "textDocument" => doc, "position" => { "line" => line, "character" => ch } } }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/definition", "params" => at.(3, 10) },  # Id in main's result
+    { "id" => 3, "method" => "textDocument/hover", "params" => at.(3, 10) },
+    { "id" => 4, "method" => "textDocument/hover", "params" => at.(0, 6) },
+    { "id" => 5, "method" => "textDocument/documentSymbol", "params" => { "textDocument" => doc } },
+    { "id" => 6, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, diags, status, err = lsp_session(req)
+  hover = ->(id) { replies.dig(id, "result", "contents", "value").to_s }
+  op = replies[5]["result"].find { |s| s["name"] == "Op" }
+  range = op&.dig("range", "end")
+  report(diags.first == [], "lsp alias source has no errors", diags.first.inspect)
+  report(replies.dig(2, "result", "range", "start", "line") == 1, "lsp definition of a type alias", replies[2].inspect)
+  report(hover.(3).include?("const Id = i64"), "lsp hover on a type alias", hover.(3))
+  report(hover.(4).include?("const Op = fn(i64, Buf(u8)) ?i64"), "lsp hover spells out the aliased type", hover.(4))
+  report(range == { "line" => 0, "character" => 32 }, "lsp alias symbol ends with its type", range.inspect)
+  report(op&.fetch("kind") == 11, "lsp outline gives an alias its own symbol kind", op.inspect)
+  report(status.success? && err.empty?, "lsp alias session ends cleanly", err)
+end
+
 def check_lsp_v1
   uri = "file:///t/b.egg"
   src = <<~EGG
@@ -614,6 +650,7 @@ Dir.mktmpdir do |dir|
   check_lsp_generics
   check_lsp_v1
   check_lsp_catch
+  check_lsp_alias
   check_lsp_char
   check_lsp_modules
   check_lsp_extern

@@ -153,6 +153,7 @@ v3 (memory without GC, and what realistic programs needed; under way):
   integer amount (`<<` drops the bits shifted out; an amount out of
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
+- Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
 
 From v2:
 

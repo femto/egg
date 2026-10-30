@@ -7,7 +7,7 @@
 
 nl          = { NL } ;
 
-program     = { NL } , { ( func | extern_fn | type_decl | import | uses | allow | link ) , { NL } } , EOF ;
+program     = { NL } , { ( func | extern_fn | type_decl | type_alias | import | uses | allow | link ) , { NL } } , EOF ;
 uses        = "uses" , IDENT , { "," , IDENT } , NL ;          (* capabilities: alloc io *)
 allow       = "allow" , IDENT , NL ;                           (* only: allow unsafe *)
 link        = "link" , STRING , NL ;                           (* C library; needs allow unsafe *)
@@ -35,6 +35,7 @@ name        = IDENT , [ "." , IDENT ] ;              (* m.Point: a type of an im
 fn_type     = "fn" , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")" , type ;
 
 type_decl   = "const" , IDENT , "=" , ( struct_body_kw | enum_body | union_body ) ;
+type_alias  = "const" , IDENT , "=" , type , NL ;
 struct_body_kw = [ "owned" ] , "struct" , struct_body ;
 struct_body = "{" , { NL } , { ( field | func ) , [ "," ] , { NL } } , "}" ;
 field       = IDENT , ":" , type ;
