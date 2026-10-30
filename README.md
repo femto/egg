@@ -155,7 +155,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
-- Standard error: `out.eprint(x, ...)`. Command-line arguments: `uses args`
+- Standard error: `out.eprint(x, ...)`. Standard input: `out.read_line(a, &line)`
+  returns false at the end, `out.read_all(a)` returns a `Buf(u8)`. Command-line arguments: `uses args`
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
   with the program's name at 0 and the first argument at 1
 - Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole

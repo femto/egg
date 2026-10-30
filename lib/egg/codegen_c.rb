@@ -80,12 +80,13 @@ module Egg
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_args_state egg_args_len egg_args_get egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
                       egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float
-                      egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write].freeze
+                      egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
+                      egg_stdin_read_line egg_stdin_read_all].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -94,6 +95,64 @@ module Egg
             fflush(stdout);
             fprintf(stderr, "egg panic: %s\\n", msg);
             abort();
+        }
+      C
+      # Before reading: what was printed (a prompt) must show first, and on
+      # Windows the bytes must arrive as they are, not as text.
+      "egg_stdin_prepare" => <<~C,
+        #ifdef _WIN32
+        #include <fcntl.h>
+        #include <io.h>
+        #endif
+        static void egg_stdin_prepare(void) {
+        #ifdef _WIN32
+            static bool binary = false;
+            if (!binary) {
+                _setmode(_fileno(stdin), _O_BINARY);
+                binary = true;
+            }
+        #endif
+            fflush(stdout);
+        }
+      C
+      # 1 with a line (without its line ending), 0 at the end, -1 on failure.
+      "egg_stdin_read_line" => <<~C,
+        static int egg_stdin_read_line(uint8_t **ptr, int64_t *len, int64_t *cap) {
+            egg_stdin_prepare();
+            *len = 0;
+            bool any = false;
+            int c;
+            while ((c = getc(stdin)) != EOF) {
+                any = true;
+                if (c == '\\n') break;
+                uint8_t b = (uint8_t)c;
+                egg_append(ptr, len, cap, &b, 1);
+            }
+            if (c == EOF && ferror(stdin)) return -1;
+            if (!any) return 0;
+            if (c == '\\n' && *len > 0 && (*ptr)[*len - 1] == '\\r') *len -= 1;
+            return 1;
+        }
+      C
+      "egg_stdin_read_all" => <<~C,
+        static bool egg_stdin_read_all(uint8_t **ptr, int64_t *len, int64_t *capacity) {
+            egg_stdin_prepare();
+            int64_t cap = 4096, n = 0;
+            uint8_t *b = (uint8_t *)egg_buf_resize(NULL, cap, 1);
+            for (;;) {
+                n += (int64_t)fread(b + n, 1, (size_t)(cap - n), stdin);
+                if (n < cap) break;
+                cap *= 2;
+                b = (uint8_t *)egg_buf_resize(b, cap, 1);
+            }
+            if (ferror(stdin)) {
+                free(b);
+                return false;
+            }
+            *ptr = b;
+            *len = n;
+            *capacity = cap;
+            return true;
         }
       C
       "egg_args_state" => <<~C,
@@ -462,9 +521,10 @@ module Egg
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float],
                     "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path egg_fs_open],
                     "egg_fs_write" => %w[egg_fs_class egg_fs_path egg_fs_open],
+                    "egg_stdin_read_line" => %w[egg_stdin_prepare egg_append], "egg_stdin_read_all" => %w[egg_stdin_prepare egg_buf_resize],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len].freeze
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
@@ -1577,6 +1637,10 @@ module Egg
       "((const int32_t[]){ 0, #{ids.join(', ')} })[#{code}]"
     end
 
+    def io_failed
+      @checker.error_names.index("IoFailed") + 1
+    end
+
     # out.print(x), a.concat(s, t), a.int_str(n). The receiver carries no
     # data but is still evaluated, first, like any receiver.
     def cap_call(m, obj, args, ret)
@@ -1596,11 +1660,28 @@ module Egg
                last = args.length - 1
                codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false, 'stderr')};") unless i == last }
                print_one(args[last].ty, codes[last], true, "stderr")
+             when "Io.read_line"
+               line("(void)#{codes[0]};")
+               b = tmp
+               line("#{c_type(args[1].ty)} *#{b} = #{codes[1]};")
+               r = tmp
+               s = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("int #{s} = #{helper('egg_stdin_read_line')}(&#{b}->ptr, &#{b}->len, &#{b}->cap);")
+               line("if (#{s} < 0) #{r}.err = #{io_failed}; else #{r}.value = #{s} > 0;")
+               r
+             when "Io.read_all"
+               line("(void)#{codes[0]};")
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("if (!#{helper('egg_stdin_read_all')}(&#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)) #{r}.err = #{io_failed};")
+               r
              when "Args.len"
                "#{helper('egg_args_len')}()"
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
              when "Fs.read"
+               line("(void)#{codes[0]};")
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("#{r}.err = #{fs_error("#{helper('egg_fs_read')}(#{coerce(codes[1], args[1].ty, 'str')}, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)")};")

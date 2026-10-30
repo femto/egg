@@ -29,6 +29,7 @@
 require "json"
 require "rbconfig"
 require "open3"
+require "timeout"
 require "tmpdir"
 require_relative "../lib/egg"
 
@@ -332,6 +333,89 @@ def check_args(dir)
   report(status.success? && got == %w[first second third], "eprint comes after what was printed", got.inspect)
   _, _, status = Open3.capture3(*eggc_command, "check", path, "--", "x")
   report(status.exitstatus == 2, "only eggc run takes program arguments", "status #{status.exitstatus}")
+end
+
+# Standard input: line endings, a last line with none, empty lines, bytes
+# text mode would change, and a prompt that must show before the read.
+def check_stdin(dir)
+  lines = File.join(dir, "stdin_lines.egg")
+  File.write(lines, <<~EGG)
+    uses alloc, io
+
+    fn main(out: Io, a: Allocator) !void {
+        var line: Buf(u8) = .empty
+        defer a.free(line)
+        while (try out.read_line(a, &line)) {
+            out.print("[", line, "]")
+        }
+        out.print("end ", @len(line))
+    }
+  EGG
+  [["one\ntwo\n", %w[[one] [two] end\ 0]],
+   ["one\r\n\r\nlast", ["[one]", "[]", "[last]", "end 0"]],
+   ["\n", ["[]", "end 0"]],
+   ["", ["end 0"]],
+   ["a\rb\n", ["[a\rb]", "end 0"]]].each do |input, want|
+    out, err, status = Open3.capture3(*eggc_command, "run", lines, stdin_data: input, binmode: true)
+    got = out.gsub("\r\n", "\n").lines.map(&:chomp)
+    report(status.success? && got == want, "read_line of #{input.inspect}", "#{got.inspect}, stderr: #{err}")
+  end
+
+  all = File.join(dir, "stdin_all.egg")
+  File.write(all, <<~EGG)
+    uses alloc, io
+
+    fn main(out: Io, a: Allocator) !void {
+        const data = try out.read_all(a)
+        defer a.free(data)
+        var sum = 0
+        for (data) |b| {
+            sum = sum + @as(i64, b)
+        }
+        out.print(@len(data), " ", sum)
+    }
+  EGG
+  # Long enough to grow the buffer; \r\n and Ctrl-Z change in text mode.
+  bytes = ([13, 10, 0, 26, 255] * 2000).pack("C*")
+  out, err, status = Open3.capture3(*eggc_command, "run", all, stdin_data: bytes, binmode: true)
+  want = "#{bytes.bytesize} #{bytes.bytes.sum}"
+  report(status.success? && out.strip == want, "read_all keeps the bytes as they are", "#{out.inspect}, stderr: #{err}")
+
+  prompt = File.join(dir, "stdin_prompt.egg")
+  File.write(prompt, <<~EGG)
+    uses alloc, io
+
+    fn main(out: Io, a: Allocator) !void {
+        out.print("name?")
+        var line: Buf(u8) = .empty
+        defer a.free(line)
+        if (try out.read_line(a, &line)) {
+            out.print("hello ", line)
+        }
+    }
+  EGG
+  Open3.popen2(*eggc_command, "run", prompt) do |stdin, stdout, thread|
+    # Without the flush the prompt would wait in the buffer, and so would we.
+    shown = Timeout.timeout(60) { stdout.gets }
+    stdin.puts("egg")
+    stdin.close
+    report(shown&.chomp == "name?" && stdout.gets&.chomp == "hello egg" && thread.value.success?, "a prompt shows before the read", shown.inspect)
+  rescue Timeout::Error
+    Process.kill("KILL", thread.pid)
+    report(false, "a prompt shows before the read", "timed out")
+  end
+
+  if Gem.win_platform?
+    puts "  skip  a failed read of standard input (no closed descriptor)"
+    return
+  end
+  exe = File.join(dir, "stdin_closed")
+  _, status = Open3.capture2e(*eggc_command, "build", all, "-o", exe)
+  return report(false, "build stdin_closed", "failed") unless status.success?
+  out_path = "#{exe}.out"
+  pid = spawn(exe, in: :close, out: out_path, err: out_path)
+  Process.wait(pid)
+  report($?.exitstatus == 1 && File.read(out_path).include?("error: IoFailed"), "reading a closed standard input is IoFailed", File.read(out_path))
 end
 
 def check_lsp_alias
@@ -760,6 +844,7 @@ Dir.mktmpdir do |dir|
   check_lsp_alias
   check_fs_errors(dir)
   check_args(dir)
+  check_stdin(dir)
   check_lsp_char
   check_lsp_modules
   check_lsp_extern

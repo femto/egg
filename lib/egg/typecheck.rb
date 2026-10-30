@@ -88,7 +88,8 @@ module Egg
     # integer type, "float" f32 or f64, "cstring" a *u8 to 0-terminated
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
-      "Io" => { "print" => [["printable"], "void"], "eprint" => [["printable"], "void"] },
+      "Io" => { "print" => [["printable"], "void"], "eprint" => [["printable"], "void"],
+                "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"] },
       "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
       "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"] },
       "Allocator" => { "concat" => [%w[text text], "str"], "str" => [["text"], "str"], "int_str" => [["integer"], "str"],
@@ -2198,14 +2199,20 @@ module Egg
       ret = ptr_type("u8") if ret == "*u8"
       ret = resolve_type(ErrType.new(GenericType.new("Buf", ["u8"])), line, col) if ret == "!Buf(u8)"
       ret = resolve_type(ErrType.new("void"), line, col) if ret == "!void"
+      ret = resolve_type(ErrType.new("bool"), line, col) if ret == "!bool"
       pop = ret == "?T"
       if t == "Fs"
         FS_ERRORS.each { |n| error_id(n) }
         # fs.read(a, path) allocates what it returns.
         @current.direct["alloc"] ||= [line, col, "Fs.read"] if name == "read"
       end
+      # Reading standard input can fail, and fills a buffer.
+      if t == "Io" && name.start_with?("read_")
+        error_id("IoFailed")
+        @current.direct["alloc"] ||= [line, col, "Io.#{name}"]
+      end
       # out.print(x, y, ...) and out.eprint take one or more values.
-      params = ["printable"] * args.length if t == "Io" && !args.empty?
+      params = ["printable"] * args.length if t == "Io" && name.end_with?("print") && !args.empty?
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
@@ -2256,8 +2263,8 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
-          if name.start_with?("append_") && elem != "u8"
-            err("E103", "'#{name}' appends text to a Buf(u8), found #{at}", a.line, a.col)
+          if (name.start_with?("append_") || name == "read_line") && elem != "u8"
+            err("E103", "'#{name}' writes text to a Buf(u8), found #{at}", a.line, a.col)
             return "error"
           end
           ret = opt_type(elem) if pop
