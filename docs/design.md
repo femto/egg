@@ -81,13 +81,13 @@ fn hash(bytes: []const u8) u64 {
 }
 ```
 
-Declaring what it needs (file IO is still to come; buffers, `free` and `defer` are in v2):
+Declaring what it needs:
 
 ```
-uses alloc, io
+uses alloc, fs
 
-fn read_config(io: Io, a: Allocator, path: str) !Config {
-    const text = try io.read_file(a, path)   // a Buf(u8) the caller owns
+fn read_config(files: Fs, a: Allocator, path: str) !Config {
+    const text = try files.read(a, path)   // a Buf(u8) the caller owns
     defer a.free(text)
     return parse(text[0..])
 }
@@ -98,7 +98,8 @@ First capabilities:
 | Capability | Provides | Planned |
 | --- | --- | --- |
 | `alloc` | heap allocation, allocator passed explicitly | v2 (strings in a program-lifetime arena; owned buffers `Buf(T)` that are freed, with ownership checking) |
-| `io` | files and standard streams, one implementation per OS | v2 (first standard output; files later) |
+| `io` | standard streams, one implementation per OS | v2 (standard output first) |
+| `fs` | files, one implementation per OS | whole-file `read` and `write`; handles next |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:
@@ -206,7 +207,7 @@ Each phase ends at a gate that can be checked automatically. v3 completes memory
 
 - [ ] Semicolons at the end of statements? The examples omit them; weigh against parser simplicity.
 - [x] Syntax for capabilities in signatures: `fn f() !void with io`, or only module-level declarations with generated docs? Decided in v2: module-level `uses alloc, io`, with capability values passed explicitly; signatures carry no capability list, and tooling shows each function's set.
-- [ ] Granularity: is `io` one capability, or split into `fs`, `net` and `stdio`? v2 starts with one `io` (standard output only); revisit when files arrive.
+- [x] Granularity: is `io` one capability, or split into `fs`, `net` and `stdio`? Decided when files arrived: split. `fs` has its own value `Fs`, so a `uses` line says what a file can reach; `net` will follow the same pattern.
 - [x] How is freed memory kept safe? Decided in v2: an owned `Buf(T)` checked linearly (moved, never copied; freed or passed on exactly once on every path), with `defer`/`errdefer`; freeing is never implicit. Strings stay in an arena that is never freed.
 - [x] A GC? Decided on 2026-10-27: none. Memory is managed only by ownership.
 - [ ] How are built strings freed: an owned string type checked like `Buf(T)`, with `str` left for literals and borrows, or something else? Part of v3.

@@ -1,8 +1,8 @@
 # Egg core language specification (v2)
 
 This is the complete definition of the v2 core: the v1 language plus
-integer types of every width (section 7), modules (section 16), the `io`
-and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
+integer types of every width (section 7), modules (section 16), the `io`,
+`fs` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
 (section 18), function values (section 19), `extern fn` (section 20), and
 owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
@@ -147,6 +147,7 @@ fn main(out: Io) void {
 | `type` | a type, at compile time only | `comptime` parameters; section 14 |
 | `Io` | the io capability | received by `main`, passed down; section 17 |
 | `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
+| `Fs` | the fs capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 
 Every type that has runtime values, except slices and buffers, is a **value type**:
@@ -1343,8 +1344,8 @@ version of this section.
 
 ## 17. Capabilities
 
-A capability is something the core does not have: io and heap allocation
-in v2. A file declares the capabilities it needs on a `uses` line:
+A capability is something the core does not have: standard output, files
+and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
 
 ```
 uses alloc, io
@@ -1356,7 +1357,47 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `out.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `out.print(w, ": ", n)` |
+| `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; see below |
 | `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.str(t) str`: a copy of the text t; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
+
+`fs` is separate from `io` so that a file's `uses` line says what it can
+reach: a program that only prints cannot touch a file.
+
+```egg
+// expect: 5
+uses alloc, fs, io
+
+fn main(out: Io, files: Fs, a: Allocator) !void {
+    try files.write("egg_spec_fs.txt", "hello")
+    const text = try files.read(a, "egg_spec_fs.txt")
+    defer a.free(text)
+    out.print(@len(text))
+}
+```
+
+A path and `data` are text (section 8), and a file is bytes: `fs.read` makes
+no assumption about its encoding, and the `Buf(u8)` belongs to the caller
+(section 21). `fs.read` uses `alloc` too, so its file declares both.
+`fs.write` does not create directories, and a write that fails may leave the
+file incomplete. A failure is one of these errors:
+
+| Error | Means |
+| --- | --- |
+| `error.NotFound` | no such file, or a directory on the path is missing |
+| `error.PermissionDenied` | the system refused access |
+| `error.IsDirectory` | the path names a directory |
+| `error.InvalidPath` | the path holds a 0 byte or is too long |
+| `error.IoFailed` | anything else, such as a full disk |
+
+```egg
+// fails: NotFound
+uses alloc, fs
+
+fn main(files: Fs, a: Allocator) !void {
+    const text = try files.read(a, "/nonexistent/egg/file")
+    a.free(text)
+}
+```
 
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
@@ -2073,7 +2114,7 @@ pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but
 not a plain `UserId`), and capabilities other
-than `io` and `alloc`. See the design document's roadmap for when each
+than `io`, `fs` and `alloc`. See the design document's roadmap for when each
 arrives.
 
 ## 23. A complete program

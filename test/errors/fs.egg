@@ -1,0 +1,18 @@
+// error: E103 @8
+// error: E113 @8
+// error: E122 @14
+// error: E109 @17
+uses alloc, fs
+
+fn wrong(files: Fs, a: Allocator) void {
+    _ = files.read(a, 1) catch {
+        return
+    }
+}
+
+fn nope(files: Fs) void {
+    files.open("x")
+}
+
+fn main(a: Fs, b: Fs) void {
+}

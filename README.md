@@ -154,6 +154,11 @@ v3 (memory without GC, and what realistic programs needed; under way):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
+- Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole
+  file as a `Buf(u8)` (so it needs `uses alloc` too), `fs.write(path, data)`
+  replaces it, and failures are
+  `error.NotFound`, `error.PermissionDenied`, `error.IsDirectory`,
+  `error.InvalidPath` or `error.IoFailed`
 
 From v2:
 
