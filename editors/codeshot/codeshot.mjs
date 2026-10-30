@@ -20,7 +20,7 @@ const root = path.resolve(here, '../..')
 const args = process.argv.slice(2)
 let src = null, out = null, run = true, bad = false
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === '-o' && i + 1 < args.length) out = args[++i]
+  if (args[i] === '-o' && i + 1 < args.length && !args[i + 1].startsWith('-')) out = args[++i]
   else if (args[i] === '--no-run') run = false
   else if (args[i].startsWith('-') || src) bad = true
   else src = args[i]
