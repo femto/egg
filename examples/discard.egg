@@ -9,8 +9,8 @@
 // expect: 0
 uses io, alloc
 
-fn noisy(out: Io, n: i64) i64 {
-    out.print(n)
+fn noisy(io: Io, n: i64) i64 {
+    io.print(n)
     return n * 2
 }
 
@@ -21,25 +21,25 @@ fn may(fail: bool) !i64 {
     return 1
 }
 
-fn run(out: Io) !void {
+fn run(io: Io) !void {
     _ = try may(false)
-    out.print("tried")
+    io.print("tried")
 }
 
-fn unused(out: Io, x: i64) void {
+fn unused(io: Io, x: i64) void {
     _ = x
-    out.print("unused ok")
+    io.print("unused ok")
 }
 
-fn main(out: Io, a: Allocator) void {
-    _ = noisy(out, 3)
-    _ = noisy(out, 1) + noisy(out, 2)
+fn main(io: Io, a: Allocator) void {
+    _ = noisy(io, 3)
+    _ = noisy(io, 1) + noisy(io, 2)
     _ = may(true) catch 0
-    run(out) catch out.print("no")
-    unused(out, 5)
+    run(io) catch io.print("no")
+    unused(io, 5)
     var b: Buf(i64) = .empty
     defer a.free(b)
     a.push(&b, 4)
     _ = a.pop(&b)
-    out.print(@len(b))
+    io.print(@len(b))
 }

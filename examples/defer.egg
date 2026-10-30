@@ -28,50 +28,50 @@ fn fails(fail: bool) !i64 {
     return 7
 }
 
-fn order(out: Io) void {
-    defer out.print(1)
-    defer out.print(2)
+fn order(io: Io) void {
+    defer io.print(1)
+    defer io.print(2)
 }
 
-fn loop(out: Io) void {
+fn loop(io: Io) void {
     var i = 0
     while (i < 3) {
-        defer out.print(10)
+        defer io.print(10)
         i = i + 1
         if (i == 3) {
             break
         }
-        defer out.print(11)
+        defer io.print(11)
         continue
     }
-    out.print(99)
+    io.print(99)
 }
 
-fn early(out: Io) i64 {
-    defer out.print(20)
+fn early(io: Io) i64 {
+    defer io.print(20)
     return 7
 }
 
-fn attempt(out: Io, fail: bool, base: i64) !i64 {
-    defer out.print(base)
-    errdefer out.print(base + 1)
+fn attempt(io: Io, fail: bool, base: i64) !i64 {
+    defer io.print(base)
+    errdefer io.print(base + 1)
     const n = try fails(fail)
     return n
 }
 
-fn pass_on(out: Io, fail: bool) !i64 {
-    errdefer out.print(5)
-    defer out.print(8)
+fn pass_on(io: Io, fail: bool) !i64 {
+    errdefer io.print(5)
+    defer io.print(8)
     return fails(fail)
 }
 
-fn main(out: Io) !void {
-    order(out)
-    loop(out)
-    out.print(early(out))
-    const x = attempt(out, true, 30) catch 0
-    const y = attempt(out, true, 40) catch 0
-    const z = pass_on(out, true) catch 0
-    const w = attempt(out, false, 50) catch 0
-    out.print(x + y + z + w + 2)
+fn main(io: Io) !void {
+    order(io)
+    loop(io)
+    io.print(early(io))
+    const x = attempt(io, true, 30) catch 0
+    const y = attempt(io, true, 40) catch 0
+    const z = pass_on(io, true) catch 0
+    const w = attempt(io, false, 50) catch 0
+    io.print(x + y + z + w + 2)
 }

@@ -2,8 +2,8 @@
 uses io
 
 const P = struct { x: i64 }
-fn main(out: Io) void {
+fn main(io: Io) void {
     const p = P{ .x = 1 }
     p.x = 2
-    out.print(p.x)
+    io.print(p.x)
 }

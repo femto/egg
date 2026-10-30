@@ -4,6 +4,6 @@ uses io
 fn first_two(xs: []i64) []i64 {
     return xs
 }
-fn main(out: Io) void {
-    out.print(1)
+fn main(io: Io) void {
+    io.print(1)
 }

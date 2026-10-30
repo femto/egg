@@ -5,10 +5,10 @@
 // `allow unsafe`.
 uses io, alloc
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const p = a.create(5)
-    out.print(p.*)
+    io.print(p.*)
     const q = &p
-    out.print(p == null)
-    out.print(@intFromPtr(p))
+    io.print(p == null)
+    io.print(@intFromPtr(p))
 }

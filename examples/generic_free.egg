@@ -26,17 +26,17 @@ fn release(comptime T: type, a: Allocator, sink x: T) void {
     a.free(x)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var s = Slot(Buf(i64)){ .val = .empty, .set = false }
     s.offer(a, a.alloc(2, 7))
     s.offer(a, a.alloc(5, 7))
-    out.print(@len(s.val))
+    io.print(@len(s.val))
     a.free(s)
     var n = Slot(i64){ .val = 0, .set = false }
     n.offer(a, 1)
     n.offer(a, 2)
-    out.print(n.val)
+    io.print(n.val)
     release(i64, a, 3)
     release(Buf(i64), a, a.alloc(3, 0))
-    out.print(3)
+    io.print(3)
 }

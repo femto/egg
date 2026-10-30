@@ -4,8 +4,8 @@
 
 uses alloc, io
 
-fn main(out: Io, a: Allocator) void {
-    out.print(1)
+fn main(io: Io, a: Allocator) void {
+    io.print(1)
     const n = 0 - 2
     const b = a.alloc(n, 0)
     a.free(b)

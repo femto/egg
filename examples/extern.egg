@@ -7,7 +7,7 @@ uses io
 
 const cchar = @import("lib/cchar.egg")
 
-fn main(out: Io) void {
-    out.print(cchar.upper(97))
-    out.print(cchar.upper(@as(u8, "z"[0])))
+fn main(io: Io) void {
+    io.print(cchar.upper(97))
+    io.print(cchar.upper(@as(u8, "z"[0])))
 }

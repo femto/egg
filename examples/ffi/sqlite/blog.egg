@@ -58,7 +58,7 @@ fn add_comment(inout db: sql.Db, post: i64, author: str, body: str) !void {
     try st.run()
 }
 
-fn main(out: Io, a: Allocator) !void {
+fn main(io: Io, a: Allocator) !void {
     // In memory: every run starts fresh.
     var db = try sql.open(a, ":memory:")
     defer db.close()
@@ -83,32 +83,32 @@ fn main(out: Io, a: Allocator) !void {
     try add_comment(&db, p2, "carol", "Where's the shop?")
     try add_comment(&db, p3, "dave", "Nice; the overflow builtins really pay off.")
 
-    out.print("Posts (with comment + tag counts):")
+    io.print("Posts (with comment + tag counts):")
     var posts = try db.prepare(
         "SELECT p.id, p.title, (SELECT COUNT(*) FROM comments WHERE post_id = p.id), (SELECT COUNT(*) FROM post_tags WHERE post_id = p.id) FROM posts p ORDER BY p.id")
     defer posts.finalize()
     while (try posts.next()) {
         const head = a.concat(a.concat("  [", a.int_str(posts.int(0))), a.concat("] ", posts.text(a, 1)))
         const counts = a.concat(a.concat("  (", a.int_str(posts.int(2))), a.concat(" comments, ", a.concat(a.int_str(posts.int(3)), " tags)")))
-        out.print(a.concat(head, counts))
+        io.print(a.concat(head, counts))
     }
 
-    out.print("")
-    out.print("Posts tagged 'egg':")
+    io.print("")
+    io.print("Posts tagged 'egg':")
     var tagged = try db.prepare(
         "SELECT p.title FROM posts p JOIN post_tags pt ON pt.post_id = p.id JOIN tags t ON t.id = pt.tag_id WHERE t.name = ? ORDER BY p.id")
     defer tagged.finalize()
     try tagged.bind(1, "egg")
     while (try tagged.next()) {
-        out.print(a.concat("  - ", tagged.text(a, 0)))
+        io.print(a.concat("  - ", tagged.text(a, 0)))
     }
 
-    out.print("")
-    out.print("Comments on the FFI post:")
+    io.print("")
+    io.print("Comments on the FFI post:")
     var comments = try db.prepare("SELECT author, body FROM comments WHERE post_id = ? ORDER BY id")
     defer comments.finalize()
     try comments.bind_int(1, p1)
     while (try comments.next()) {
-        out.print(a.concat(a.concat("  ", comments.text(a, 0)), a.concat(": ", comments.text(a, 1))))
+        io.print(a.concat(a.concat("  ", comments.text(a, 0)), a.concat(": ", comments.text(a, 1))))
     }
 }

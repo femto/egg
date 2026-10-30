@@ -1,12 +1,12 @@
 // error: E130 @6
 uses io
 
-fn slurp(out: Io, a: Allocator) !void {
+fn slurp(io: Io, a: Allocator) !void {
     // no `uses alloc`
-    const b = try out.read_all(a)
+    const b = try io.read_all(a)
     a.free(b)
 }
 
-fn main(out: Io, a: Allocator) !void {
-    try slurp(out, a)
+fn main(io: Io, a: Allocator) !void {
+    try slurp(io, a)
 }

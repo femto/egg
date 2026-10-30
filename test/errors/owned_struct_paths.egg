@@ -3,36 +3,36 @@ uses alloc, io
 
 const conn = @import("lib/conn.egg")
 
-fn leak(out: Io) void {
+fn leak(io: Io) void {
     var c = conn.open(1)
-    c.send(out, 1)
+    c.send(io, 1)
 }
 
-fn twice(out: Io) void {
+fn twice(io: Io) void {
     const c = conn.open(1)
     const d = c
-    d.close(out)
-    c.close(out)
+    d.close(io)
+    c.close(io)
 }
 
-fn maybe(out: Io, b: bool) void {
+fn maybe(io: Io, b: bool) void {
     const c = conn.open(1)
     if (b) {
-        c.close(out)
+        c.close(io)
     }
 }
 
-fn overwrite(out: Io) void {
+fn overwrite(io: Io) void {
     var c = conn.open(1)
     c = conn.open(2)
-    c.close(out)
+    c.close(io)
 }
 
-fn main(out: Io) void {
-    leak(out)
-    twice(out)
-    maybe(out, true)
-    overwrite(out)
+fn main(io: Io) void {
+    leak(io)
+    twice(io)
+    maybe(io, true)
+    overwrite(io)
 }
 // error: E135 @7
 // error: E136 @15

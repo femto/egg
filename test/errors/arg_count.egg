@@ -3,6 +3,6 @@ uses io
 
 fn add(a: i64, b: i64) i64 { return a + b }
 
-fn main(out: Io) void {
-    out.print(add(1))
+fn main(io: Io) void {
+    io.print(add(1))
 }

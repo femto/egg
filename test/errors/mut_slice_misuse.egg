@@ -20,7 +20,7 @@ fn own(inout bs: []Buf(i64)) void {
     _ = @len(bs)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const arr = [2]i64{ 1, 2 }
     fill(&arr[0..], 0)
     var v = [2]i64{ 1, 2 }
@@ -29,7 +29,7 @@ fn main(out: Io, a: Allocator) void {
     fill(&"ab"[0..], 0)
     both(&v[0..1], &v[1..])
     reset(&v[0..], v[0..])
-    out.print(v[0])
+    io.print(v[0])
 }
 // error: E147 @19
 // error: E105 @10

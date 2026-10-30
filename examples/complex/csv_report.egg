@@ -77,7 +77,7 @@ fn parse_int(s: str) !i64 {
     return n
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     const text = "ann,eng,120\nbob,ops,90\ncy,eng,150\ndee,ops,x\neve,eng,110\nfay,ops,99999999999999999999\n,eng,5\n,ops,7"
     var rows: Buf(Row) = .empty
     defer a.free(rows)
@@ -90,21 +90,21 @@ fn main(a: Allocator, out: Io) void {
             continue
         }
         const pay = parse_int(f[2]) catch |e| {
-            out.print(a.concat(a.concat(a.concat("line ", a.int_str(n + 1)), ": "), @errorName(e)))
+            io.print(a.concat(a.concat(a.concat("line ", a.int_str(n + 1)), ": "), @errorName(e)))
             continue
         }
         a.push(&rows, Row{ .name = f[0], .dept = f[1], .pay = pay })
     }
     sort(Row, &rows, by_pay)
     for (rows) |r| {
-        out.print(a.concat(a.concat(r.name, " "), a.int_str(r.pay)))
+        io.print(a.concat(a.concat(r.name, " "), a.int_str(r.pay)))
     }
     sort(Row, &rows, by_name)
     var names = ""
     for (rows) |r| {
         names = a.concat(names, a.concat(r.name, " "))
     }
-    out.print(names[0..@len(names) - 1])
+    io.print(names[0..@len(names) - 1])
     // total per dept
     var depts: Buf(str) = .empty
     defer a.free(depts)
@@ -125,6 +125,6 @@ fn main(a: Allocator, out: Io) void {
         totals[k] = totals[k] + r.pay
     }
     for (depts) |d, i| {
-        out.print(a.concat(a.concat(d, " "), a.int_str(totals[i])))
+        io.print(a.concat(a.concat(d, " "), a.int_str(totals[i])))
     }
 }

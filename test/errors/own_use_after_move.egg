@@ -8,10 +8,10 @@ fn total(a: Allocator, sink b: Buf(i64)) i64 {
     return n
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const b = a.alloc(3, 1)
-    out.print(total(a, b))
-    out.print(b[0])
+    io.print(total(a, b))
+    io.print(b[0])
 
     const c = a.alloc(2, 0)
     const d = c

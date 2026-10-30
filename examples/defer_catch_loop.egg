@@ -12,20 +12,20 @@ fn f(x: i64) !i64 {
 fn g() !void {
     return error.Closed
 }
-fn h(out: Io) !void {
+fn h(io: Io) !void {
     defer g() catch {
         var i: i64 = 0
         while (i < 3) {
             i = i + 1
             const v = f(i) catch continue
             const w = f(v) catch break
-            out.print(w)
+            io.print(w)
         }
     }
-    out.print(0)
+    io.print(0)
 }
-fn main(out: Io) void {
-    h(out) catch |_| {
-        out.print(9)
+fn main(io: Io) void {
+    h(io) catch |_| {
+        io.print(9)
     }
 }

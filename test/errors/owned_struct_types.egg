@@ -6,10 +6,10 @@ const conn = @import("lib/conn.egg")
 
 const Pair = struct { c: conn.Conn, n: i64 }
 
-fn forge(out: Io) void {
+fn forge(io: Io) void {
     const c = conn.Conn{ .id = 9 }
     @drop(c)
-    out.print(0)
+    io.print(0)
 }
 
 fn freed(a: Allocator) void {
@@ -32,26 +32,26 @@ fn bump(inout n: i64) void {
     n = n + 1
 }
 
-fn fields(out: Io) void {
+fn fields(io: Io) void {
     var c = conn.open(1)
     c.id = 99
     bump(&c.id)
     const old = @replace(&c.id, 5)
-    out.print(old)
-    c.close(out)
+    io.print(old)
+    c.close(io)
 }
 
-fn literal(out: Io) void {
+fn literal(io: Io) void {
     const xs = [1]conn.Conn{ conn.open(1) }
-    out.print(@len(xs))
+    io.print(@len(xs))
 }
 
-fn main(out: Io, a: Allocator) void {
-    forge(out)
+fn main(io: Io, a: Allocator) void {
+    forge(io)
     freed(a)
     plain(a)
-    fields(out)
-    literal(out)
+    fields(io)
+    literal(io)
 }
 // error: E142 @10
 // error: E142 @11

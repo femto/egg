@@ -2,7 +2,7 @@
 // error: E131 @7
 uses io, alloc
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const p = a.cstr("hi")       // making the pointer is fine
-    out.print(a.str_from_c(p))
+    io.print(a.str_from_c(p))
 }

@@ -31,12 +31,12 @@ fn check(n: i64) !void {
     }
 }
 
-fn main(out: Io) !void {
-    out.print(try parse_number("123"))
-    out.print(parse_number("12x") catch -1)
-    out.print(parse_number("") catch -2)
+fn main(io: Io) !void {
+    io.print(try parse_number("123"))
+    io.print(parse_number("12x") catch -1)
+    io.print(parse_number("") catch -2)
     try check(5)
-    check(500) catch out.print(0)
+    check(500) catch io.print(0)
     try check(1000)
-    out.print(999)
+    io.print(999)
 }

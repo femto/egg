@@ -1,9 +1,9 @@
 // Text orders only with text; numbers only with numbers.
 uses io
 
-fn main(out: Io) void {
-    out.print("a" < 3)
-    out.print(2 >= "b")
+fn main(io: Io) void {
+    io.print("a" < 3)
+    io.print(2 >= "b")
 }
 // error: E103 @5
 // error: E103 @6

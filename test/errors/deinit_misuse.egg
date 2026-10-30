@@ -7,8 +7,8 @@ const t = @import("lib/tracked.egg")
 const Bad = owned struct {
     id: i64
 
-    fn deinit(sink self: Bad, out: Io) void {
-        out.print(self.id)
+    fn deinit(sink self: Bad, io: Io) void {
+        io.print(self.id)
         @drop(self)
     }
 }

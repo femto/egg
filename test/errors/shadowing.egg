@@ -1,11 +1,11 @@
 // error: E106 @7
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x = 1
     if (x > 0) {
         const x = 2
-        out.print(x)
+        io.print(x)
     }
-    out.print(x)
+    io.print(x)
 }

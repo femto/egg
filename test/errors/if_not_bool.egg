@@ -1,6 +1,6 @@
 // error: E103 @5
 uses io
 
-fn main(out: Io) void {
-    if (1) { out.print(1) }
+fn main(io: Io) void {
+    if (1) { io.print(1) }
 }

@@ -3,7 +3,7 @@
 
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const big = 9223372036854775807
-    out.print(big + 1)
+    io.print(big + 1)
 }

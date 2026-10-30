@@ -6,9 +6,9 @@ fn path(a: Allocator) str {
     return a.str("/nonexistent/egg/file")
 }
 
-fn main(out: Io, files: Fs, a: Allocator) void {
+fn main(io: Io, files: Fs, a: Allocator) void {
     const b = files.read(a, path(a)) catch |e| {
-        out.print(@errorName(e))
+        io.print(@errorName(e))
         return
     }
     a.free(b)

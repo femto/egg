@@ -6,13 +6,13 @@ const Conn = owned struct {
     id: i64
 
     // Reading or changing it borrows it: inout self.
-    fn send(inout self: Conn, out: Io, n: i64) void {
-        out.print(self.id * 100 + n)
+    fn send(inout self: Conn, io: Io, n: i64) void {
+        io.print(self.id * 100 + n)
     }
 
     // Taking self by value moves it in; @drop ends it.
-    fn close(sink self: Conn, out: Io) void {
-        out.print(-self.id)
+    fn close(sink self: Conn, io: Io) void {
+        io.print(-self.id)
         @drop(self)
     }
 }

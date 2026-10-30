@@ -4,9 +4,9 @@
 
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var n = 255
-    out.print(@as(u8, n))
+    io.print(@as(u8, n))
     n = n + 1
-    out.print(@as(u8, n))
+    io.print(@as(u8, n))
 }

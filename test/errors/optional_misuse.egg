@@ -7,18 +7,18 @@ fn bad_ptr(p: ?*i64) void {
 fn nested(x: ??i64) void {
 }
 
-fn not_opt(out: Io) void {
+fn not_opt(io: Io) void {
     const n = 3
-    out.print(n orelse 4)
+    io.print(n orelse 4)
 }
 
 fn wrong_fallback(x: ?i64) i64 {
     return x orelse true
 }
 
-fn in_defer(out: Io, x: ?i64) void {
-    defer out.print(x orelse return)
-    out.print(1)
+fn in_defer(io: Io, x: ?i64) void {
+    defer io.print(x orelse return)
+    io.print(1)
 }
 
 fn owned_local(a: Allocator) void {
@@ -33,8 +33,8 @@ fn ignored(a: Allocator) void {
     a.free(b)
 }
 
-fn print_opt(out: Io, x: ?i64) void {
-    out.print(x)
+fn print_opt(io: Io, x: ?i64) void {
+    io.print(x)
 }
 
 const Holder = struct {

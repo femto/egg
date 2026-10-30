@@ -24,7 +24,7 @@ can call every other function of its file, including itself.
 
 The root file must have a function `main` returning `void`, `i64` or
 `!void`, whose parameters are only capability values, each type at most
-once: `fn main()`, `fn main(out: Io)`, `fn main(out: Io, a: Allocator)`
+once: `fn main()`, `fn main(io: Io)`, `fn main(io: Io, a: Allocator)`
 (E109). The runtime creates them; they are the only source of
 capabilities. When `main` returns `i64`, the value becomes the process exit
 status (the operating system keeps only the low bits, usually 8). When it
@@ -32,14 +32,14 @@ returns an error, the program prints `error: Name` to standard error and
 exits with status 1.
 
 Most examples below print, so they start with `uses io` and take
-`out: Io`.
+`io: Io`.
 
 ```egg
 // expect: 3
 uses io
 
-fn main(out: Io) void {
-    out.print(add(1, 2))   // add is declared below; order does not matter
+fn main(io: Io) void {
+    io.print(add(1, 2))   // add is declared below; order does not matter
 }
 
 fn add(a: i64, b: i64) i64 {
@@ -76,13 +76,13 @@ fn add(a: i64, b: i64) i64 {
 // expect: 3 255 65
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const s = "caf\u{e9}"
-    out.print(@len(s), " ", s == "café")
+    io.print(@len(s), " ", s == "café")
     const smile = "\u{1f600}"
-    out.print(@len(smile), " ", smile[0], " ", smile[3])
+    io.print(@len(smile), " ", smile[0], " ", smile[3])
     const raw = "\xff\xfe\x41"         // not UTF-8
-    out.print(@len(raw), " ", raw[0], " ", raw[2])
+    io.print(@len(raw), " ", raw[0], " ", raw[2])
 }
 ```
 - `//` starts a comment that runs to the end of the line.
@@ -112,12 +112,12 @@ fn sum(p: Pair(
     return p.a + p.b
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const total = 1 +
                   2 +
                   3
-    out.print(total)
-    out.print(sum(
+    io.print(total)
+    io.print(sum(
         Pair(i64){ .a = 1, .b = 2 }
     ))
 }
@@ -163,8 +163,8 @@ is an error.
 // error: E103
 uses io
 
-fn main(out: Io) void {
-    if (1) { out.print(1) }
+fn main(io: Io) void {
+    if (1) { io.print(1) }
 }
 ```
 
@@ -201,9 +201,9 @@ code does not say what it means, so it is rejected rather than tolerated.
 // error: E111
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var x = 1          // never changed: must be const
-    out.print(x)
+    io.print(x)
 }
 ```
 
@@ -211,11 +211,11 @@ fn main(out: Io) void {
 // error: E106
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x = 1
     if (x > 0) {
         const x = 2    // shadows the outer x
-        out.print(x)
+        io.print(x)
     }
 }
 ```
@@ -249,15 +249,15 @@ fn add(x: i64, y: i64) i64 {
     return x + y
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Bytes = .empty
     defer a.free(b)
     a.push(&b, 1)
     a.push(&b, 2)
     const f: Op = add
     const n: Id = f(1, 2)
-    out.print(n, " ", @len(b))
-    out.print(Dot{ .x = 3, .y = 4 }.sum())
+    io.print(n, " ", @len(b))
+    io.print(Dot{ .x = 3, .y = 4 }.sum())
 }
 ```
 
@@ -316,8 +316,8 @@ fn sign(n: i64) i64 {
     if (n < 0) { return -1 }
 }
 
-fn main(out: Io) void {
-    out.print(sign(1))
+fn main(io: Io) void {
+    io.print(sign(1))
 }
 ```
 
@@ -346,7 +346,7 @@ Loop variables are constants; name one `_` to ignore it. Rule E113 is why
 // expect: 3
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const xs = [4]i64{ 1, 2, 3, 4 }
     for (xs) |x, i| {
         if (x % 2 == 0) {
@@ -355,7 +355,7 @@ fn main(out: Io) void {
         if (i > 2) {
             break
         }
-        out.print(x)
+        io.print(x)
     }
 }
 ```
@@ -434,12 +434,12 @@ fn name(c: Color) str {
     return if (c == .red) "red" else "green"
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x: i64 = -3
-    out.print(if (x < 0) -1 else 1)
-    out.print(name(if (x > 0) .red else .green))
+    io.print(if (x < 0) -1 else 1)
+    io.print(name(if (x > 0) .red else .green))
     const m: ?i64 = if (x > 0) x else null
-    out.print(m orelse 99)
+    io.print(m orelse 99)
 }
 ```
 
@@ -461,13 +461,13 @@ nothing says otherwise:
 // expect: 125
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x: u8 = 200        // the literal is a u8
-    out.print(x + 55)        // so is 55
+    io.print(x + 55)        // so is 55
     const n = 1000           // i64
-    out.print(@as(u8, n / 4 - 1) - 1)
+    io.print(@as(u8, n / 4 - 1) - 1)
     const big = n > 10
-    out.print(@as(u8, if (big) n / 8 else n))
+    io.print(@as(u8, if (big) n / 8 else n))
 }
 ```
 
@@ -496,7 +496,7 @@ to a float it rounds to the nearest value; from a float to an integer it
 truncates toward zero and panics `float cast out of range` if the result
 does not fit, or the value is `nan` or infinite.
 
-`out.print` and `a.float_str(x)` write the shortest decimal that reads
+`io.print` and `a.float_str(x)` write the shortest decimal that reads
 back as the same value; a finite value always has a `.` or an exponent:
 `0.1`, `3.0`, `1e+16`, `1.5e-07`. The others are `nan`, `inf` and `-inf`.
 
@@ -514,16 +514,16 @@ fn half(x: f64) f64 {
     return x / 2
 }
 
-fn main(out: Io) void {
-    out.print(0.1 + 0.2)
-    out.print(half(7))
-    out.print(1e16)
+fn main(io: Io) void {
+    io.print(0.1 + 0.2)
+    io.print(half(7))
+    io.print(1e16)
     const f: f32 = 0.1
-    out.print(f)
+    io.print(f)
     const zero = 0.0
-    out.print(1 / zero)
-    out.print(@as(i64, -7.9))
-    out.print(@as(f64, 1 / 2))   // literals: divided as f64
+    io.print(1 / zero)
+    io.print(@as(i64, -7.9))
+    io.print(@as(f64, 1 / 2))   // literals: divided as f64
 }
 ```
 
@@ -531,9 +531,9 @@ fn main(out: Io) void {
 // panic: float cast out of range
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const big = 1e10
-    out.print(@as(i32, big))
+    io.print(@as(i32, big))
 }
 ```
 
@@ -541,9 +541,9 @@ fn main(out: Io) void {
 // error: E103
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const n = 3
-    out.print(1.5 * n)       // i64 and f64: convert n with @as(f64, n)
+    io.print(1.5 * n)       // i64 and f64: convert n with @as(f64, n)
 }
 ```
 
@@ -575,11 +575,11 @@ error and aborts the process with a non-zero status.
 // expect: 1
 uses io
 
-fn main(out: Io) void {
-    out.print(-7 / 2)
-    out.print(-7 % 2)
-    out.print(7 / 2)
-    out.print(7 % -2)
+fn main(io: Io) void {
+    io.print(-7 / 2)
+    io.print(-7 % 2)
+    io.print(7 / 2)
+    io.print(7 % -2)
 }
 ```
 
@@ -587,9 +587,9 @@ fn main(out: Io) void {
 // panic: integer overflow
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const big = 9223372036854775807
-    out.print(big + 1)
+    io.print(big + 1)
 }
 ```
 
@@ -599,12 +599,12 @@ fn main(out: Io) void {
 // expect: 128
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a: u8 = 0b1100_1010
-    out.print(a & 0x0f, " ", a | 0x0f, " ", ~a)
-    out.print(@as(u8, 0x81) << 1, " ", -16 >> 2, " ", a & 1 == 1)
+    io.print(a & 0x0f, " ", a | 0x0f, " ", ~a)
+    io.print(@as(u8, 0x81) << 1, " ", -16 >> 2, " ", a & 1 == 1)
     const m: u8 = 1 << 7
-    out.print(m)
+    io.print(m)
 }
 ```
 
@@ -614,18 +614,18 @@ fn main(out: Io) void {
 // expect: 3
 uses io
 
-fn one(out: Io) i64 {
-    out.print(1)
+fn one(io: Io) i64 {
+    io.print(1)
     return 1
 }
 
-fn two(out: Io) i64 {
-    out.print(2)
+fn two(io: Io) i64 {
+    io.print(2)
     return 2
 }
 
-fn main(out: Io) void {
-    out.print(one(out) + two(out))
+fn main(io: Io) void {
+    io.print(one(io) + two(io))
 }
 ```
 
@@ -649,12 +649,12 @@ freed, so a `str` is always valid.
 // expect: true
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const s = "hello"
-    out.print(@len(s))
-    out.print(s[0])
-    out.print(s[1..4])
-    out.print(s[1..] == "ello")
+    io.print(@len(s))
+    io.print(s[0])
+    io.print(s[1..4])
+    io.print(s[1..] == "ello")
 }
 ```
 
@@ -663,10 +663,10 @@ fn main(out: Io) void {
 // expect: 3
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const crlf = "\r\n"
-    out.print(crlf[0])        // \r is byte 13
-    out.print(@len("a\r\n"))
+    io.print(crlf[0])        // \r is byte 13
+    io.print(@len("a\r\n"))
 }
 ```
 
@@ -681,7 +681,7 @@ methods add text at its end, growing it as `a.push` does:
 | --- | --- |
 | `a.append_str(&b, s)` | the bytes of the text s |
 | `a.append_int(&b, n)` | the integer n in decimal |
-| `a.append_float(&b, x)` | the float x as `out.print` writes it |
+| `a.append_float(&b, x)` | the float x as `io.print` writes it |
 
 **Text** here is a `str`, a `[]u8`, a `Buf(u8)`, or a slice of one of
 them; each is only read. Text in any of these forms:
@@ -689,7 +689,7 @@ them; each is only read. Text in any of these forms:
 - is lent to a `[]u8` parameter (`fn count(s: []u8) i64` takes
   `count("abc")`, `count(b)` and `count(b[1..])`). A slice cannot be
   stored, so the bytes cannot outlive a Buf(u8) that is freed or grown;
-- prints with `out.print`, as its bytes;
+- prints with `io.print`, as its bytes;
 - compares with `==` and `!=` by its bytes, whatever kind each side is
   (`b == "id=7"`, `b[0..2] == s`); a slice may be compared directly;
 - orders with `<`, `<=`, `>` and `>=` by its bytes, as unsigned numbers,
@@ -718,16 +718,16 @@ fn count(s: []u8, c: u8) i64 {
     return n
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     defer a.free(b)
     a.append_str(&b, "id=")
     a.append_int(&b, 7)
     a.append_str(&b, ", x=")
     a.append_float(&b, 1.5)
-    out.print(b)
-    out.print(b[0..4] == "id=7")
-    out.print(count(b, 61))
+    io.print(b)
+    io.print(b[0..4] == "id=7")
+    io.print(count(b, 61))
 }
 ```
 
@@ -760,11 +760,11 @@ const Point = struct {
 // expect: 4
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var p = Point.origin()
     p.move(3, 4)
-    out.print(p.len2())
-    out.print(p.y)
+    io.print(p.len2())
+    io.print(p.y)
 }
 
 const Point = struct {
@@ -820,14 +820,14 @@ arm act on the enclosing loop.
 // expect: green
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
     var total = 0
     for (shapes) |s| {
         total = total + s.area()
     }
-    out.print(total)
-    out.print(next(.red))
+    io.print(total)
+    io.print(next(.red))
 }
 
 const Size = struct { w: i64, h: i64 }
@@ -872,10 +872,10 @@ uses io
 
 const Light = enum { red, green }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     switch (Light.red) {
         .red => {
-            out.print(1)
+            io.print(1)
         }
     }
 }
@@ -909,12 +909,12 @@ fn sum(xs: []i64) i64 {
     return total
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a = [4]i64{ 1, 2, 3, 4 }
-    out.print(sum(a[0..]))
-    out.print(sum(a[1..3]))
+    io.print(sum(a[0..]))
+    io.print(sum(a[1..3]))
     const zeros: [3]i64 = @splat(1)
-    out.print(sum(zeros[0..]))
+    io.print(sum(zeros[0..]))
 }
 ```
 
@@ -922,10 +922,10 @@ fn main(out: Io) void {
 // error: E116
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a = [3]i64{ 1, 2, 3 }
     const view = a[0..2]
-    out.print(@len(view))
+    io.print(@len(view))
 }
 ```
 
@@ -955,11 +955,11 @@ fn swap(inout a: i64, inout b: i64) void {
     b = t
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var x = 1
     var y = 2
     swap(&x, &y)
-    out.print(x * 10 + y)
+    io.print(x * 10 + y)
 }
 ```
 
@@ -971,10 +971,10 @@ fn add_into(inout acc: i64, x: i64) void {
     acc = acc + x
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var total = 1
     add_into(&total, total)
-    out.print(total)
+    io.print(total)
 }
 ```
 
@@ -1002,11 +1002,11 @@ fn fill(inout xs: []i64, v: i64) void {
     }
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     var a = [4]i64{ 0, 0, 0, 0 }
     fill(&a[1..3], 7)
     for (a) |x| {
-        out.print(x)
+        io.print(x)
     }
 }
 ```
@@ -1019,10 +1019,10 @@ fn fill(inout xs: []i64, v: i64) void {
     xs[0] = v
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a = [2]i64{ 1, 2 }
     fill(&a[0..], 0)
-    out.print(a[0])
+    io.print(a[0])
 }
 ```
 
@@ -1076,14 +1076,14 @@ fn explain(e: anyerror) str {
     }
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const xs = [_]i64{ 0, -3, 4 }
     for (xs) |x| {
         const v = check(x) catch |e| {
-            out.print(a.concat(a.concat(a.int_str(x), ": "), explain(e)))
+            io.print(a.concat(a.concat(a.int_str(x), ": "), explain(e)))
             continue
         }
-        out.print(a.concat(a.concat(a.int_str(x), " = "), a.int_str(v)))
+        io.print(a.concat(a.concat(a.int_str(x), " = "), a.int_str(v)))
     }
 }
 ```
@@ -1115,12 +1115,12 @@ fn first(xs: []i64) ?i64 {
     return xs[0]
 }
 
-fn main(out: Io) void {
-    out.print(first([2]i64{ 4, 5 }[0..]) orelse -1)
+fn main(io: Io) void {
+    io.print(first([2]i64{ 4, 5 }[0..]) orelse -1)
     var best: ?i64 = null
-    out.print(best orelse -1)
+    io.print(best orelse -1)
     best = 9
-    out.print(best orelse -1)
+    io.print(best orelse -1)
 }
 ```
 
@@ -1148,10 +1148,10 @@ fn parse(s: str) !i64 {
     return n
 }
 
-fn main(out: Io) !void {
-    out.print(try parse("42"))
-    out.print(parse("4x") catch -1)
-    out.print(try parse(""))
+fn main(io: Io) !void {
+    io.print(try parse("42"))
+    io.print(parse("4x") catch -1)
+    io.print(try parse(""))
 }
 ```
 
@@ -1196,11 +1196,11 @@ fn max(comptime T: type, a: T, b: T) T {
     return b
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const p = Pair(i64){ .a = 1, .b = 2 }
-    out.print(p.swap().a)
-    out.print(max(i64, 3, 9))
-    out.print(@typeName(Pair(bool)))
+    io.print(p.swap().a)
+    io.print(max(i64, 3, 9))
+    io.print(@typeName(Pair(bool)))
 }
 ```
 
@@ -1228,9 +1228,9 @@ fn size(comptime T: type, x: T) i64 {
     }
 }
 
-fn main(out: Io) void {
-    out.print(size(str, "abc"))
-    out.print(size(i64, 7))
+fn main(io: Io) void {
+    io.print(size(str, "abc"))
+    io.print(size(i64, 7))
 }
 ```
 
@@ -1246,8 +1246,8 @@ fn size(comptime T: type, x: T) i64 {
     }
 }
 
-fn main(out: Io) void {
-    out.print(size(bool, true))
+fn main(io: Io) void {
+    io.print(size(bool, true))
 }
 ```
 
@@ -1280,7 +1280,7 @@ Builtins for pointers, which need `allow unsafe` (section 18):
 | `@ptrFromInt(*T, n)` | the address `n: usize` as a `*T` |
 | `@strPtr(s)` | a `*u8` to the bytes of the `str` s (not 0-terminated; do not write through it) |
 
-v1's `@print` is gone: printing is io, so it is `out.print(x)` with the io
+v1's `@print` is gone: printing is io, so it is `io.print(x)` with the io
 capability (section 17). `@print` is E112.
 
 ## 16. Modules
@@ -1335,8 +1335,8 @@ uses io
 
 const shapes = @import("lib/shapes.egg")
 
-fn main(out: Io) void {
-    out.print(shapes.Rect{ .w = 2, .h = 3 }.area())   // 6
+fn main(io: Io) void {
+    io.print(shapes.Rect{ .w = 2, .h = 3 }.area())   // 6
 }
 ```
 
@@ -1357,10 +1357,10 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `out.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `out.print(w, ": ", n)`; `out.eprint(x, ...)`: the same, to standard error, after everything printed before it; `out.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `out.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
+| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; see below |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.str(t) str`: a copy of the text t; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.str(t) str`: a copy of the text t; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 `fs` is separate from `io` so that a file's `uses` line says what it can
 reach: a program that only prints cannot touch a file.
@@ -1369,11 +1369,11 @@ reach: a program that only prints cannot touch a file.
 // expect: 5
 uses alloc, fs, io
 
-fn main(out: Io, files: Fs, a: Allocator) !void {
+fn main(io: Io, files: Fs, a: Allocator) !void {
     try files.write("egg_spec_fs.txt", "hello")
     const text = try files.read(a, "egg_spec_fs.txt")
     defer a.free(text)
-    out.print(@len(text))
+    io.print(@len(text))
 }
 ```
 
@@ -1416,8 +1416,8 @@ file: at the method call, or at the call into another file.
 
 ```egg
 // error: E130
-fn main(out: Io) void {
-    out.print(1)       // no `uses io`
+fn main(io: Io) void {
+    io.print(1)       // no `uses io`
 }
 ```
 
@@ -1431,18 +1431,18 @@ freed comes as a `Buf(T)`, whose owner the compiler checks (section 21).
 uses alloc, io
 
 const Log = struct {
-    out: Io
+    io: Io
     a: Allocator
 
     fn show(self: Log, label: str, n: i64) void {
-        self.out.print(self.a.concat(label, self.a.int_str(n)))
+        self.io.print(self.a.concat(label, self.a.int_str(n)))
     }
 }
 
-fn main(out: Io, a: Allocator) void {
-    const log = Log{ .out = out, .a = a }
+fn main(io: Io, a: Allocator) void {
+    const log = Log{ .io = io, .a = a }
     log.show("total: ", 42)
-    out.print(a.int_str(-7))
+    io.print(a.int_str(-7))
 }
 ```
 
@@ -1505,14 +1505,14 @@ fn bump(p: *i64) void {
     p.* = p.* + 1
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var list: *Node = null
     list = a.create(Node{ .value = 1, .next = list })
     list = a.create(Node{ .value = 5, .next = list })
-    out.print(sum(list))
+    io.print(sum(list))
     var x = 41
     bump(&x)
-    out.print(x)
+    io.print(x)
 }
 ```
 
@@ -1520,9 +1520,9 @@ fn main(out: Io, a: Allocator) void {
 // error: E131
 uses io, alloc
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const p = a.create(5)    // fine: making a pointer is safe
-    out.print(p.*)           // reading through it is not
+    io.print(p.*)           // reading through it is not
 }
 ```
 
@@ -1555,10 +1555,10 @@ fn twice(f: fn(i64, i64) i64, x: i64) i64 {
     return f(x, x)
 }
 
-fn main(out: Io) void {
-    out.print(twice(add, 4))
+fn main(io: Io) void {
+    io.print(twice(add, 4))
     const op = Op{ .run = mul }
-    out.print(op.run(3, 5))
+    io.print(op.run(3, 5))
 }
 ```
 
@@ -1600,8 +1600,8 @@ allow unsafe
 
 extern fn toupper(c: i32) i32
 
-fn main(out: Io) void {
-    out.print(toupper(97))
+fn main(io: Io) void {
+    io.print(toupper(97))
 }
 ```
 
@@ -1621,7 +1621,7 @@ allow unsafe
 
 extern fn toupper(c: i32) i32
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const p = a.cstr("hello")
     var i = 0
     while (@ptrAdd(p, i).* != 0) {
@@ -1629,7 +1629,7 @@ fn main(out: Io, a: Allocator) void {
         c.* = @as(u8, toupper(@as(i32, c.*)))
         i = i + 1
     }
-    out.print(a.str_from_c(p))
+    io.print(a.str_from_c(p))
 }
 ```
 
@@ -1703,10 +1703,10 @@ fn eat(a: Allocator, sink b: Buf(i64)) void {
     a.free(b)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const b = a.alloc(3, 0)
-    out.print(count(b))       // borrowed: b is still owned here
-    out.print(count(b))
+    io.print(count(b))       // borrowed: b is still owned here
+    io.print(count(b))
     eat(a, b)                 // moved
 }
 ```
@@ -1831,25 +1831,25 @@ uses io
 const File = owned struct {
     fd: i64
 
-    fn write(inout self: File, out: Io, n: i64) void {
-        out.print(100 * self.fd + n)
+    fn write(inout self: File, io: Io, n: i64) void {
+        io.print(100 * self.fd + n)
     }
 
-    fn close(sink self: File, out: Io) void {
-        out.print("closed 1")
+    fn close(sink self: File, io: Io) void {
+        io.print("closed 1")
         @drop(self)
     }
 }
 
-fn open(out: Io) File {
-    out.print("open 1")
+fn open(io: Io) File {
+    io.print("open 1")
     return File{ .fd = 1 }
 }
 
-fn main(out: Io) void {
-    var f = open(out)
-    defer f.close(out)
-    f.write(out, 1)
+fn main(io: Io) void {
+    var f = open(io)
+    defer f.close(io)
+    f.write(io, 1)
 }
 ```
 
@@ -1865,9 +1865,9 @@ const File = owned struct {
     }
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const f = File{ .fd = 1 }
-    out.print(f.fd)          // f is never closed
+    io.print(f.fd)          // f is never closed
 }
 ```
 
@@ -1889,15 +1889,15 @@ fn open(id: i64) Conn {
     return Conn{ .id = id }
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var pool: Buf(Conn) = .empty
     defer a.free(pool)               // deinit on each one left
     a.push(&pool, open(1))
     a.push(&pool, open(2))
-    out.print(@len(pool))
+    io.print(@len(pool))
     const c = a.pop(&pool) orelse return
-    out.print(@len(pool))
-    out.print(c.id)
+    io.print(@len(pool))
+    io.print(c.id)
     c.deinit()
 }
 ```
@@ -1948,14 +1948,14 @@ fn range(a: Allocator, n: i64) !Buf(i64) {
     return b
 }
 
-fn main(out: Io, a: Allocator) !void {
+fn main(io: Io, a: Allocator) !void {
     var b = try range(a, 4)
     defer a.free(b)          // whatever b owns when main returns
-    out.print(sum(b[0..]))
+    io.print(sum(b[0..]))
     b = doubled(a, b)        // moved in, and a new buffer back
-    out.print(sum(b[0..]))
+    io.print(sum(b[0..]))
     a.resize(&b, 5, 0)
-    out.print(@len(b))
+    io.print(@len(b))
 }
 ```
 
@@ -1978,20 +1978,20 @@ const List = struct {
     }
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var l = List{ .data = .empty, .len = 0 }
     l.push(a, 1)
     l.push(a, 2)
     l.push(a, 30)
-    out.print(l.len)
-    out.print(l.data[0] + l.data[1] + l.data[2])
+    io.print(l.len)
+    io.print(l.data[0] + l.data[1] + l.data[2])
     a.free(l)                // frees l.data
 
     var rows = a.alloc(2, Buf(u8).empty)
     defer a.free(rows)       // frees each row, then rows
     a.free(@replace(&rows[1], a.alloc(2, 7)))
     const row = @take(&rows[1])
-    out.print(@len(row))
+    io.print(@len(row))
     a.free(row)
 }
 ```
@@ -2000,10 +2000,10 @@ fn main(out: Io, a: Allocator) void {
 // error: E136
 uses alloc, io
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const b = a.alloc(3, 0)
     a.free(b)
-    out.print(b[0])          // b was moved by a.free
+    io.print(b[0])          // b was moved by a.free
 }
 ```
 
@@ -2011,9 +2011,9 @@ fn main(out: Io, a: Allocator) void {
 // error: E135
 uses alloc, io
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const b = a.alloc(3, 0)
-    out.print(@len(b))       // b is never freed
+    io.print(@len(b))       // b is never freed
 }
 ```
 
@@ -2021,12 +2021,12 @@ fn main(out: Io, a: Allocator) void {
 // error: E134
 uses alloc, io
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const b = a.alloc(3, 0)
     if (@len(b) > 2) {
         a.free(b)            // freed on one path only
     }
-    out.print(1)
+    io.print(1)
 }
 ```
 
@@ -2092,7 +2092,7 @@ const Tree = struct {
     }
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var t = Tree{ .nodes = .empty, .kids = .empty }
     defer a.free(t)                  // the whole tree: two buffers
     // (2 + 3) * (4 * 1)
@@ -2103,8 +2103,8 @@ fn main(out: Io, a: Allocator) void {
     for (t.kids) |k| {
         ids = a.concat(ids, a.concat(a.int_str(k), " "))
     }
-    out.print(ids[0..@len(ids) - 1])
-    out.print(t.eval(root))
+    io.print(ids[0..@len(ids) - 1])
+    io.print(t.eval(root))
 }
 ```
 
@@ -2151,9 +2151,9 @@ fn fib(n: i64) i64 {
     return a
 }
 
-fn main(out: Io) void {
-    out.print(gcd(1071, 462))
-    out.print(fib(20))
-    out.print(gcd(10, 4) == 2 and fib(10) == 55)
+fn main(io: Io) void {
+    io.print(gcd(1071, 462))
+    io.print(fib(20))
+    io.print(gcd(10, 4) == 2 and fib(10) == 55)
 }
 ```

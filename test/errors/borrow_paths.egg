@@ -38,9 +38,9 @@ fn just_read(b: Buf(i64)) i64 {
     return @len(b)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const b = a.alloc(1, 0)
-    out.print(just_read(b) + just_read(b))
+    io.print(just_read(b) + just_read(b))
     a.free(b)
 }
 // error: E144 @9

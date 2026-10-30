@@ -2,7 +2,7 @@
 uses io
 
 const P = struct { x: i64, y: i64 }
-fn main(out: Io) void {
+fn main(io: Io) void {
     const p = P{ .x = 1 }
-    out.print(p.x)
+    io.print(p.x)
 }

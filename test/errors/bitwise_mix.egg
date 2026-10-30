@@ -1,6 +1,6 @@
 // error: E002 @5
 uses io
 
-fn main(out: Io) void {
-    out.print(1 | 2 & 3)
+fn main(io: Io) void {
+    io.print(1 | 2 & 3)
 }

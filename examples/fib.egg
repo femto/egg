@@ -8,6 +8,6 @@ fn fib(n: i64) i64 {
     return fib(n - 1) + fib(n - 2)
 }
 
-fn main(out: Io) void {
-    out.print(fib(20))
+fn main(io: Io) void {
+    io.print(fib(20))
 }

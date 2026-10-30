@@ -4,6 +4,6 @@ uses io
 fn f() !i64 {
     return 1
 }
-fn main(out: Io) void {
-    out.print(try f())
+fn main(io: Io) void {
+    io.print(try f())
 }

@@ -20,10 +20,10 @@ fn g() void {
     @compileError(m)
 }
 
-fn main(out: Io) void {
-    out.print(f(i64))
-    out.print(pick(i64))
-    out.print(pick(bool))
+fn main(io: Io) void {
+    io.print(f(i64))
+    io.print(pick(i64))
+    io.print(pick(bool))
     g()
 }
 // error: E103 @6

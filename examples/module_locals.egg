@@ -9,6 +9,6 @@ fn step() i64 {
     return 1
 }
 
-fn main(out: Io) void {
-    out.print(steps.twice(5) + step())
+fn main(io: Io) void {
+    io.print(steps.twice(5) + step())
 }

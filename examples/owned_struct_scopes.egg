@@ -8,14 +8,14 @@ const conn = @import("lib/conn.egg")
 
 const Plain = struct { data: Buf(i64) }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     if (true) {
         const c = conn.open(1)
-        c.close(out)
+        c.close(io)
     }
     if (true) {
         const c = Plain{ .data = a.alloc(3, 0) }
-        out.print(@len(c.data))
+        io.print(@len(c.data))
         a.free(c.data)
     }
 }

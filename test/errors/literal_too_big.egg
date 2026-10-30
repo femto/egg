@@ -1,6 +1,6 @@
 // error: E003 @5
 uses io
 
-fn main(out: Io) void {
-    out.print(99999999999999999999)
+fn main(io: Io) void {
+    io.print(99999999999999999999)
 }

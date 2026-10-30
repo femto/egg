@@ -24,14 +24,14 @@ fn is_digit(c: i64) bool {
     return c >= '0' and c <= '9'
 }
 
-fn main(out: Io, a: Allocator) void {
-    out.print(count("a,b,,c", ','))
+fn main(io: Io, a: Allocator) void {
+    io.print(count("a,b,,c", ','))
     const z: u8 = 'z'
-    out.print(z - 'a')
-    out.print('h')
-    out.print(is_digit("x7"[1]))
-    out.print('\\' + '\"' + '\0' + '\n' + '\r')
-    out.print(@as(u8, '\xff'))
+    io.print(z - 'a')
+    io.print('h')
+    io.print(is_digit("x7"[1]))
+    io.print('\\' + '\"' + '\0' + '\n' + '\r')
+    io.print(@as(u8, '\xff'))
     var b: Buf(u8) = .empty
     defer a.free(b)
     a.append_str(&b, "id-7")
@@ -42,5 +42,5 @@ fn main(out: Io, a: Allocator) void {
         }
         i = i + 1
     }
-    out.print(b)
+    io.print(b)
 }

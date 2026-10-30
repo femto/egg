@@ -10,26 +10,26 @@
 // expect: 3
 uses alloc, io
 
-fn show(xs: []i64, a: Allocator, out: Io) void {
+fn show(xs: []i64, a: Allocator, io: Io) void {
     var b: Buf(i64) = .empty
     defer a.free(b)
     a.push(&b, 1)
     a.push(&b, 0)
-    out.print(xs[a.pop(&b) orelse return])
-    out.print(@len(xs[a.pop(&b) orelse return..]))
-    out.print(xs[a.pop(&b) orelse return])
+    io.print(xs[a.pop(&b) orelse return])
+    io.print(@len(xs[a.pop(&b) orelse return..]))
+    io.print(xs[a.pop(&b) orelse return])
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     var b: Buf(?i64) = .empty
     defer a.free(b)
     a.push(&b, null)
     a.push(&b, 4)
-    out.print((a.pop(&b) orelse 0) orelse 1)
-    out.print((a.pop(&b) orelse 0) orelse 1)
-    out.print((a.pop(&b) orelse 7) orelse 1)
+    io.print((a.pop(&b) orelse 0) orelse 1)
+    io.print((a.pop(&b) orelse 0) orelse 1)
+    io.print((a.pop(&b) orelse 7) orelse 1)
     const xs = [_]i64{ 10, 20, 30 }
-    show(xs[0..], a, out)
+    show(xs[0..], a, io)
     const n: ?i32 = 3
-    out.print(n orelse 0)
+    io.print(n orelse 0)
 }

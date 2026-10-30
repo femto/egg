@@ -4,7 +4,7 @@ uses io
 
 const shapes = @import("shapes.egg")
 
-fn show(out: Io, r: shapes.Rect) void {
-    out.print(r.kind())
-    out.print(r.area())
+fn show(io: Io, r: shapes.Rect) void {
+    io.print(r.kind())
+    io.print(r.area())
 }

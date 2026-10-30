@@ -18,14 +18,14 @@ fn refill(a: Allocator, inout b: Buf(i64)) void {
     b = a.alloc(1, 0)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const g = give(a)
     defer a.free(g)
     var b = a.alloc(1, 0)
     defer a.free(b)
     swap_out(a, &b)
     refill(a, &b)
-    out.print(@len(b))
+    io.print(@len(b))
 }
 
 // error: E136 @9

@@ -36,11 +36,11 @@ fn is_text(comptime T: type) bool {
     return false
 }
 
-fn main(out: Io) void {
-    out.print(hash(str, "abc"))
-    out.print(hash(i64, 7))
-    out.print(hash(i32, 7))
-    out.print(hash(bool, true))
-    out.print(is_text(str))
-    out.print(is_text(i64))
+fn main(io: Io) void {
+    io.print(hash(str, "abc"))
+    io.print(hash(i64, 7))
+    io.print(hash(i32, 7))
+    io.print(hash(bool, true))
+    io.print(is_text(str))
+    io.print(is_text(i64))
 }

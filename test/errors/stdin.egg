@@ -4,13 +4,13 @@
 // error: E104 @12
 uses alloc, io
 
-fn main(out: Io, a: Allocator) !void {
+fn main(io: Io, a: Allocator) !void {
     var line: Buf(u8) = .empty
     var nums: Buf(i64) = .empty
-    const x = try out.read_line(a, line)
-    const y = try out.read_line(a, &nums)
-    const z = try out.read_all()
-    out.print(x, y, z)
+    const x = try io.read_line(a, line)
+    const y = try io.read_line(a, &nums)
+    const z = try io.read_all()
+    io.print(x, y, z)
     a.free(line)
     a.free(nums)
 }

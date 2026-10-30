@@ -20,14 +20,14 @@ fn early(a: Allocator, n: i64) !i64 {
     return m
 }
 
-fn main(out: Io, a: Allocator) !void {
+fn main(io: Io, a: Allocator) !void {
     const b = a.alloc(3, 0)
-    out.print(@len(b))
+    io.print(@len(b))
     var c = a.alloc(1, 0)
     c = a.alloc(2, 0)
     a.free(c)
-    out.print(ignore(a.alloc(1, 0)))
-    out.print(try early(a, 2))
+    io.print(ignore(a.alloc(1, 0)))
+    io.print(try early(a, 2))
 }
 
 // error: E135 @6

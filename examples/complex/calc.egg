@@ -147,15 +147,15 @@ fn run(a: Allocator, src: str) !i64 {
     return try eval(p.nodes[0..], root)
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     const inputs = [_]str{ "1 + 2 * 3", "(1 + 2) * 3", "-(4 - 10) / 2", "2 * (3", "8 / (2 - 2)", "1 + x", "99999999999999999999" }
     for (inputs) |s| {
         const v = run(a, s) catch |e| {
-            out.print(a.concat(a.concat(s, " -> error."), @errorName(e)))
+            io.print(a.concat(a.concat(s, " -> error."), @errorName(e)))
             continue
         }
-        out.print(a.concat(a.concat(s, " = "), a.int_str(v)))
+        io.print(a.concat(a.concat(s, " = "), a.int_str(v)))
     }
     // tabs, carriage returns and newlines separate tokens too
-    out.print(run(a, "\t1\r\n+\t2") catch -1)
+    io.print(run(a, "\t1\r\n+\t2") catch -1)
 }

@@ -17,26 +17,26 @@ const Pair = struct {
     second: t.Res
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const log = t.new_log(a)
 
     var pool: Buf(t.Res) = .empty
     a.push(&pool, t.make(a, log, 1))
     a.push(&pool, t.make(a, log, 2))
     a.push(&pool, t.make(a, log, 3))
-    out.print(@len(pool))
+    io.print(@len(pool))
     const last = a.pop(&pool) orelse t.make(a, log, 0)
-    out.print(last.id)
+    io.print(last.id)
     a.free(last)
-    out.print(t.read(log))
+    io.print(t.read(log))
     a.free(pool)
-    out.print(t.read(log))
+    io.print(t.read(log))
 
     const p = Pair{ .first = t.make(a, log, 6), .second = t.make(a, log, 7) }
     a.free(p)
-    out.print(t.read(log))
+    io.print(t.read(log))
 
     var none: Buf(i64) = .empty
-    out.print(a.pop(&none) orelse 0)
+    io.print(a.pop(&none) orelse 0)
     a.free(none)
 }

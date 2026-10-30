@@ -78,7 +78,7 @@ fn first(t: Text) u8 {
     return t[0]
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Bytes = .empty
     defer a.free(b)
     a.push(&b, 104)
@@ -87,36 +87,36 @@ fn main(out: Io, a: Allocator) void {
     a.push(&plain, 105)
     const n: Id = 3
     const m: i64 = n
-    out.print(m, " ", @len(b), " ", @len(plain))
+    io.print(m, " ", @len(b), " ", @len(plain))
 
     const v = Dot{ .x = 3, .y = 4 }
-    out.print(v.sum())
-    out.print(apply(add, 5, 7))
+    io.print(v.sum())
+    io.print(apply(add, 5, 7))
 
     var counts = Counts.init()
     defer a.free(counts)
     counts.put_text(a, b, 15)
-    out.print(counts.get_text(b) orelse 0)
-    out.print(first(b))
+    io.print(counts.get_text(b) orelse 0)
+    io.print(first(b))
 
     const none: MaybeId = null
-    out.print(none orelse 5)
+    io.print(none orelse 5)
     const g: Grid = [2][2]i64{ [2]i64{ 1, 2 }, [2]i64{ 3, 42 } }
-    out.print(g[1][1])
+    io.print(g[1][1])
 
     const p = am.Pair{ .a = 2, .b = 3 }
     const metres: am.Meters = p.a
-    out.print(metres)
+    io.print(metres)
     const names: am.Names = [2]str{ "fig", "pear" }
-    out.print(p.b, " ", names[1])
+    io.print(p.b, " ", names[1])
 
     var boxes = Boxes{ .items = .empty }
     defer a.free(boxes)
     a.push(&boxes.items, 9)
-    out.print(boxes.count())
-    out.print(Tag{ .n = 6 }.get())
+    io.print(boxes.count())
+    io.print(Tag{ .n = 6 }.get())
     var root = Node{ .v = 1, .kids = .empty }
     defer a.free(root)
     a.push(&root.kids, Node{ .v = 2, .kids = .empty })
-    out.print(root.v + root.kids[0].v)
+    io.print(root.v + root.kids[0].v)
 }

@@ -104,7 +104,7 @@ fn total(m: Map(i64)) i64 {
     return n
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     const text = "the cat and the dog and the bird saw the cat"
     var m = Map(i64).init(a)
     var start: i64 = 0
@@ -138,13 +138,13 @@ fn main(a: Allocator, out: Io) void {
         k = k + 1
     }
     for (list) |c| {
-        out.print(a.concat(a.concat(c.word, " "), a.int_str(c.n)))
+        io.print(a.concat(a.concat(c.word, " "), a.int_str(c.n)))
     }
     const f: fn(Map(i64)) i64 = total
-    out.print(f(m))
-    out.print(keep(i64, 7))
+    io.print(f(m))
+    io.print(keep(i64, 7))
     const kept = keep(Buf(Count), list)
-    out.print(@len(kept))
+    io.print(@len(kept))
     a.free(kept)
     m.deinit(a)
 }

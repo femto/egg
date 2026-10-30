@@ -31,7 +31,7 @@ fn before(x: Row, y: Row) bool {
     return x.n > y.n or (x.n == y.n and x.word < y.word)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const text = "The cat and the hat. The cat sat; the HAT didn't. And then the cat ran!"
     var counts = map.HashMap(Buf(u8), i64).init()
     defer a.free(counts)
@@ -55,6 +55,6 @@ fn main(out: Io, a: Allocator) void {
     }
     sort.sort_by(Row, &rows[0..], before)
     for (rows) |r| {
-        out.print(r.word, ": ", r.n)
+        io.print(r.word, ": ", r.n)
     }
 }

@@ -14,11 +14,11 @@ const Node = owned struct {
     }
 }
 
-fn main(a: Allocator, out: Io) void {
+fn main(a: Allocator, io: Io) void {
     var kids: Buf(Node) = .empty
     a.push(&kids, Node{ .val = 5, .kids = .empty })
     const n = Node{ .val = 1, .kids = kids }
-    out.print(n.kids[0].val)
-    out.print(@len(n.kids))
+    io.print(n.kids[0].val)
+    io.print(@len(n.kids))
     a.free(n)
 }

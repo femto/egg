@@ -5,7 +5,7 @@
 // expect: 999999
 uses alloc, io
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(i64) = .empty
     defer a.free(b)
     var i: i64 = 0
@@ -13,13 +13,13 @@ fn main(out: Io, a: Allocator) void {
         a.push(&b, i)
         i = i + 1
     }
-    out.print(@len(b))
+    io.print(@len(b))
     var sum: i64 = 0
     for (b) |x| {
         sum = sum + x
     }
-    out.print(sum)
+    io.print(sum)
     const last = a.pop(&b) orelse -1
     a.push(&b, last)
-    out.print(b[@len(b) - 1])
+    io.print(b[@len(b) - 1])
 }

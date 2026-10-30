@@ -23,17 +23,17 @@ const Framed = struct {
     pad: i64
 }
 
-fn main(out: Io) void {
-    report.show(out, shapes.Rect.square(3))
+fn main(io: Io) void {
+    report.show(io, shapes.Rect.square(3))
     const r = shapes.Rect{ .w = 2, .h = 3 }
-    report.show(out, r)
-    out.print(shapes.perimeter(r))
-    out.print(ring.unit().area())
+    report.show(io, r)
+    io.print(shapes.perimeter(r))
+    io.print(ring.unit().area())
     const b: shapes.Box(i64) = shapes.Box(i64){ .item = 3, .count = 1 }
-    out.print(b.item * b.count)
+    io.print(b.item * b.count)
     const xs = [3]i64{ 4, 7, 5 }
-    out.print(shapes.biggest(i64, xs[0..]))
-    out.print(r.kind() == shapes.Kind.rect)
+    io.print(shapes.biggest(i64, xs[0..]))
+    io.print(r.kind() == shapes.Kind.rect)
     const f = Framed{ .inner = r, .pad = 1 }
-    out.print(f.inner.area() * f.pad)
+    io.print(f.inner.area() * f.pad)
 }

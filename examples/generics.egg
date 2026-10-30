@@ -35,15 +35,15 @@ const Wrapper = struct {
     inner: Pair(bool)
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const p = Pair(i64){ .a = 1, .b = 2 }
     const q = p.swap()
-    out.print(q.a)
-    out.print(sum_pair(q))
-    out.print(max(i64, 3, 9))
+    io.print(q.a)
+    io.print(sum_pair(q))
+    io.print(max(i64, 3, 9))
     const w = Wrapper{ .inner = Pair(bool){ .a = true, .b = false } }
-    out.print(w.inner.swap().a)
-    out.print(@sizeOf(Pair(i64)))
-    out.print(@typeName(Pair(bool)))
-    out.print(@typeName([3]i64))
+    io.print(w.inner.swap().a)
+    io.print(@sizeOf(Pair(i64)))
+    io.print(@typeName(Pair(bool)))
+    io.print(@typeName([3]i64))
 }

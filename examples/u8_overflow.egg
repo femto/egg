@@ -3,8 +3,8 @@
 
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const a: u8 = 200
     const b: u8 = 100
-    out.print(a + b)
+    io.print(a + b)
 }

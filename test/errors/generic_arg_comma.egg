@@ -12,6 +12,6 @@ fn first(p: Pair(i64 bool)) i64 {
     return p.a
 }
 
-fn main(out: Io) void {
-    out.print(first(Pair(i64, bool){ .a = 7, .b = true }))
+fn main(io: Io) void {
+    io.print(first(Pair(i64, bool){ .a = 7, .b = true }))
 }

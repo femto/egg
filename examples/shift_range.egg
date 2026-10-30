@@ -7,8 +7,8 @@ fn amount(n: i64) i64 {
     return n
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x: u8 = 1
-    out.print(x << amount(7))
-    out.print(x << amount(8))
+    io.print(x << amount(7))
+    io.print(x << amount(8))
 }

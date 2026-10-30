@@ -7,13 +7,13 @@ fn count(args: Args) i64 {
     return args.len()
 }
 
-fn warn(out: Io) void {
+fn warn(io: Io) void {
     // no `uses io`
-    out.eprint("x")
+    io.eprint("x")
 }
 
-fn main(out: Io, args: Args) void {
-    warn(out)
+fn main(io: Io, args: Args) void {
+    warn(io)
     if (count(args) == 0) {
         return
     }

@@ -20,6 +20,6 @@ fn count_primes(a: Allocator, n: i64) i64 {
     return count
 }
 
-fn main(out: Io, a: Allocator) void {
-    out.print(count_primes(a, 50000000))
+fn main(io: Io, a: Allocator) void {
+    io.print(count_primes(a, 50000000))
 }

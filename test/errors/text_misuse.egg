@@ -12,19 +12,19 @@ fn make(a: Allocator) Buf(u8) {
     return b
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     defer a.free(b)
     a.append_str(&b, b)
     var c: Buf(i64) = .empty
     defer a.free(c)
     a.append_int(&c, 1)
-    out.print(make(a))
-    out.print(n(make(a)))
+    io.print(make(a))
+    io.print(n(make(a)))
     const s: []u8 = b
-    out.print(c == c)
+    io.print(c == c)
     a.append_str(&b, 5)
-    out.print(n(if (@len(b) > 0) b else b))
+    io.print(n(if (@len(b) > 0) b else b))
 }
 
 // error: E117 @18

@@ -1641,7 +1641,7 @@ module Egg
       @checker.error_names.index("IoFailed") + 1
     end
 
-    # out.print(x), a.concat(s, t), a.int_str(n). The receiver carries no
+    # io.print(x), a.concat(s, t), a.int_str(n). The receiver carries no
     # data but is still evaluated, first, like any receiver.
     def cap_call(m, obj, args, ret)
       recv = expr(obj)
@@ -1896,7 +1896,7 @@ module Egg
       end
     end
 
-    # One value of out.print (or eprint), ending the line if nl.
+    # One value of io.print (or eprint), ending the line if nl.
     def print_one(t, code, nl, f = "stdout")
       case t
       when "bool" then "#{helper('egg_print_bool')}(#{f}, #{code}, #{nl})"

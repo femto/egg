@@ -2,6 +2,6 @@
 // A character literal is one byte: \u{N} belongs in a string.
 uses io
 
-fn main(out: Io) void {
-    out.print('\u{41}')
+fn main(io: Io) void {
+    io.print('\u{41}')
 }

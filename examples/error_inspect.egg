@@ -57,25 +57,25 @@ fn find(xs: []i64, want: i64) ?i64 {
     return null
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     const xs = [_]i64{ 10, 0, -3, 99, 4 }
     var last: anyerror = error.None
     for (xs) |x| {
         const v = half(x) catch |e| {
-            out.print(a.concat(a.concat(a.int_str(x), ": "), explain(a, e)))
+            io.print(a.concat(a.concat(a.int_str(x), ": "), explain(a, e)))
             last = e
             continue
         }
-        out.print(a.concat(a.concat(a.int_str(x), " / 2 = "), a.int_str(v)))
+        io.print(a.concat(a.concat(a.int_str(x), " / 2 = "), a.int_str(v)))
     }
     const c0 = half(0) catch |e| code(e)
     const c1 = half(-1) catch |e| code(e)
     const c2 = half(51) catch |e| code(e)
-    out.print(a.concat("codes ", a.concat(a.int_str(c0), a.concat(" ", a.concat(a.int_str(c1), a.concat(" ", a.int_str(c2)))))))
-    out.print(a.concat("last error: ", @errorName(last)))
+    io.print(a.concat("codes ", a.concat(a.int_str(c0), a.concat(" ", a.concat(a.int_str(c1), a.concat(" ", a.int_str(c2)))))))
+    io.print(a.concat("last error: ", @errorName(last)))
     const i = find(xs[0..], 99) orelse {
-        out.print("not found")
+        io.print("not found")
         return
     }
-    out.print(a.concat("found ", a.int_str(i)))
+    io.print(a.concat("found ", a.int_str(i)))
 }

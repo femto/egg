@@ -405,7 +405,7 @@ module Egg
         types = sig.params.map(&:first)
         bad = sig.params.any? { |t, mode| !CAP_TYPES.key?(t) || !mode.nil? } || types.uniq.length != types.length
         if bad
-          err("E109", "'main' takes only capability values, each at most once, such as (out: Io, a: Allocator)", f.line, f.col)
+          err("E109", "'main' takes only capability values, each at most once, such as (io: Io, a: Allocator)", f.line, f.col)
         elsif !%w[void i64 !void].include?(sig.ret)
           err("E109", "'main' must return void, i64 or !void", f.line, f.col)
         end
@@ -2186,7 +2186,7 @@ module Egg
       sig.ret
     end
 
-    # out.print(x), a.concat(s, t): a direct use of a capability.
+    # io.print(x), a.concat(s, t): a direct use of a capability.
     def check_cap_method(e, obj, t, name, args, line, col, expected = nil)
       m = CAP_METHODS[t][name]
       if m.nil?
@@ -2211,7 +2211,7 @@ module Egg
         error_id("IoFailed")
         @current.direct["alloc"] ||= [line, col, "Io.#{name}"]
       end
-      # out.print(x, y, ...) and out.eprint take one or more values.
+      # io.print(x, y, ...) and io.eprint take one or more values.
       params = ["printable"] * args.length if t == "Io" && name.end_with?("print") && !args.empty?
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
@@ -2954,7 +2954,7 @@ module Egg
 
     def check_builtin(e, name, args, expected, line, col)
       if name == "print"
-        err("E112", "@print was removed: printing needs the io capability; write `uses io`, take `out: Io` in main and call out.print(x)", line, col)
+        err("E112", "@print was removed: printing needs the io capability; write `uses io`, take `io: Io` in main and call io.print(x)", line, col)
         return check_all_error(args)
       end
       if name == "import"

@@ -1,6 +1,6 @@
 // error: E101 @5
 uses io
 
-fn main(out: Io) void {
-    out.print(y)
+fn main(io: Io) void {
+    io.print(y)
 }

@@ -59,18 +59,18 @@ fn is_round(s: Shape) bool {
     }
 }
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
     var total = 0
     for (shapes) |s| {
         total = total + s.area()
         if (is_round(s)) {
-            out.print("round")
+            io.print("round")
         }
     }
-    out.print(total)
-    out.print(next(.red))
-    out.print(next(Light.yellow))
+    io.print(total)
+    io.print(next(.red))
+    io.print(next(Light.yellow))
     var n = 0
     while (n < 10) {
         switch (next(.green)) {
@@ -82,7 +82,7 @@ fn main(out: Io) void {
             }
         }
     }
-    out.print(n)
+    io.print(n)
     var spins = 0
     while (true) {
         spins = spins + 1
@@ -95,7 +95,7 @@ fn main(out: Io) void {
             }
         }
     }
-    out.print(spins)
+    io.print(spins)
     const e = Shape.empty
-    out.print(e.area())
+    io.print(e.area())
 }

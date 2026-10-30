@@ -652,7 +652,7 @@ module Egg
     end
 
     # Capability methods that take what they are given: a.free and a.push.
-    # The others (out.print, a.concat, a.append_str, ...) only read theirs.
+    # The others (io.print, a.concat, a.append_str, ...) only read theirs.
     TAKING_CAP_METHODS = %w[Allocator.free Allocator.push].freeze
 
     # A plain parameter borrows its argument, a sink parameter takes it.

@@ -32,23 +32,23 @@ fn why(files: Fs, a: Allocator, path: str) str {
     return "read it"
 }
 
-fn main(out: Io, files: Fs, a: Allocator) !void {
+fn main(io: Io, files: Fs, a: Allocator) !void {
     try files.write(scratch(), "hello\n")
     const text = try files.read(a, scratch())
     defer a.free(text)
-    out.print(text[0..5])
-    out.print(@len(text), " ", text[5] == '\n')
+    io.print(text[0..5])
+    io.print(@len(text), " ", text[5] == '\n')
 
-    out.print(why(files, a, "/nonexistent/egg/file"))
-    out.print(why(files, a, "."))
-    out.print(why(files, a, "no\x00such"))
+    io.print(why(files, a, "/nonexistent/egg/file"))
+    io.print(why(files, a, "."))
+    io.print(why(files, a, "no\x00such"))
     files.write("/nonexistent/egg/file", "x") catch |e| {
-        out.print(@errorName(e))
+        io.print(@errorName(e))
     }
 
     // write replaces the whole file.
     try files.write(scratch(), "")
-    out.print(size(files, a, scratch()))
+    io.print(size(files, a, scratch()))
 
     // Any bytes, more than one read gets at once.
     var big: Buf(u8) = a.alloc(200000, 0)
@@ -57,5 +57,5 @@ fn main(out: Io, files: Fs, a: Allocator) !void {
     try files.write(scratch(), big)
     const back = try files.read(a, scratch())
     defer a.free(back)
-    out.print(@len(back), " ", back[1], " ", back[199999])
+    io.print(@len(back), " ", back[1], " ", back[199999])
 }

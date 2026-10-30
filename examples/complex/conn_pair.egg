@@ -21,24 +21,24 @@ const Pair = struct {
 }
 
 // Opens two connections; if the second fails, the first is closed.
-fn open_pair(out: Io, a: Allocator, x: i64, y: i64) !Pair {
-    const first = try c.open(out, a, x)
+fn open_pair(io: Io, a: Allocator, x: i64, y: i64) !Pair {
+    const first = try c.open(io, a, x)
     errdefer first.deinit(a)
-    const second = try c.open(out, a, y)
+    const second = try c.open(io, a, y)
     return Pair{ .first = first, .second = second }
 }
 
-fn main(out: Io, a: Allocator) !void {
-    var p = try open_pair(out, a, 1, 2)
+fn main(io: Io, a: Allocator) !void {
+    var p = try open_pair(io, a, 1, 2)
     defer a.free(p)
     try p.first.send(a, "hello")
     p.second.send(a, "") catch |e| {
-        out.print(@errorName(e))
+        io.print(@errorName(e))
     }
-    out.print(p.first.count())
+    io.print(p.first.count())
 
-    const bad = open_pair(out, a, 3, -1) catch |e| {
-        out.print(@errorName(e))
+    const bad = open_pair(io, a, 3, -1) catch |e| {
+        io.print(@errorName(e))
         return
     }
     a.free(bad)

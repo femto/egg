@@ -1,4 +1,4 @@
 // Declares no capabilities, but prints.
-fn shout(out: Io) void {
-    out.print("hi")
+fn shout(io: Io) void {
+    io.print("hi")
 }

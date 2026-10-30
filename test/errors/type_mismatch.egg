@@ -1,7 +1,7 @@
 // error: E103 @5
 uses io
 
-fn main(out: Io) void {
+fn main(io: Io) void {
     const x: i64 = true
-    out.print(x)
+    io.print(x)
 }

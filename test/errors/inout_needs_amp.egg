@@ -4,8 +4,8 @@ uses io
 fn inc(inout n: i64) void {
     n = n + 1
 }
-fn main(out: Io) void {
+fn main(io: Io) void {
     var x = 1
     inc(x)
-    out.print(x)
+    io.print(x)
 }

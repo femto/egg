@@ -2,11 +2,11 @@
 uses io
 
 const U = union(enum) { a: i64, b }
-fn main(out: Io) void {
+fn main(io: Io) void {
     const u = U.b
     switch (u) {
         .b => |x| {
-            out.print(x)
+            io.print(x)
         }
         .a => {}
     }

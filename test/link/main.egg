@@ -4,6 +4,6 @@ uses io
 
 const lt = @import("lib/lt.egg")
 
-fn main(out: Io) void {
-    out.print(lt.mix(4, 2))
+fn main(io: Io) void {
+    io.print(lt.mix(4, 2))
 }

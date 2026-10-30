@@ -24,10 +24,10 @@ const Conn = owned struct {
     }
 }
 
-fn open(out: Io, a: Allocator, id: i64) !Conn {
+fn open(io: Io, a: Allocator, id: i64) !Conn {
     if (id < 0) {
         return error.Refused
     }
-    out.print(a.concat("open ", a.int_str(id)))
-    return Conn{ .id = id, .log = out, .sent = .empty }
+    io.print(a.concat("open ", a.int_str(id)))
+    return Conn{ .id = id, .log = io, .sent = .empty }
 }

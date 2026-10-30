@@ -29,20 +29,20 @@ fn note(inout s: Stats, x: i64) void {
     s.bump(x)
 }
 
-fn main(out: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator) void {
     var s = Stats{ .items = a.alloc(3, 1), .hits = 0 }
     defer a.free(s.items)
     for (s.items) |x| {
         note(&s, x)
         s.double_first()
     }
-    out.print(s.hits + s.items[0])
+    io.print(s.hits + s.items[0])
     // add may resize s.items: after the loop, or over an index.
     var i = 0
     while (i < 1) {
         s.add(a, s.items[i])
         i = i + 1
     }
-    out.print(@len(s.items))
-    out.print(s.items[3])
+    io.print(@len(s.items))
+    io.print(s.items[3])
 }
