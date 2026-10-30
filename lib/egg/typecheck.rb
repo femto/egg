@@ -77,9 +77,11 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator]).freeze
-    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc" }.freeze
-    CAPABILITIES = %w[alloc io].freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs]).freeze
+    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs" }.freeze
+    CAPABILITIES = %w[alloc fs io].freeze
+    # The errors of Fs methods, in the order the runtime numbers them from 1.
+    FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed].freeze
     # Methods of capability values: name -> [parameter types, result]
     # ("printable" accepts numbers, bool, text and enums; "text" a str, a
     # []u8 or a Buf(u8), borrowed; "integer" any
@@ -87,6 +89,7 @@ module Egg
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"] },
+      "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"] },
       "Allocator" => { "concat" => [%w[text text], "str"], "str" => [["text"], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
@@ -2192,7 +2195,14 @@ module Egg
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"]
       params, ret = m
       ret = ptr_type("u8") if ret == "*u8"
+      ret = resolve_type(ErrType.new(GenericType.new("Buf", ["u8"])), line, col) if ret == "!Buf(u8)"
+      ret = resolve_type(ErrType.new("void"), line, col) if ret == "!void"
       pop = ret == "?T"
+      if t == "Fs"
+        FS_ERRORS.each { |n| error_id(n) }
+        # fs.read(a, path) allocates what it returns.
+        @current.direct["alloc"] ||= [line, col, "Fs.read"] if name == "read"
+      end
       # out.print(x, y, ...) takes one or more values.
       params = ["printable"] * args.length if t == "Io" && name == "print" && !args.empty?
       if params.length != args.length
