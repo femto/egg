@@ -230,6 +230,58 @@ def check_lsp_catch
 end
 
 # v1 syntax: types and methods in the outline, method and type navigation.
+# Fs errors a program cannot set up by itself. As root permissions do not
+# apply, and /dev/full is only on some systems.
+def check_fs_errors(dir)
+  work = File.join(dir, "fs_errors")
+  FileUtils.mkdir_p(work)
+  locked = File.join(work, "locked.txt")
+  File.write(locked, "secret")
+  File.chmod(0o000, locked)
+  keep = File.join(work, "keep.txt")
+  File.write(keep, "keep")
+  File.chmod(0o444, keep)
+  begin
+    if File.readable?(locked)
+      puts "  skip  fs permission errors (the file is readable anyway)"
+    else
+      check_program("fs_permission", <<~EGG, work)
+        // expect: PermissionDenied
+        // expect: PermissionDenied
+        uses alloc, fs, io
+
+        fn main(out: Io, files: Fs, a: Allocator) void {
+            const b = files.read(a, "locked.txt") catch |e| {
+                out.print(@errorName(e))
+                files.write("keep.txt", "new") catch |e2| {
+                    out.print(@errorName(e2))
+                }
+                return
+            }
+            a.free(b)
+        }
+      EGG
+      report(File.read(keep) == "keep", "a refused fs.write leaves the file as it was", File.read(keep))
+    end
+  ensure
+    File.chmod(0o644, locked, keep)
+  end
+  unless File.exist?("/dev/full")
+    puts "  skip  fs.write reports a full disk (no /dev/full)"
+    return
+  end
+  check_program("fs_full_disk", <<~EGG, work)
+    // expect: IoFailed
+    uses fs, io
+
+    fn main(out: Io, files: Fs) void {
+        files.write("/dev/full", "data") catch |e| {
+            out.print(@errorName(e))
+        }
+    }
+  EGG
+end
+
 def check_lsp_alias
   uri = "file:///t/a.egg"
   src = <<~EGG
@@ -652,6 +704,7 @@ Dir.mktmpdir do |dir|
   check_lsp_v1
   check_lsp_catch
   check_lsp_alias
+  check_fs_errors(dir)
   check_lsp_char
   check_lsp_modules
   check_lsp_extern
