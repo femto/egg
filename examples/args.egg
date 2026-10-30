@@ -1,0 +1,16 @@
+// Command-line arguments and standard error. Run without arguments it only
+// says so, on standard error: eggc run examples/args.egg -- one two
+// expect: 0 arguments
+uses args, io
+
+fn main(out: Io, args: Args) void {
+    if (args.len() == 0) {
+        out.eprint("usage: args NAME...")
+    }
+    out.print(args.len(), " arguments")
+    var i = 0
+    while (i < args.len()) {
+        out.print(i, ": ", args.get(i))
+        i = i + 1
+    }
+}

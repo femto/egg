@@ -21,7 +21,7 @@ func        = "fn" , IDENT , params , type , block ;
 params      = "(" , [ param , { "," , param } , [ "," ] ] , ")" ;
 param       = [ "inout" | "sink" | "comptime" ] , IDENT , ":" , type ;
 
-type        = name                                   (* i8..i64 u8..u64 usize f32 f64 bool str void type anyerror Io Allocator Fs, or a declared type *)
+type        = name                                   (* i8..i64 u8..u64 usize f32 f64 bool str void type anyerror Io Allocator Fs Args, or a declared type *)
             | name , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")"
                                                      (* type function instance: Pair(i64), Unit(); also Buf(T) *)
             | "[" , nl , INT , "]" , type            (* array *)

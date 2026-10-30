@@ -77,9 +77,9 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs]).freeze
-    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs" }.freeze
-    CAPABILITIES = %w[alloc fs io].freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Args]).freeze
+    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Args" => "args" }.freeze
+    CAPABILITIES = %w[alloc args fs io].freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
     FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed].freeze
     # Methods of capability values: name -> [parameter types, result]
@@ -88,7 +88,8 @@ module Egg
     # integer type, "float" f32 or f64, "cstring" a *u8 to 0-terminated
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
-      "Io" => { "print" => [["printable"], "void"] },
+      "Io" => { "print" => [["printable"], "void"], "eprint" => [["printable"], "void"] },
+      "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
       "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"] },
       "Allocator" => { "concat" => [%w[text text], "str"], "str" => [["text"], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
@@ -2203,8 +2204,8 @@ module Egg
         # fs.read(a, path) allocates what it returns.
         @current.direct["alloc"] ||= [line, col, "Fs.read"] if name == "read"
       end
-      # out.print(x, y, ...) takes one or more values.
-      params = ["printable"] * args.length if t == "Io" && name == "print" && !args.empty?
+      # out.print(x, y, ...) and out.eprint take one or more values.
+      params = ["printable"] * args.length if t == "Io" && !args.empty?
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)

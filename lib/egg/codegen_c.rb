@@ -73,13 +73,14 @@ module Egg
     CAP_TYPEDEFS = {
       "Io" => "typedef struct { char unused; } egg_io;\n",
       "Allocator" => "typedef struct { char unused; } egg_allocator;\n",
-      "Fs" => "typedef struct { char unused; } egg_fs;\n"
+      "Fs" => "typedef struct { char unused; } egg_fs;\n",
+      "Args" => "typedef struct { char unused; } egg_args;\n"
     }.freeze
 
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+    HELPER_ORDER = %w[egg_panic egg_args_state egg_args_len egg_args_get egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
                       egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
@@ -93,6 +94,19 @@ module Egg
             fflush(stdout);
             fprintf(stderr, "egg panic: %s\\n", msg);
             abort();
+        }
+      C
+      "egg_args_state" => <<~C,
+        static int egg_argc;
+        static char **egg_argv;
+      C
+      "egg_args_len" => <<~C,
+        static int64_t egg_args_len(void) { return egg_argc; }
+      C
+      "egg_args_get" => <<~C,
+        static egg_str egg_args_get(int64_t i) {
+            if (i < 0 || i >= egg_argc) egg_panic("index out of bounds");
+            return (egg_str){ egg_argv[i], (int64_t)strlen(egg_argv[i]) };
         }
       C
       "egg_add" => <<~C,
@@ -180,16 +194,16 @@ module Egg
         }
       C
       "egg_print_i64" => <<~C,
-        static void egg_print_i64(int64_t x, bool nl) { printf("%" PRId64 "%s", x, nl ? "\\n" : ""); }
+        static void egg_print_i64(FILE *f, int64_t x, bool nl) { fprintf(f, "%" PRId64 "%s", x, nl ? "\\n" : ""); }
       C
       "egg_print_bool" => <<~C,
-        static void egg_print_bool(bool x, bool nl) { fputs(x ? "true" : "false", stdout); if (nl) putchar('\\n'); }
+        static void egg_print_bool(FILE *f, bool x, bool nl) { fputs(x ? "true" : "false", f); if (nl) fputc('\\n', f); }
       C
       "egg_print_str" => <<~C,
-        static void egg_print_str(egg_str s, bool nl) { if (s.len > 0) fwrite(s.ptr, 1, (size_t)s.len, stdout); if (nl) putchar('\\n'); }
+        static void egg_print_str(FILE *f, egg_str s, bool nl) { if (s.len > 0) fwrite(s.ptr, 1, (size_t)s.len, f); if (nl) fputc('\\n', f); }
       C
       "egg_print_cstr" => <<~C,
-        static void egg_print_cstr(const char *s, bool nl) { fputs(s, stdout); if (nl) putchar('\\n'); }
+        static void egg_print_cstr(FILE *f, const char *s, bool nl) { fputs(s, f); if (nl) fputc('\\n', f); }
       C
       "egg_alloc" => <<~C,
         static char *egg_alloc(int64_t n) {
@@ -223,7 +237,7 @@ module Egg
         }
       C
       "egg_print_u64" => <<~C,
-        static void egg_print_u64(uint64_t x, bool nl) { printf("%" PRIu64 "%s", x, nl ? "\\n" : ""); }
+        static void egg_print_u64(FILE *f, uint64_t x, bool nl) { fprintf(f, "%" PRIu64 "%s", x, nl ? "\\n" : ""); }
       C
       "egg_uint_str" => <<~C,
         static egg_str egg_uint_str(uint64_t x) {
@@ -253,11 +267,11 @@ module Egg
         }
       C
       "egg_print_float" => <<~C,
-        static void egg_print_float(double x, bool f32, bool nl) {
+        static void egg_print_float(FILE *f, double x, bool f32, bool nl) {
             char buf[40];
             egg_fmt_float(buf, x, f32);
-            fputs(buf, stdout);
-            if (nl) putchar('\\n');
+            fputs(buf, f);
+            if (nl) fputc('\\n', f);
         }
       C
       "egg_float_str" => <<~C,
@@ -447,9 +461,10 @@ module Egg
                     "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float],
                     "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path egg_fs_open],
-                    "egg_fs_write" => %w[egg_fs_class egg_fs_path egg_fs_open] }.freeze
+                    "egg_fs_write" => %w[egg_fs_class egg_fs_path egg_fs_open],
+                    "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float].freeze
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
@@ -721,7 +736,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c egg_fs_path egg_fs_read egg_fs_write].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c egg_fs_path egg_fs_read egg_fs_write egg_args_get].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -753,6 +768,9 @@ module Egg
       when "Fs"
         @need_cap[t] = true
         "egg_fs"
+      when "Args"
+        @need_cap[t] = true
+        "egg_args"
       when *INT_C.keys then INT_C[t][0]
       when *FLOAT_C.keys then FLOAT_C[t]
       else
@@ -912,7 +930,13 @@ module Egg
       main = @checker.main_sig
       @line_file = file_of("")
       mark(main.func.line)
-      @out << "int main(void) {\n"
+      if @used["egg_args_state"]
+        @out << "int main(int argc, char **argv) {\n"
+        # The program's name is not an argument.
+        @out << "    egg_argc = argc > 1 ? argc - 1 : 0;\n    egg_argv = argv + 1;\n"
+      else
+        @out << "int main(void) {\n"
+      end
       args = main.params.map { |t, _| "(#{c_type(t)}){ 0 }" }.join(", ")
       case main.ret
       when "i64"
@@ -1566,6 +1590,17 @@ module Egg
                last = args.length - 1
                codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false)};") unless i == last }
                print_one(args[last].ty, codes[last], true)
+             when "Io.eprint"
+               # Whatever was printed before comes first, also when both
+               # streams go to one place (2>&1). Standard error has no buffer.
+               line("fflush(stdout);")
+               last = args.length - 1
+               codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false, 'stderr')};") unless i == last }
+               print_one(args[last].ty, codes[last], true, "stderr")
+             when "Args.len"
+               "#{helper('egg_args_len')}()"
+             when "Args.get"
+               "#{helper('egg_args_get')}(#{codes[0]})"
              when "Fs.read"
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
@@ -1781,19 +1816,19 @@ module Egg
       end
     end
 
-    # One value of out.print, ending the line if nl.
-    def print_one(t, code, nl)
+    # One value of out.print (or eprint), ending the line if nl.
+    def print_one(t, code, nl, f = "stdout")
       case t
-      when "bool" then "#{helper('egg_print_bool')}(#{code}, #{nl})"
-      when "str" then "#{helper('egg_print_str')}(#{code}, #{nl})"
-      when ->(x) { text_type?(x) } then "#{helper('egg_print_str')}(#{coerce(code, t, 'str')}, #{nl})"
-      when "i64" then "#{helper('egg_print_i64')}(#{code}, #{nl})"
-      when "i8", "i16", "i32" then "#{helper('egg_print_i64')}((int64_t)#{code}, #{nl})"
-      when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}((uint64_t)#{code}, #{nl})"
-      when "f32", "f64" then "#{helper('egg_print_float')}((double)#{code}, #{t == 'f32'}, #{nl})"
+      when "bool" then "#{helper('egg_print_bool')}(#{f}, #{code}, #{nl})"
+      when "str" then "#{helper('egg_print_str')}(#{f}, #{code}, #{nl})"
+      when ->(x) { text_type?(x) } then "#{helper('egg_print_str')}(#{f}, #{coerce(code, t, 'str')}, #{nl})"
+      when "i64" then "#{helper('egg_print_i64')}(#{f}, #{code}, #{nl})"
+      when "i8", "i16", "i32" then "#{helper('egg_print_i64')}(#{f}, (int64_t)#{code}, #{nl})"
+      when "u8", "u16", "u32", "u64", "usize" then "#{helper('egg_print_u64')}(#{f}, (uint64_t)#{code}, #{nl})"
+      when "f32", "f64" then "#{helper('egg_print_float')}(#{f}, (double)#{code}, #{t == 'f32'}, #{nl})"
       else
         @enum_names[t] = true
-        "#{helper('egg_print_cstr')}(#{@types[t].c_name}_names[#{code}], #{nl})"
+        "#{helper('egg_print_cstr')}(#{f}, #{@types[t].c_name}_names[#{code}], #{nl})"
       end
     end
 

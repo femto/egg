@@ -148,6 +148,7 @@ fn main(out: Io) void {
 | `Io` | the io capability | received by `main`, passed down; section 17 |
 | `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
 | `Fs` | the fs capability | received by `main`, passed down; section 17 |
+| `Args` | the args capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 
 Every type that has runtime values, except slices and buffers, is a **value type**:
@@ -1344,8 +1345,8 @@ version of this section.
 
 ## 17. Capabilities
 
-A capability is something the core does not have: standard output, files
-and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
+A capability is something the core does not have: standard output and
+error, command-line arguments, files and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
 
 ```
 uses alloc, io
@@ -1356,7 +1357,8 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `out.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `out.print(w, ": ", n)` |
+| `io` | `Io` | `out.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `out.print(w, ": ", n)`; `out.eprint(x, ...)`: the same, to standard error, after everything printed before it |
+| `args` | `Args` | `args.len() i64`: how many arguments the program was given, not counting its own name; `args.get(i) str`: argument i, from 0; an index out of range panics |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; see below |
 | `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.str(t) str`: a copy of the text t; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `out.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
@@ -2114,7 +2116,7 @@ pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but
 not a plain `UserId`), and capabilities other
-than `io`, `fs` and `alloc`. See the design document's roadmap for when each
+than `io`, `args`, `fs` and `alloc`. See the design document's roadmap for when each
 arrives.
 
 ## 23. A complete program

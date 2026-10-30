@@ -51,6 +51,7 @@ bin/eggc emit-c examples/fib.egg     # show the generated C
 bin/eggc build examples/fib.egg -o fib
 bin/eggc check file.egg --json       # diagnostics as JSON lines
 bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
+bin/eggc run app.egg -- one two     # what follows -- goes to the program
 bin/eggc run app.egg -lfoo -L lib    # link a C library (or `link "foo"` in an `allow unsafe` file)
 bin/eggc spec                        # whole spec, for pasting into an AI
 bin/eggc lsp                         # language server for editors (stdin/stdout)
@@ -154,6 +155,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
+- Standard error: `out.eprint(x, ...)`. Command-line arguments: `uses args`
+  gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`
 - Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole
   file as a `Buf(u8)` (so it needs `uses alloc` too), `fs.write(path, data)`
   replaces it, and failures are

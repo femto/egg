@@ -289,6 +289,48 @@ def check_fs_errors(dir)
   EGG
 end
 
+# What a program sees on its command line, and the order of its two output
+# streams: eprint must not overtake what print wrote before it.
+def check_args(dir)
+  src = <<~EGG
+    uses args, io
+
+    fn main(out: Io, args: Args) void {
+        var i = 0
+        while (i < args.len()) {
+            out.print("[", args.get(i), "]")
+            i = i + 1
+        }
+        out.eprint("to stderr ", args.len())
+        out.print("after")
+    }
+  EGG
+  path = File.join(dir, "args_run.egg")
+  File.write(path, src)
+  out, err, status = Open3.capture3(*eggc_command, "run", path, "--", "-g", "a b", "", "--")
+  got = out.lines.map(&:chomp)
+  ok = status.success? && got == ["[-g]", "[a b]", "[]", "[--]", "after"] && err.lines.map(&:chomp) == ["to stderr 4"]
+  report(ok, "eggc run passes what follows -- to the program", "status #{status.exitstatus}, #{got.inspect}, stderr: #{err}")
+  out, status = Open3.capture2e(*eggc_command, "run", path)
+  got = out.lines.map(&:chomp)
+  report(status.success? && got == ["to stderr 0", "after"], "eprint with no arguments", got.inspect)
+  order = File.join(dir, "args_order.egg")
+  File.write(order, <<~EGG)
+    uses io
+
+    fn main(out: Io) void {
+        out.print("first")
+        out.eprint("second")
+        out.print("third")
+    }
+  EGG
+  out, status = Open3.capture2e(*eggc_command, "run", order)
+  got = out.lines.map(&:chomp)
+  report(status.success? && got == %w[first second third], "eprint comes after what was printed", got.inspect)
+  _, _, status = Open3.capture3(*eggc_command, "check", path, "--", "x")
+  report(status.exitstatus == 2, "only eggc run takes program arguments", "status #{status.exitstatus}")
+end
+
 def check_lsp_alias
   uri = "file:///t/a.egg"
   src = <<~EGG
@@ -714,6 +756,7 @@ Dir.mktmpdir do |dir|
   check_lsp_catch
   check_lsp_alias
   check_fs_errors(dir)
+  check_args(dir)
   check_lsp_char
   check_lsp_modules
   check_lsp_extern

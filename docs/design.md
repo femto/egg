@@ -98,7 +98,8 @@ First capabilities:
 | Capability | Provides | Planned |
 | --- | --- | --- |
 | `alloc` | heap allocation, allocator passed explicitly | v2 (strings in a program-lifetime arena; owned buffers `Buf(T)` that are freed, with ownership checking) |
-| `io` | standard streams, one implementation per OS | v2 (standard output first) |
+| `io` | standard streams, one implementation per OS | v2 (standard output first); standard error added; standard input next |
+| `args` | command-line arguments | `len` and `get` |
 | `fs` | files, one implementation per OS | whole-file `read` and `write`; handles next |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
