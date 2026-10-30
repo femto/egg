@@ -1,0 +1,10 @@
+{
+  "name": "egg-codeshot",
+  "private": true,
+  "type": "module",
+  "description": "Render an .egg file and its output as a PNG, highlighted with the VS Code grammar",
+  "bin": { "codeshot": "codeshot.mjs" },
+  "dependencies": {
+    "shiki": "1.22.0"
+  }
+}
