@@ -1,0 +1,17 @@
+// Command-line arguments and standard error. Argument 0 is the program's
+// name. Without arguments it says so on standard error; try it with some:
+// eggc run examples/args.egg -- one two
+// expect: 0 arguments
+uses args, io
+
+fn main(out: Io, args: Args) void {
+    if (args.len() == 1) {
+        out.eprint("usage: ", args.get(0), " NAME...")
+    }
+    out.print(args.len() - 1, " arguments")
+    var i = 1
+    while (i < args.len()) {
+        out.print(i, ": ", args.get(i))
+        i = i + 1
+    }
+}

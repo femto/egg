@@ -4,7 +4,7 @@
 #   eggc check  FILE.egg            type-check only
 #   eggc emit-c FILE.egg [-o OUT.c] print or write the generated C
 #   eggc build  FILE.egg [-o EXE]   compile to an executable via $CC (default cc)
-#   eggc run    FILE.egg            build to a temp file and run it
+#   eggc run    FILE.egg [-- ARGS]  build to a temp file and run it, passing it ARGS
 #   eggc spec                       print the whole language spec (core, grammar,
 #                                   diagnostics) for loading into an AI's context
 #   eggc lsp                        language server on stdin/stdout, for editors
@@ -25,7 +25,7 @@ end
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g] [-l LIB] [-L DIR]\n       eggc (spec|lsp)"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [-g] [-l LIB] [-L DIR] [-- ARGS]\n       eggc (spec|lsp)"
 
 def fail_usage
   warn USAGE
@@ -48,6 +48,12 @@ if ARGV == ["lsp"]
 end
 
 args = ARGV.dup
+# After --, everything belongs to the program: eggc run FILE.egg -- -g -o x
+program_args = []
+if (i = args.index("--"))
+  program_args = args[(i + 1)..]
+  args = args[0...i]
+end
 json = !args.delete("--json").nil?
 debug = !args.delete("-g").nil?
 out_path = nil
@@ -76,6 +82,7 @@ end
 command = args[0]
 path = args[1]
 fail_usage if command.nil? || path.nil? || args.length != 2
+fail_usage if ARGV.include?("--") && command != "run"
 
 unless File.exist?(path)
   warn "eggc: cannot read #{path}"
@@ -124,7 +131,7 @@ when "build"
 when "run"
   base = File.join(Dir.tmpdir, "eggc-#{Process.pid}")
   build_exe(result.c_source, "#{base}.c", base, debug, links)
-  ok = system(base)
+  ok = system([base, base], *program_args)
   status = $?.exitstatus
   File.delete(base) if File.exist?(base)
   File.delete("#{base}.c") if File.exist?("#{base}.c")

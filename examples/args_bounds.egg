@@ -1,0 +1,10 @@
+// Asking for an argument that is not there panics, like any index.
+// panic: index out of bounds
+uses args
+
+fn main(args: Args) void {
+    const first = args.get(args.len())
+    if (first == "x") {
+        return
+    }
+}

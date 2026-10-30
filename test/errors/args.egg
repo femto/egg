@@ -1,0 +1,13 @@
+// error: E103 @7
+// error: E122 @8
+// error: E104 @9
+uses alloc, args
+
+fn main(args: Args, a: Allocator) void {
+    const s = args.get("0")
+    args.first()
+    a.free(a.alloc(args.len(1), 0))
+    if (s == "") {
+        return
+    }
+}

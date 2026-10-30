@@ -1,0 +1,20 @@
+// error: E130 @7
+// error: E130 @12
+uses alloc
+
+fn count(args: Args) i64 {
+    // no `uses args`
+    return args.len()
+}
+
+fn warn(out: Io) void {
+    // no `uses io`
+    out.eprint("x")
+}
+
+fn main(out: Io, args: Args) void {
+    warn(out)
+    if (count(args) == 0) {
+        return
+    }
+}
