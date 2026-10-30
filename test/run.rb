@@ -500,6 +500,8 @@ def check_loader(dir)
   r = Egg.compile_to_c("const m = @import(\"#{lib}\")\nfn main() void {\n}\n", File.join(dir, "main.egg"))
   d = r.diagnostics.first
   report(d && d.code == "E002" && d.file == lib, "an absolute import keeps its path in diagnostics", d&.to_text("main.egg"))
+  drive = Egg.normalize_path("D:/a/../../b/./c.egg")
+  report(drive == "D:/b/c.egg", "a path keeps its Windows drive", drive)
   locked = File.join(dir, "locked.egg")
   File.write(locked, "fn f() void {\n}\n")
   File.chmod(0o000, locked)

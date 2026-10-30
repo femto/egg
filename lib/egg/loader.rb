@@ -192,9 +192,12 @@ module Egg
   # "a/./b/../c.egg" -> "a/c.egg" (no File/Pathname magic, to stay in the
   # Spinel subset).
   def self.normalize_path(path)
-    abs = path.start_with?("/")
+    # A Windows drive is part of the root: ".." cannot climb past it.
+    drive = path.match?(/\A[A-Za-z]:\//) ? path[0, 2] : ""
+    rest = path[drive.length..]
+    abs = rest.start_with?("/")
     parts = []
-    path.split("/").each do |p|
+    rest.split("/").each do |p|
       next if p.empty? || p == "."
       if p == ".." && !parts.empty? && parts.last != ".."
         parts.pop
@@ -204,6 +207,6 @@ module Egg
         parts << p
       end
     end
-    (abs ? "/" : "") + parts.join("/")
+    drive + (abs ? "/" : "") + parts.join("/")
   end
 end
