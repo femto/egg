@@ -1818,7 +1818,7 @@ module Egg
                line("#{c_type(ret)} #{r} = { .has = false };")
                line("if (#{p}->len > 0) { #{p}->len--; #{r}.value = #{p}->ptr[#{p}->len]; #{r}.has = true; }")
                r
-             when "Allocator.str"
+             when "Allocator.leak"
                # A copy that lives as long as the program, even after a
                # Buf(u8) it came from is freed.
                "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, ((egg_str){ \"\", 0 }))"

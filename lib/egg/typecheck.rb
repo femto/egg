@@ -92,7 +92,7 @@ module Egg
                 "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"] },
       "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
       "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"] },
-      "Allocator" => { "concat" => [%w[text text], "str"], "str" => [["text"], "str"], "int_str" => [["integer"], "str"],
+      "Allocator" => { "concat" => [%w[text text], "str"], "leak" => [["text"], "str"], "int_str" => [["integer"], "str"],
                        "float_str" => [["float"], "str"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
                        "append_float" => [%w[inout_buffer float], "void"],

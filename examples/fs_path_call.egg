@@ -3,7 +3,7 @@
 uses alloc, fs, io
 
 fn path(a: Allocator) str {
-    return a.str("/nonexistent/egg/file")
+    return a.leak("/nonexistent/egg/file")
 }
 
 fn main(io: Io, files: Fs, a: Allocator) void {

@@ -51,7 +51,7 @@ fn main(io: Io, a: Allocator) void {
     var rows: Buf(Row) = .empty
     defer a.free(rows)
     for (counts.entries) |e| {
-        a.push(&rows, Row{ .word = a.str(e.key), .n = e.val })
+        a.push(&rows, Row{ .word = a.leak(e.key), .n = e.val })
     }
     sort.sort_by(Row, &rows[0..], before)
     for (rows) |r| {
