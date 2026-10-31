@@ -1,0 +1,10 @@
+// error: E002 @7
+fn pick() ?i64 {
+    return 1
+}
+
+fn main() void {
+    if (pick()) |_| {
+        return
+    }
+}

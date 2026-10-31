@@ -1100,6 +1100,13 @@ a pointer (which can already be null), `!U` or `?U` (E108).
   (or `return v`), `orelse break`, `orelse continue`, or be a block that
   leaves on every path (`orelse { log(); return }`, E118); not inside a
   `defer` (E118).
+- `if (e) |v| { ... }` runs the block with the value of `e: ?T`, and any
+  `else` when `e` is null; `while (e) |v| { ... }` repeats until `e` is
+  null, evaluating it each time (E118 if `e` is not an optional). `v` is a
+  constant of type `T`, known only in that block. An owned value belongs
+  to the block, which must free or move it (E135), so these work on an
+  owned `?T`: `while (a.pop(&bufs)) |b| { ... }`. They are statements; an
+  `if` with a value has no capture.
 - A `?T` cannot be printed or compared, and a `?T` result cannot be
   ignored (E113). An owned one (`?Buf(u8)`, `?Db`) must be unwrapped
   right away, like an owned `!T` (E133).
@@ -2128,8 +2135,7 @@ fn main(io: Io, a: Allocator) void {
 
 ## 22. Not yet
 
-Closures, unwrapping an optional by capture (`if (x) |v|`, `while (x)
-|v|`) or `x.?`, optional owned fields (`?Db` in a struct), many-item
+Closures, `x.?`, optional owned fields (`?Db` in a struct), many-item
 pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but

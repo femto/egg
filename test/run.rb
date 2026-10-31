@@ -459,6 +459,33 @@ def check_utf8(dir)
   report(ok, "fs and args take UTF-8 names", "#{out.inspect}, #{names.inspect}, stderr: #{err}")
 end
 
+def check_lsp_capture
+  uri = "file:///t/a.egg"
+  src = <<~EGG
+    fn pick() ?i64 {
+        return 1
+    }
+
+    fn main() void {
+        if (pick()) |v| {
+            _ = v
+        }
+    }
+  EGG
+  doc = { "uri" => uri }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => src) } },
+    { "id" => 2, "method" => "textDocument/definition", "params" => { "textDocument" => doc, "position" => { "line" => 6, "character" => 12 } } },
+    { "id" => 3, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, diags, status, err = lsp_session(req)
+  start = replies.dig(2, "result", "range", "start")
+  ok = diags.first == [] && start == { "line" => 5, "character" => 17 } && status.success? && err.empty?
+  report(ok, "lsp definition of a captured value", "#{start.inspect}, #{diags.first.inspect}, #{err}")
+end
+
 def check_lsp_alias
   uri = "file:///t/a.egg"
   src = <<~EGG
@@ -883,6 +910,7 @@ Dir.mktmpdir do |dir|
   check_lsp_v1
   check_lsp_catch
   check_lsp_alias
+  check_lsp_capture
   check_fs_errors(dir)
   check_args(dir)
   check_stdin(dir)
