@@ -3,8 +3,8 @@
 // expect: 3
 // expect: 1
 // expect: pear 1
-// expect: fig 3
 // expect: kiwi 2
+// expect: fig 3
 // expect: fig 3
 // expect: kiwi 2
 // expect: pear 1

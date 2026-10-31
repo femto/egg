@@ -1,10 +1,15 @@
-// error: E121 @17
-// error: E105 @18
-// error: E105 @19
-// error: E105 @10
-// error: E103 @20
-// @swap needs a place it can write, and integer indices.
+// error: E121 @22
+// error: E105 @23
+// error: E105 @24
+// error: E105 @15
+// error: E103 @25
+// error: E117 @26
 uses alloc
+
+fn grow(a: Allocator, inout b: Buf(i64)) i64 {
+    a.push(&b, 0)
+    return 0
+}
 
 fn readonly(xs: []i64) void {
     @swap(&xs, 0, 1)
@@ -18,5 +23,6 @@ fn main(a: Allocator) void {
     @swap(&c, 0, 1)
     @swap(&s, 0, 1)
     @swap(&b, "0", 1)
+    @swap(&b, grow(a, &b), 1)
     readonly(b[0..])
 }

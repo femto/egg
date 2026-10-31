@@ -3114,6 +3114,12 @@ module Egg
       mark_root_used(a.expr)
       a.ty = a.expr.ty
       a.info = { places: places }
+      # Reading the container is fine (@len(xs) - 1), changing it is not.
+      root = root_name(a.expr)
+      args[1..].each do |i|
+        next if root.nil? || inout_writes(i).none? { |w| w.is_a?(Symbol) || w == root || w.start_with?("#{root}.") }
+        err("E117", "'#{root}' is changed by an index of this @swap; compute the index into a local first", i.line, i.col)
+      end
       "void"
     end
 

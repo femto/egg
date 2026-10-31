@@ -116,7 +116,8 @@ v3 (memory without GC, and what realistic programs needed; under way):
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
-  resized, and elements that own buffers are not assigned but moved with `@swap`
+  resized, and elements that own buffers cannot be assigned, but `@swap`, `@replace` and
+  `@take` work
 - A `for` loop over a buffer allows calls that take it, or what holds it,
   as `inout` when the callee cannot move, reassign or resize it (each
   function's summary of what it may change, through its callees too), so
