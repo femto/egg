@@ -984,8 +984,9 @@ where `x` is a `var` array, a `var` or `inout` `Buf`, or another inout
 slice. The function writes elements (`xs[i] = v`, `&xs[i]` as an inout
 argument) and may lend a part of it on (`&xs[1..]`), but cannot reassign
 `xs` itself or resize it (E105); like every slice it cannot outlive the
-call. Its elements must own no buffers or owned structs (E147), since
-assigning one would lose them. Exclusivity is the same as for `&x`: `f(&b[0..2], &b[2..])` is
+call. Elements that own buffers or are owned structs cannot be assigned
+(E139), since that would lose them, but `@swap`, `@replace` and `@take`
+work (section 21). Exclusivity is the same as for `&x`: `f(&b[0..2], &b[2..])` is
 E117, as is `f(&b[0..], b[0..])`, since the callee would see the same
 memory twice. Changing elements is allowed inside a `for` loop over `x`.
 
@@ -1265,6 +1266,7 @@ Builtins start with `@`; any other name is E112.
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
 | `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
+| `@swap(&xs, i, j)` | exchanges elements i and j of a buffer, array or inout slice (section 21) |
 | `@drop(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
@@ -1777,6 +1779,11 @@ assigning over it is E139. Elements are swapped instead:
 
 - `Buf(T).empty` (or `.empty` where the type is known) is a buffer with no
   elements, which owns no memory and costs nothing to free;
+- `@swap(&xs, i, j)` exchanges two elements of a buffer, an array or an
+  inout slice, so it needs no value to leave behind and works on any
+  element type: this is how `std/sort` reorders elements that own buffers.
+  Each index is checked (`index out of bounds`), and `i == j` changes
+  nothing. The container must be writable, as for `xs[i] = v`.
 - `@replace(&p, v)` puts `v` in the place `p` and returns what was there;
   `@take(&p)` is `@replace(&p, Buf(T).empty)` for a buffer place. The
   place is found first, then the value is computed. The value may not

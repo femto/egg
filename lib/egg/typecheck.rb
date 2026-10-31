@@ -111,7 +111,7 @@ module Egg
     SHIFT_OPS = %w[<< >>].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
-                      "replace" => 2, "take" => 1, "drop" => 1, "errorName" => 1, "compileError" => 1,
+                      "replace" => 2, "take" => 1, "swap" => 3, "drop" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
@@ -430,8 +430,6 @@ module Egg
           elsif p.mode == "sink" && t != "error" && !owned?(t) && (sig.tenv.nil? || sig.tenv.empty?)
             # In a generic instance T may or may not own something.
             err("E145", "'sink' takes ownership, but #{t} owns nothing; remove 'sink' (a plain parameter reads it)", p.line, p.col)
-          elsif p.mode == "inout" && t.start_with?("[]") && owned?(@types[t].elem)
-            err("E147", "an inout slice cannot hold #{@types[t].elem}: assigning an element would lose the buffers it owns; pass the whole container as inout instead", p.line, p.col)
           end
           sig.params << [t, p.mode]
         end
@@ -3075,6 +3073,8 @@ module Egg
         expected
       when "replace", "take"
         check_swap(name, args, line, col)
+      when "swap"
+        check_elem_swap(args, line, col)
       when "drop"
         check_drop(a)
       end
@@ -3095,6 +3095,30 @@ module Egg
       end
       unless a.is_a?(Var) || a.is_a?(Field)
         err("E133", "@drop needs a variable or a field of one, not a temporary #{t}", a.line, a.col)
+      end
+      "void"
+    end
+
+    # @swap(&xs, i, j): exchanges two elements, so nothing is copied or lost
+    # and it works on elements that own buffers. Checked as the places
+    # xs[i] and xs[j], which codegen and the ownership pass then use.
+    def check_elem_swap(args, line, col)
+      a = args[0]
+      unless a.is_a?(AddrOf)
+        err("E121", "'@swap' changes a container: pass it as &xs", a.line, a.col)
+        check_all_error(args)
+        return "error"
+      end
+      places = args[1..].map { |i| Index.new(a.expr, i, i.line, i.col) }
+      places.each { |p| check_lvalue(p, "swap") }
+      mark_root_used(a.expr)
+      a.ty = a.expr.ty
+      a.info = { places: places }
+      # Reading the container is fine (@len(xs) - 1), changing it is not.
+      root = root_name(a.expr)
+      args[1..].each do |i|
+        next if root.nil? || inout_writes(i).none? { |w| w.is_a?(Symbol) || w == root || w.start_with?("#{root}.") }
+        err("E117", "'#{root}' is changed by an index of this @swap; compute the index into a local first", i.line, i.col)
       end
       "void"
     end

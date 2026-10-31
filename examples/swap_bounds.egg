@@ -1,0 +1,9 @@
+// @swap checks both indices.
+// panic: index out of bounds
+uses alloc
+
+fn main(a: Allocator) void {
+    var b = a.alloc(2, 0)
+    defer a.free(b)
+    @swap(&b, 0, 2)
+}

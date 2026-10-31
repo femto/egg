@@ -60,7 +60,6 @@ program imports:
 | E144 | ownership | moving, freeing, returning, assigning or `@drop`ping a plain parameter of an owned type, or any part of it: it is only borrowed | declare it `sink x: T` to take it over, or copy out the plain values you need |
 | E145 | checker | a `sink` parameter whose type owns nothing (not a buffer, an `owned struct` or a value holding one; in a generic instance it is allowed) | remove `sink`: a plain parameter reads it |
 | E146 | checker | a `@compileError("...")` that is checked: anywhere outside a comptime `if` branch that is not chosen (typically a generic function instantiated with a type it does not support), or one whose argument is not a single string literal | call the function with a type it supports, as the message says; put `@compileError` only in a branch that should never be chosen, and give it one string literal |
-| E147 | checker | an `inout` slice whose elements own buffers or owned structs (`inout xs: []Buf(i64)`, even one with a `deinit`): assigning an element would lose them | pass the whole container as `inout` and swap elements out with `@replace`/`@take` |
 
 Runtime panics (the program aborts with `egg panic: <message>`):
 

@@ -1,0 +1,12 @@
+// error: E137 @9
+uses alloc
+
+fn main(a: Allocator) void {
+    var bs: Buf(Buf(i64)) = .empty
+    a.push(&bs, a.alloc(1, 0))
+    a.push(&bs, a.alloc(1, 0))
+    for (bs) |x| {
+        @swap(&bs, 0, @len(x))
+    }
+    a.free(bs)
+}

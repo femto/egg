@@ -1899,6 +1899,27 @@ module Egg
         line("#{c_type(t)} #{old} = *#{p};")
         line("*#{p} = #{v};")
         old
+      when "swap"
+        # Left to right, and the container only once: its place may hold a
+        # call. An index cannot change it (E117).
+        obj = a.expr
+        array = @types[obj.ty].kind == :array
+        c = tmp
+        line("#{c_type(obj.ty)} *#{c} = &#{lvalue(obj)};")
+        i = hoist(expr(args[1]), "i64")
+        j = hoist(expr(args[2]), "i64")
+        t = @types[obj.ty].elem
+        data = array ? "#{c}->a" : "((#{c_type(t)} *)#{c}->ptr)"
+        len = array ? "INT64_C(#{@types[obj.ty].len})" : "#{c}->len"
+        p = tmp
+        q = tmp
+        old = tmp
+        line("#{c_type(t)} *#{p} = &#{data}[#{helper('egg_index')}(#{i}, #{len})];")
+        line("#{c_type(t)} *#{q} = &#{data}[#{helper('egg_index')}(#{j}, #{len})];")
+        line("#{c_type(t)} #{old} = *#{p};")
+        line("*#{p} = *#{q};")
+        line("*#{q} = #{old};")
+        "((void)0)"
       when "splat"
         info = @types[e.ty]
         v = hoist(expr(a), info.elem)

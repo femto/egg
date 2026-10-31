@@ -1,0 +1,54 @@
+// @swap exchanges two elements, so it also works on elements that own
+// buffers, which cannot be assigned or copied: std/sort reorders them with it.
+// expect: 3
+// expect: 1
+// expect: pear 1
+// expect: kiwi 2
+// expect: fig 3
+// expect: fig 3
+// expect: kiwi 2
+// expect: pear 1
+uses alloc, io
+
+const sort = @import("std/sort")
+
+const Row = owned struct {
+    word: Buf(u8)
+    n: i64
+
+    fn deinit(sink self: Row, a: Allocator) void {
+        a.free(self.word)
+        @drop(self)
+    }
+}
+
+fn row(a: Allocator, s: str, n: i64) Row {
+    var w: Buf(u8) = .empty
+    a.append_str(&w, s)
+    return Row{ .word = w, .n = n }
+}
+
+fn by_word(x: Row, y: Row) bool {
+    return x.word < y.word
+}
+
+fn main(io: Io, a: Allocator) void {
+    var nums = [3]i64{ 1, 2, 3 }
+    @swap(&nums, 0, @len(nums) - 1)
+    io.print(nums[0])
+    io.print(nums[2])
+    var rows: Buf(Row) = .empty
+    defer a.free(rows)
+    a.push(&rows, row(a, "fig", 3))
+    a.push(&rows, row(a, "kiwi", 2))
+    a.push(&rows, row(a, "pear", 1))
+    @swap(&rows, 0, 2)
+    @swap(&rows, 1, 1)
+    for (rows) |r| {
+        io.print(r.word, " ", r.n)
+    }
+    sort.sort_by(Row, &rows[0..], by_word)
+    for (rows) |r| {
+        io.print(r.word, " ", r.n)
+    }
+}
