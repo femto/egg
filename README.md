@@ -8,7 +8,7 @@ for the full picture.
 
 This repository holds **eggc**, the first compiler, with **v2** done
 (modules, capabilities, integer types, pointers, `extern fn` and owned
-buffers) and **v3** (memory without a GC) under way: written
+buffers) and **v3** (memory without a GC) done: written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
 compiles), running on CRuby 3.0+, emitting portable C99.
 
@@ -100,7 +100,7 @@ rebuild to switch back.
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
-v3 (memory without GC, and what realistic programs needed; under way):
+v3 (memory without GC, and what realistic programs needed):
 
 - A standard library in `lib/std/`, imported by module name without `.egg`:
   `const math = @import("std/math")`; a file import (`"lib/x.egg"`) may
