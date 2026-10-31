@@ -30,11 +30,11 @@ fn half(x: i64) !i64 {
     return v / 2
 }
 
-fn explain(a: Allocator, e: anyerror) str {
+fn explain(a: Allocator, e: anyerror) Buf(u8) {
     switch (e) {
-        error.Neg => { return "negative" }
-        error.TooBig => { return a.concat("too big (", a.concat(@errorName(e), ")")) }
-        else => { return @errorName(e) }
+        error.Neg => { return a.concat("", "negative") }
+        error.TooBig => { return a.concat("too big (", @errorName(e), ")") }
+        else => { return a.concat("", @errorName(e)) }
     }
 }
 
@@ -62,20 +62,22 @@ fn main(io: Io, a: Allocator) void {
     var last: anyerror = error.None
     for (xs) |x| {
         const v = half(x) catch |e| {
-            io.print(a.concat(a.concat(a.int_str(x), ": "), explain(a, e)))
+            const why = explain(a, e)
+            defer a.free(why)
+            io.print(x, ": ", why)
             last = e
             continue
         }
-        io.print(a.concat(a.concat(a.int_str(x), " / 2 = "), a.int_str(v)))
+        io.print(x, " / 2 = ", v)
     }
     const c0 = half(0) catch |e| code(e)
     const c1 = half(-1) catch |e| code(e)
     const c2 = half(51) catch |e| code(e)
-    io.print(a.concat("codes ", a.concat(a.int_str(c0), a.concat(" ", a.concat(a.int_str(c1), a.concat(" ", a.int_str(c2)))))))
-    io.print(a.concat("last error: ", @errorName(last)))
+    io.print("codes ", c0, " ", c1, " ", c2)
+    io.print("last error: ", @errorName(last))
     const i = find(xs[0..], 99) orelse {
         io.print("not found")
         return
     }
-    io.print(a.concat("found ", a.int_str(i)))
+    io.print("found ", i)
 }

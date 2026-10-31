@@ -56,5 +56,11 @@ fn main(io: Io, a: Allocator) void {
     const p = Point{ .x = 1.5, .y = 2 }
     io.print(p.dot(p) == 6.25)
     io.print(zero / zero == zero / zero)
-    io.print(a.concat(a.float_str(2.5), a.concat(" of ", a.float_str(10))))
+    const part = a.float_str(2.5)
+    defer a.free(part)
+    const whole = a.float_str(10)
+    defer a.free(whole)
+    const share = a.concat(part, " of ", whole)
+    defer a.free(share)
+    io.print(share)
 }

@@ -2,13 +2,13 @@
 
 An AI-native systems language with a core that has no capabilities at all.
 Exceptions, IO and allocation are capability modules a program declares
-on demand, and there is no GC: heap buffers are managed by ownership (strings, for
-now, live in a program-lifetime arena). See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
+on demand, and there is no GC: heap memory is managed by ownership (text a program
+builds is a `Buf(u8)` it frees; literals and `a.leak` copies last for the whole program). See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
 for the full picture.
 
 This repository holds **eggc**, the first compiler, with **v2** done
 (modules, capabilities, integer types, pointers, `extern fn` and owned
-buffers) and **v3** (memory without a GC) under way: written
+buffers) and **v3** (memory without a GC) done: written
 in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
 compiles), running on CRuby 3.0+, emitting portable C99.
 
@@ -100,7 +100,7 @@ rebuild to switch back.
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
 
-v3 (memory without GC, and what realistic programs needed; under way):
+v3 (memory without GC, and what realistic programs needed):
 
 - A standard library in `lib/std/`, imported by module name without `.egg`:
   `const math = @import("std/math")`; a file import (`"lib/x.egg"`) may
@@ -175,8 +175,8 @@ From v2:
   the file
 - Capabilities: a file declares `uses alloc, io`; `main` receives the
   capability values (`fn main(io: Io, a: Allocator)`) and passes them
-  down; `io.print(x)` replaces `@print`; `a.concat(s, t)` and
-  `a.int_str(n)`, `a.float_str(x)` build strings in a program-lifetime arena
+  down; `io.print(x)` replaces `@print`; `a.concat(s, t, ...)`,
+  `a.int_str(n)` and `a.float_str(x)` build text as a `Buf(u8)` the caller frees
 - **Capability check** (E130): following the call graph across files and
   generic instances, a function that uses a capability its file does not
   declare is rejected; hover in the editor shows what each function uses

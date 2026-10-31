@@ -1,0 +1,9 @@
+// A null pointer is checked before any byte is read.
+// panic: null pointer dereference
+uses alloc
+allow unsafe
+
+fn main(a: Allocator) void {
+    const p: *u8 = null
+    a.free(a.str_from_c(p))
+}

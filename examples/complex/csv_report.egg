@@ -90,19 +90,21 @@ fn main(a: Allocator, io: Io) void {
             continue
         }
         const pay = parse_int(f[2]) catch |e| {
-            io.print(a.concat(a.concat(a.concat("line ", a.int_str(n + 1)), ": "), @errorName(e)))
+            io.print("line ", n + 1, ": ", @errorName(e))
             continue
         }
         a.push(&rows, Row{ .name = f[0], .dept = f[1], .pay = pay })
     }
     sort(Row, &rows, by_pay)
     for (rows) |r| {
-        io.print(a.concat(a.concat(r.name, " "), a.int_str(r.pay)))
+        io.print(r.name, " ", r.pay)
     }
     sort(Row, &rows, by_name)
-    var names = ""
+    var names: Buf(u8) = .empty
+    defer a.free(names)
     for (rows) |r| {
-        names = a.concat(names, a.concat(r.name, " "))
+        a.append_str(&names, r.name)
+        a.append_str(&names, " ")
     }
     io.print(names[0..@len(names) - 1])
     // total per dept
@@ -125,6 +127,6 @@ fn main(a: Allocator, io: Io) void {
         totals[k] = totals[k] + r.pay
     }
     for (depts) |d, i| {
-        io.print(a.concat(a.concat(d, " "), a.int_str(totals[i])))
+        io.print(d, " ", totals[i])
     }
 }

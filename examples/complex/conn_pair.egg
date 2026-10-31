@@ -22,9 +22,9 @@ const Pair = struct {
 
 // Opens two connections; if the second fails, the first is closed.
 fn open_pair(io: Io, a: Allocator, x: i64, y: i64) !Pair {
-    const first = try c.open(io, a, x)
+    const first = try c.open(io, x)
     errdefer first.deinit(a)
-    const second = try c.open(io, a, y)
+    const second = try c.open(io, y)
     return Pair{ .first = first, .second = second }
 }
 

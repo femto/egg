@@ -45,7 +45,7 @@ fn main(io: Io, a: Allocator) void {
         counts.put(a, w, (counts.get(w) orelse 0) + 1)
     }
     for (counts.entries) |e| {
-        io.print(a.concat(a.concat(e.key, " "), a.int_str(e.val)))
+        io.print(e.key, " ", e.val)
     }
 
     // many integer keys, so the index grows
@@ -128,7 +128,7 @@ fn main(io: Io, a: Allocator) void {
         a.push(&groups.entries[g].val, n)
     }
     for (groups.entries) |e| {
-        io.print(a.concat(a.concat(e.key, ": "), a.int_str(@len(e.val))))
+        io.print(e.key, ": ", @len(e.val))
     }
     io.print(groups.remove(a, "a"))
     io.print(groups.count())

@@ -92,11 +92,11 @@ module Egg
                 "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"] },
       "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
       "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"] },
-      "Allocator" => { "concat" => [%w[text text], "str"], "leak" => [["text"], "str"], "int_str" => [["integer"], "str"],
-                       "float_str" => [["float"], "str"],
+      "Allocator" => { "concat" => [%w[text text], "Buf(u8)"], "leak" => [["text"], "str"], "int_str" => [["integer"], "Buf(u8)"],
+                       "float_str" => [["float"], "Buf(u8)"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
                        "append_float" => [%w[inout_buffer float], "void"],
-                       "cstr" => [["str"], "*u8"], "str_from_c" => [["cstring"], "str"],
+                       "cstr" => [["str"], "*u8"], "str_from_c" => [["cstring"], "Buf(u8)"],
                        "create" => [["value"], "pointer to the value"],
                        "alloc" => [%w[i64 element], "Buf(T)"], "free" => [["buffer"], "void"],
                        "resize" => [%w[inout_buffer i64 element], "void"],
@@ -2198,6 +2198,7 @@ module Egg
       ret = resolve_type(ErrType.new(GenericType.new("Buf", ["u8"])), line, col) if ret == "!Buf(u8)"
       ret = resolve_type(ErrType.new("void"), line, col) if ret == "!void"
       ret = resolve_type(ErrType.new("bool"), line, col) if ret == "!bool"
+      ret = resolve_type(GenericType.new("Buf", ["u8"]), line, col) if ret == "Buf(u8)"
       pop = ret == "?T"
       if t == "Fs"
         FS_ERRORS.each { |n| error_id(n) }
@@ -2209,6 +2210,8 @@ module Egg
         error_id("IoFailed")
         @current.direct["alloc"] ||= [line, col, "Io.#{name}"]
       end
+      # a.concat(s, t, ...) takes two or more texts.
+      params = ["text"] * args.length if t == "Allocator" && name == "concat" && args.length > 2
       # io.print(x, y, ...) and io.eprint take one or more values.
       params = ["printable"] * args.length if t == "Io" && name.end_with?("print") && !args.empty?
       if params.length != args.length

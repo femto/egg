@@ -1,0 +1,9 @@
+// error: E133 @6
+// error: E104 @7
+uses alloc, io
+
+fn main(io: Io, a: Allocator) void {
+    io.print(a.int_str(1))
+    const s = a.concat("x")
+    a.free(s)
+}

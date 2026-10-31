@@ -82,9 +82,9 @@ module Egg
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
-                      egg_null_deref egg_print_u64 egg_alloc egg_concat egg_int_str egg_uint_str
-                      egg_fmt_float egg_print_float egg_float_str egg_cstr egg_str_from_c egg_buf_resize
-                      egg_append egg_append_int egg_append_uint egg_append_float
+                      egg_null_deref egg_print_u64 egg_alloc egg_concat
+                      egg_fmt_float egg_print_float egg_cstr egg_buf_resize
+                      egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_stdin_read_line egg_stdin_read_all].freeze
 
@@ -315,15 +315,6 @@ module Egg
             return (egg_str){ p, a.len + b.len };
         }
       C
-      "egg_int_str" => <<~C,
-        static egg_str egg_int_str(int64_t x) {
-            char buf[24];
-            int n = snprintf(buf, sizeof buf, "%" PRId64, x);
-            char *p = egg_alloc(n);
-            memcpy(p, buf, (size_t)n);
-            return (egg_str){ p, n };
-        }
-      C
       "egg_null_deref" => <<~C,
         static void *egg_null_deref(void) {
             egg_panic("null pointer dereference");
@@ -332,15 +323,6 @@ module Egg
       C
       "egg_print_u64" => <<~C,
         static void egg_print_u64(FILE *f, uint64_t x, bool nl) { fprintf(f, "%" PRIu64 "%s", x, nl ? "\\n" : ""); }
-      C
-      "egg_uint_str" => <<~C,
-        static egg_str egg_uint_str(uint64_t x) {
-            char buf[24];
-            int n = snprintf(buf, sizeof buf, "%" PRIu64, x);
-            char *p = egg_alloc(n);
-            memcpy(p, buf, (size_t)n);
-            return (egg_str){ p, n };
-        }
       C
       # The shortest decimal that reads back as x (with f32, as (float)x),
       # keeping ".0" on whole numbers, positional from 1e-4 to below 1e16
@@ -368,16 +350,6 @@ module Egg
             if (nl) fputc('\\n', f);
         }
       C
-      "egg_float_str" => <<~C,
-        static egg_str egg_float_str(double x, bool f32) {
-            char buf[40];
-            egg_fmt_float(buf, x, f32);
-            int64_t n = (int64_t)strlen(buf);
-            char *p = egg_alloc(n);
-            memcpy(p, buf, (size_t)n);
-            return (egg_str){ p, n };
-        }
-      C
       # s for C: its bytes and a 0 (C reads up to the first 0 byte).
       "egg_cstr" => <<~C,
         static uint8_t *egg_cstr(egg_str s) {
@@ -389,13 +361,11 @@ module Egg
         }
       C
       # The 0-terminated bytes at p, copied into a str.
-      "egg_str_from_c" => <<~C,
-        static egg_str egg_str_from_c(const uint8_t *p) {
+      # The bytes at p up to its first 0, at the end of a Buf(u8).
+      "egg_append_cstr" => <<~C,
+        static void egg_append_cstr(uint8_t **ptr, int64_t *len, int64_t *cap, const uint8_t *p) {
             if (p == NULL) egg_panic("null pointer dereference");
-            int64_t n = (int64_t)strlen((const char *)p);
-            char *q = egg_alloc(n);
-            if (n > 0) memcpy(q, p, (size_t)n);
-            return (egg_str){ q, n };
+            egg_append(ptr, len, cap, p, (int64_t)strlen((const char *)p));
         }
       C
       # p (NULL for a new buffer) resized to n elements of size bytes.
@@ -568,9 +538,9 @@ module Egg
     }.freeze
 
     # Helpers that call others.
-    HELPER_DEPS = { "egg_concat" => ["egg_alloc"], "egg_int_str" => ["egg_alloc"], "egg_uint_str" => ["egg_alloc"],
-                    "egg_print_float" => ["egg_fmt_float"], "egg_float_str" => %w[egg_alloc egg_fmt_float],
-                    "egg_cstr" => ["egg_alloc"], "egg_str_from_c" => ["egg_alloc"],
+    HELPER_DEPS = { "egg_concat" => ["egg_alloc"],
+                    "egg_print_float" => ["egg_fmt_float"],
+                    "egg_cstr" => ["egg_alloc"], "egg_append_cstr" => ["egg_append"],
                     "egg_append" => ["egg_buf_resize"], "egg_append_int" => ["egg_append"],
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float],
                     "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path egg_fs_open],
@@ -850,7 +820,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_int_str egg_uint_str egg_float_str egg_cstr egg_str_from_c egg_fs_path egg_fs_read egg_fs_write egg_args_get].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_args_get].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -1823,7 +1793,13 @@ module Egg
                # Buf(u8) it came from is freed.
                "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, ((egg_str){ \"\", 0 }))"
              when "Allocator.concat"
-               "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, #{coerce(codes[1], args[1].ty, 'str')})"
+               r = tmp
+               line("#{c_type(ret)} #{r} = #{empty_buf(ret)};")
+               codes.each_index do |i|
+                 v = hoist(coerce(codes[i], args[i].ty, "str"), "str")
+                 line("#{helper('egg_append')}(&#{r}.ptr, &#{r}.len, &#{r}.cap, (const uint8_t *)#{v}.ptr, #{v}.len);")
+               end
+               r
              when "Allocator.append_str", "Allocator.append_int", "Allocator.append_float"
                # The buffer's three fields, then the text, an integer or a float.
                p = tmp
@@ -1844,15 +1820,20 @@ module Egg
                else
                  "#{helper('egg_append_float')}(#{fields}, (double)#{codes[1]}, #{t == 'f32'})"
                end
-             when "Allocator.int_str"
-               if args[0].ty.start_with?("i")
-                 "#{helper('egg_int_str')}((int64_t)#{codes[0]})"
+             when "Allocator.int_str", "Allocator.float_str", "Allocator.str_from_c"
+               r = tmp
+               line("#{c_type(ret)} #{r} = #{empty_buf(ret)};")
+               fields = "&#{r}.ptr, &#{r}.len, &#{r}.cap"
+               t = args[0].ty
+               case m
+               when "Allocator.float_str" then line("#{helper('egg_append_float')}(#{fields}, (double)#{codes[0]}, #{t == 'f32'});")
+               when "Allocator.str_from_c" then line("#{helper('egg_append_cstr')}(#{fields}, #{codes[0]});")
                else
-                 "#{helper('egg_uint_str')}((uint64_t)#{codes[0]})"
+                 fn, cast = t.start_with?("i") ? ["egg_append_int", "int64_t"] : ["egg_append_uint", "uint64_t"]
+                 line("#{helper(fn)}(#{fields}, (#{cast})#{codes[0]});")
                end
+               r
              when "Allocator.cstr" then "#{helper('egg_cstr')}(#{codes[0]})"
-             when "Allocator.str_from_c" then "#{helper('egg_str_from_c')}(#{codes[0]})"
-             when "Allocator.float_str" then "#{helper('egg_float_str')}((double)#{codes[0]}, #{args[0].ty == 'f32'})"
              else raise "codegen: unknown capability method #{m}"
              end
       text = "((void)#{recv}, #{text})"

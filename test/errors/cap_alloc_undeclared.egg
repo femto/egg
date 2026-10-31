@@ -3,5 +3,7 @@
 uses io
 
 fn main(io: Io, a: Allocator) void {
-    io.print(a.int_str(5))
+    const s = a.int_str(5)
+    io.print(s)
+    a.free(s)
 }

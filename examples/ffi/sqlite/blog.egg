@@ -88,9 +88,9 @@ fn main(io: Io, a: Allocator) !void {
         "SELECT p.id, p.title, (SELECT COUNT(*) FROM comments WHERE post_id = p.id), (SELECT COUNT(*) FROM post_tags WHERE post_id = p.id) FROM posts p ORDER BY p.id")
     defer posts.finalize()
     while (try posts.next()) {
-        const head = a.concat(a.concat("  [", a.int_str(posts.int(0))), a.concat("] ", posts.text(a, 1)))
-        const counts = a.concat(a.concat("  (", a.int_str(posts.int(2))), a.concat(" comments, ", a.concat(a.int_str(posts.int(3)), " tags)")))
-        io.print(a.concat(head, counts))
+        const title = posts.text(a, 1)
+        defer a.free(title)
+        io.print("  [", posts.int(0), "] ", title, "  (", posts.int(2), " comments, ", posts.int(3), " tags)")
     }
 
     io.print("")
@@ -100,7 +100,9 @@ fn main(io: Io, a: Allocator) !void {
     defer tagged.finalize()
     try tagged.bind(1, "egg")
     while (try tagged.next()) {
-        io.print(a.concat("  - ", tagged.text(a, 0)))
+        const title = tagged.text(a, 0)
+        defer a.free(title)
+        io.print("  - ", title)
     }
 
     io.print("")
@@ -109,6 +111,10 @@ fn main(io: Io, a: Allocator) !void {
     defer comments.finalize()
     try comments.bind_int(1, p1)
     while (try comments.next()) {
-        io.print(a.concat(a.concat("  ", comments.text(a, 0)), a.concat(": ", comments.text(a, 1))))
+        const author = comments.text(a, 0)
+        defer a.free(author)
+        const body = comments.text(a, 1)
+        defer a.free(body)
+        io.print("  ", author, ": ", body)
     }
 }
