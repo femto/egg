@@ -59,7 +59,7 @@ place       = IDENT , { "." , IDENT | "[" , expr , "]" | "." , "*" }
                                                      (* behind a pointer: @ptrAdd(p, 1).* = v *)
 if_stmt     = "if" , "(" , expr , ")" , [ capture ] , block , [ nl , "else" , ( if_stmt | block ) ] ;
 while_stmt  = "while" , "(" , expr , ")" , [ capture ] , block ;
-capture     = "|" , IDENT , "|" ;                     (* over an optional: the block runs with its value *)
+capture     = "|" , IDENT , "|" ;                     (* over an optional: the block runs with its value; the name cannot be _ *)
 for_stmt    = "for" , "(" , expr , ")" , "|" , IDENT , [ "," , IDENT ] , "|" , block ;
 switch_stmt = "switch" , "(" , expr , ")" , "{" , { NL } , { arm , [ "," ] , { NL } } , "}" ;
 arm         = ( member , { "," , member } | "else" ) , "=>" ,
