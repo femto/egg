@@ -175,8 +175,8 @@ From v2:
   the file
 - Capabilities: a file declares `uses alloc, io`; `main` receives the
   capability values (`fn main(io: Io, a: Allocator)`) and passes them
-  down; `io.print(x)` replaces `@print`; `a.concat(s, t)` and
-  `a.int_str(n)`, `a.float_str(x)` build strings in a program-lifetime arena
+  down; `io.print(x)` replaces `@print`; `a.concat(s, t, ...)`,
+  `a.int_str(n)` and `a.float_str(x)` build text as a `Buf(u8)` the caller frees
 - **Capability check** (E130): following the call graph across files and
   generic instances, a function that uses a capability its file does not
   declare is rejected; hover in the editor shows what each function uses

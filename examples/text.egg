@@ -58,8 +58,9 @@ fn main(io: Io, a: Allocator) void {
     const csv = join(a, nums[0..], ",")
     defer a.free(csv)
     io.print(csv)
-    // A str that outlives line: copied into the program's arena.
+    // A new text, with its own owner: line can be freed before it.
     const kept = a.concat(line[0..4], "!")
+    defer a.free(kept)
     io.print(kept)
     io.print(line[6..])
 }

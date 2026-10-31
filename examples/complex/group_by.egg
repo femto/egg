@@ -51,8 +51,10 @@ fn main(a: Allocator, io: Io) void {
     }
     for (m.keys) |k, i| {
         var line = a.concat(k, ":")
+        defer a.free(line)
         for (m.vals[i]) |w| {
-            line = a.concat(a.concat(line, " "), w)
+            a.append_str(&line, " ")
+            a.append_str(&line, w)
         }
         io.print(line)
     }

@@ -12,18 +12,34 @@ const Log = struct {
     a: Allocator
 
     fn line(self: Log, label: str, n: i64) void {
-        self.io.print(self.a.concat(label, self.a.int_str(n)))
+        const text = self.a.int_str(n)
+        defer self.a.free(text)
+        const whole = self.a.concat(label, text)
+        defer self.a.free(whole)
+        self.io.print(whole)
     }
 }
 
-fn pair(a: Allocator, x: i64, y: i64) str {
-    return a.concat(a.int_str(x), a.concat(" and ", a.int_str(y)))
+fn pair(a: Allocator, x: i64, y: i64) Buf(u8) {
+    const first = a.int_str(x)
+    defer a.free(first)
+    const second = a.int_str(y)
+    defer a.free(second)
+    return a.concat(first, " and ", second)
 }
 
 fn main(io: Io, a: Allocator) void {
     const log = Log{ .io = io, .a = a }
     log.line("n = ", 42)
-    io.print(pair(a, -7, 0))
-    io.print(a.concat(a.int_str(3), " lines"))
-    io.print(a.concat("", ""))
+    const both = pair(a, -7, 0)
+    defer a.free(both)
+    io.print(both)
+    const count = a.int_str(3)
+    defer a.free(count)
+    const lines = a.concat(count, " lines")
+    defer a.free(lines)
+    io.print(lines)
+    const nothing = a.concat("", "")
+    defer a.free(nothing)
+    io.print(nothing)
 }

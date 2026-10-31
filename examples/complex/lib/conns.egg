@@ -18,7 +18,7 @@ const Conn = owned struct {
     }
 
     fn deinit(sink self: Conn, a: Allocator) void {
-        self.log.print(a.concat("close ", a.int_str(self.id)))
+        self.log.print("close ", self.id)
         a.free(self.sent)
         @drop(self)
     }
@@ -28,6 +28,6 @@ fn open(io: Io, a: Allocator, id: i64) !Conn {
     if (id < 0) {
         return error.Refused
     }
-    io.print(a.concat("open ", a.int_str(id)))
+    io.print("open ", id)
     return Conn{ .id = id, .log = io, .sent = .empty }
 }

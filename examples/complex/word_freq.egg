@@ -22,9 +22,14 @@ fn lower(c: i64) u8 {
     return if (c >= 'A' and c <= 'Z') @as(u8, c - 'A' + 'a') else @as(u8, c)
 }
 
-const Row = struct {
-    word: str
+const Row = owned struct {
+    word: Buf(u8)
     n: i64
+
+    fn deinit(sink self: Row, a: Allocator) void {
+        a.free(self.word)
+        @drop(self)
+    }
 }
 
 fn before(x: Row, y: Row) bool {
@@ -51,7 +56,7 @@ fn main(io: Io, a: Allocator) void {
     var rows: Buf(Row) = .empty
     defer a.free(rows)
     for (counts.entries) |e| {
-        a.push(&rows, Row{ .word = a.leak(e.key), .n = e.val })
+        a.push(&rows, Row{ .word = a.concat(e.key, ""), .n = e.val })
     }
     sort.sort_by(Row, &rows[0..], before)
     for (rows) |r| {

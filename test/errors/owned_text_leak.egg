@@ -1,0 +1,9 @@
+// error: E135 @5
+uses alloc
+
+fn main(a: Allocator) void {
+    const s = a.concat("x", "y")
+    if (@len(s) == 2) {
+        return
+    }
+}

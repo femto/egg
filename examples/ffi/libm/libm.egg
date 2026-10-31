@@ -25,8 +25,10 @@ fn main(io: Io, a: Allocator) void {
     io.print(@as(i64, sin(0.5) * 1000000))
     const h = a.cstr("h")
     h.* = @as(u8, toupper(@as(i32, h.*)))
-    io.print(a.str_from_c(h))
-    io.print(a.concat("pid > 0: ", if_str(getpid() > 0)))
+    const up = a.str_from_c(h)
+    defer a.free(up)
+    io.print(up)
+    io.print("pid > 0: ", if_str(getpid() > 0))
 }
 
 fn if_str(b: bool) str {

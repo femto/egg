@@ -46,7 +46,7 @@ const Db = owned struct {
     }
 
     // The last error, as SQLite words it.
-    fn errmsg(inout self: Db, a: Allocator) str {
+    fn errmsg(inout self: Db, a: Allocator) Buf(u8) {
         return a.str_from_c(sqlite3_errmsg(self.handle))
     }
 
@@ -115,10 +115,10 @@ const Stmt = owned struct {
 
     // Column i as text, copied: SQLite's bytes last only until the next
     // step. NULL reads as "".
-    fn text(inout self: Stmt, a: Allocator, i: i32) str {
+    fn text(inout self: Stmt, a: Allocator, i: i32) Buf(u8) {
         const p = sqlite3_column_text(self.handle, i)
         if (p == null) {
-            return ""
+            return .empty
         }
         return a.str_from_c(p)
     }

@@ -639,7 +639,8 @@ freed, so a `str` is always valid.
   (0 to 255), compared with a character literal as `s[i] == 'h'`;
   `s[lo..hi]` and `s[lo..]` are `str`s.
 - `==` compares contents. `for (s) |b|` visits each byte.
-- Building a string allocates, so it needs the alloc capability:
+- A `str` holds text that lives as long as the program, so it is copied
+  freely. Text a program builds is a `Buf(u8)` it owns and frees:
   `a.concat(s, t)` and `a.int_str(n)` (section 17).
 
 ```egg
@@ -695,8 +696,9 @@ them; each is only read. Text in any of these forms:
 - orders with `<`, `<=`, `>` and `>=` by its bytes, as unsigned numbers,
   a text sorting before any longer one it starts (`"ab" < "abc"`,
   `"B" < "a"`); text and a number cannot be ordered (E103);
-- is copied into a `str` by `a.leak(t)` or `a.concat(s, t)`, which live as
-  long as the program: `a.leak(b)` keeps the text of b after b is freed.
+- is copied by `a.concat(s, t, ...)` into a new `Buf(u8)`, or by `a.leak(t)`
+  into a `str` that is never freed: `a.leak(b)` keeps the text of b after b
+  is freed, at the cost of memory for the rest of the program.
 
 The `Buf(u8)` itself follows the buffer rules: `a.append_str(&b, b)` is
 E117, growing it while `for (b)` reads it is E137, and a temporary one
@@ -1081,10 +1083,10 @@ fn main(io: Io, a: Allocator) void {
     const xs = [_]i64{ 0, -3, 4 }
     for (xs) |x| {
         const v = check(x) catch |e| {
-            io.print(a.concat(a.concat(a.int_str(x), ": "), explain(e)))
+            io.print(x, ": ", explain(e))
             continue
         }
-        io.print(a.concat(a.concat(a.int_str(x), " = "), a.int_str(v)))
+        io.print(x, " = ", v)
     }
 }
 ```
@@ -1362,7 +1364,7 @@ with a value type that is the only way to use it:
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; see below |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 `fs` is separate from `io` so that a file's `uses` line says what it can
 reach: a program that only prints cannot touch a file.
@@ -1423,9 +1425,10 @@ fn main(io: Io) void {
 }
 ```
 
-Strings and `a.create` pointers live as long as the program: they are
-never freed, so nothing can use them after being freed. Memory that is
-freed comes as a `Buf(T)`, whose owner the compiler checks (section 21).
+String literals, `a.leak` copies and `a.create` pointers live as long as
+the program: they are never freed, so nothing can use them after being
+freed. Memory that is freed comes as a `Buf(T)`, whose owner the compiler
+checks (section 21).
 
 ```egg
 // expect: total: 42
@@ -1437,14 +1440,18 @@ const Log = struct {
     a: Allocator
 
     fn show(self: Log, label: str, n: i64) void {
-        self.io.print(self.a.concat(label, self.a.int_str(n)))
+        const text = self.a.int_str(n)
+        defer self.a.free(text)
+        self.io.print(label, text)
     }
 }
 
 fn main(io: Io, a: Allocator) void {
     const log = Log{ .io = io, .a = a }
     log.show("total: ", 42)
-    io.print(a.int_str(-7))
+    const text = a.int_str(-7)
+    defer a.free(text)
+    io.print(text)
 }
 ```
 
@@ -1608,9 +1615,10 @@ fn main(io: Io) void {
 ```
 
 C strings end in a 0 byte; a `str` has a length instead and no 0. Two
-`Allocator` methods convert, copying into the program-lifetime arena:
-`a.cstr(s) *u8` is s followed by a 0 (C sees s up to its first 0 byte),
-and `a.str_from_c(p) str` is the bytes at p up to the first 0. Making a
+`Allocator` methods convert, copying:
+`a.cstr(s) *u8` is s followed by a 0 (C sees s up to its first 0 byte), in
+memory that is never freed,
+and `a.str_from_c(p) Buf(u8)` is the bytes at p up to the first 0. Making a
 pointer is safe, but `a.str_from_c` reads through one, so it needs
 `allow unsafe` (E131); on `null` it panics `null pointer dereference`.
 Where a C function takes a pointer and a length, `@strPtr(s)` and
@@ -1631,7 +1639,9 @@ fn main(io: Io, a: Allocator) void {
         c.* = @as(u8, toupper(@as(i32, c.*)))
         i = i + 1
     }
-    io.print(a.str_from_c(p))
+    const up = a.str_from_c(p)
+    defer a.free(up)
+    io.print(up)
 }
 ```
 
@@ -2106,9 +2116,11 @@ fn main(io: Io, a: Allocator) void {
     const sum = t.bin(a, .add, t.num(a, 2), t.num(a, 3))
     const prod = t.bin(a, .mul, t.num(a, 4), t.num(a, 1))
     const root = t.bin(a, .mul, sum, prod)
-    var ids = ""
+    var ids: Buf(u8) = .empty
+    defer a.free(ids)
     for (t.kids) |k| {
-        ids = a.concat(ids, a.concat(a.int_str(k), " "))
+        a.append_int(&ids, k)
+        a.append_str(&ids, " ")
     }
     io.print(ids[0..@len(ids) - 1])
     io.print(t.eval(root))

@@ -138,7 +138,7 @@ fn main(a: Allocator, io: Io) void {
         k = k + 1
     }
     for (list) |c| {
-        io.print(a.concat(a.concat(c.word, " "), a.int_str(c.n)))
+        io.print(c.word, " ", c.n)
     }
     const f: fn(Map(i64)) i64 = total
     io.print(f(m))

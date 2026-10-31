@@ -142,7 +142,7 @@ fn main(a: Allocator, io: Io) void {
     const d = shortest(a, g, 0)
     defer a.free(d)
     for (d) |x, v| {
-        io.print(a.concat(a.concat(a.int_str(v), ": "), a.int_str(x)))
+        io.print(v, ": ", x)
     }
     const neg = [_]i64{ 0, 1, -2 }
     const bad = build(a, 2, neg[0..]) catch |e| {

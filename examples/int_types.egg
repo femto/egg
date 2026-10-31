@@ -31,7 +31,9 @@ fn main(io: Io, al: Allocator) void {
     io.print(-(y + 1) == 127)
     const big: u64 = 18446744073709551615
     io.print(big)
-    io.print(al.int_str(big))
+    const digits = al.int_str(big)
+    defer al.free(digits)
+    io.print(digits)
     const n: usize = 7
     io.print(n * 3)
     io.print(mix(10, 5))
