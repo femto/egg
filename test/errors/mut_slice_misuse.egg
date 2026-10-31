@@ -31,7 +31,6 @@ fn main(io: Io, a: Allocator) void {
     reset(&v[0..], v[0..])
     io.print(v[0])
 }
-// error: E147 @19
 // error: E105 @10
 // error: E105 @11
 // error: E105 @12

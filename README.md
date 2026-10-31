@@ -109,13 +109,14 @@ v3 (memory without GC, and what realistic programs needed; under way):
   integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
-  `std/sort` sorts, reverses and checks a mutable slice in place
+  `std/sort` sorts, reverses and checks a mutable slice in place, also of
+  elements that own buffers
   (`sort.sort(i64, &b[0..])`, numbers or text; `sort.sort_by(Row,
   &rows[0..], less)` by any order)
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
-  resized, and its elements own no buffers or resources (E147)
+  resized, and elements that own buffers are not assigned but moved with `@swap`
 - A `for` loop over a buffer allows calls that take it, or what holds it,
   as `inout` when the callee cannot move, reassign or resize it (each
   function's summary of what it may change, through its callees too), so

@@ -1,0 +1,22 @@
+// error: E121 @17
+// error: E105 @18
+// error: E105 @19
+// error: E105 @10
+// error: E103 @20
+// @swap needs a place it can write, and integer indices.
+uses alloc
+
+fn readonly(xs: []i64) void {
+    @swap(&xs, 0, 1)
+}
+
+fn main(a: Allocator) void {
+    var b = a.alloc(2, 0)
+    const c = [2]i64{ 1, 2 }
+    const s = "ab"
+    @swap(b, 0, 1)
+    @swap(&c, 0, 1)
+    @swap(&s, 0, 1)
+    @swap(&b, "0", 1)
+    readonly(b[0..])
+}
