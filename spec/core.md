@@ -695,8 +695,8 @@ them; each is only read. Text in any of these forms:
 - orders with `<`, `<=`, `>` and `>=` by its bytes, as unsigned numbers,
   a text sorting before any longer one it starts (`"ab" < "abc"`,
   `"B" < "a"`); text and a number cannot be ordered (E103);
-- is copied into a `str` by `a.str(t)` or `a.concat(s, t)`, which live as
-  long as the program: `a.str(b)` keeps the text of b after b is freed.
+- is copied into a `str` by `a.leak(t)` or `a.concat(s, t)`, which live as
+  long as the program: `a.leak(b)` keeps the text of b after b is freed.
 
 The `Buf(u8)` itself follows the buffer rules: `a.append_str(&b, b)` is
 E117, growing it while `for (b)` reads it is E137, and a temporary one
@@ -1360,7 +1360,7 @@ with a value type that is the only way to use it:
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; see below |
-| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.str(t) str`: a copy of the text t; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
+| `alloc` | `Allocator` | `a.concat(s, t) str`: s followed by t (any text, section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) str`: the integer n in decimal; `a.float_str(x) str`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) str`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 `fs` is separate from `io` so that a file's `uses` line says what it can
 reach: a program that only prints cannot touch a file.

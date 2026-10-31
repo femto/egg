@@ -142,7 +142,7 @@ v3 (memory without GC, and what realistic programs needed; under way):
   `\u{N}` (a code point, written as UTF-8): `"caf\u{e9}"`, `"\u{1f600}"`,
   `"\xff\xfe"`
 - Text orders with `<` `<=` `>` `>=` by its bytes (`"ab" < "abc"`), and
-  `a.str(t)` copies any text, such as a `Buf(u8)` about to be freed, into
+  `a.leak(t)` copies any text, such as a `Buf(u8)` about to be freed, into
   a `str`
 - `io.print(w, ": ", n)` prints several values and then a newline,
   allocating nothing; operands run left to right even when a later one

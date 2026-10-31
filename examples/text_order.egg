@@ -1,6 +1,6 @@
 // Text orders by its bytes, as unsigned numbers; a text sorts before any
 // longer one it starts. Any kinds of text compare with each other, and
-// a.str(t) copies text into a str that outlives a freed Buf(u8).
+// a.leak(t) copies text into a str that outlives a freed Buf(u8).
 // expect: true false
 // expect: true true
 // expect: true false
@@ -15,7 +15,7 @@ fn min_word(a: Allocator, words: []str) str {
             best = w
         }
     }
-    return a.str(best)
+    return a.leak(best)
 }
 
 fn main(io: Io, a: Allocator) void {
@@ -24,8 +24,8 @@ fn main(io: Io, a: Allocator) void {
     var b: Buf(u8) = .empty
     a.append_str(&b, "kept")
     io.print(b > "abc", " ", b[1..3] >= "eq")
-    const s = a.str(b)
-    const t = a.str(b[1..3])
+    const s = a.leak(b)
+    const t = a.leak(b[1..3])
     a.free(b)
     io.print(s, " ", t)
     const ws = [3]str{ "pear", "fig", "plum" }
