@@ -632,8 +632,8 @@ fn main(io: Io) void {
 ## 8. Strings
 
 `str` is an immutable sequence of bytes: a literal, a slice of a `str`, or
-a string built with an `Allocator` (section 17). None of them is ever
-freed, so a `str` is always valid.
+a copy made by `a.leak` (section 17). None of them is ever freed, so a
+`str` is always valid.
 
 - `@len(s)` is its length in bytes; `s[i]` is the byte at `i` as an `i64`
   (0 to 255), compared with a character literal as `s[i] == 'h'`;
@@ -673,8 +673,7 @@ fn main(io: Io) void {
 
 ### Text that is freed: Buf(u8)
 
-A `str` is never freed, so a program that builds strings as it runs
-should build them in a **`Buf(u8)`** instead: an ordinary buffer (section
+Text a program builds is a **`Buf(u8)`**: an ordinary buffer (section
 21), which owns its bytes and is freed with `a.free`. Three Allocator
 methods add text at its end, growing it as `a.push` does:
 
@@ -1060,7 +1059,7 @@ error (names are global, and need no declaration).
 // expect: 0: Zero
 // expect: -3: negative
 // expect: 4 = 4
-uses alloc, io
+uses io
 
 fn check(x: i64) !i64 {
     if (x == 0) {
@@ -1079,7 +1078,7 @@ fn explain(e: anyerror) str {
     }
 }
 
-fn main(io: Io, a: Allocator) void {
+fn main(io: Io) void {
     const xs = [_]i64{ 0, -3, 4 }
     for (xs) |x| {
         const v = check(x) catch |e| {

@@ -24,7 +24,7 @@ const Conn = owned struct {
     }
 }
 
-fn open(io: Io, a: Allocator, id: i64) !Conn {
+fn open(io: Io, id: i64) !Conn {
     if (id < 0) {
         return error.Refused
     }

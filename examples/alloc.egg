@@ -1,5 +1,5 @@
-// The alloc capability: strings built at run time live in an arena for
-// the whole program. A capability value can be kept in a struct.
+// The alloc capability: text built at run time is a Buf(u8) its owner
+// frees. A capability value can be kept in a struct.
 // expect: n = 42
 // expect: -7 and 0
 // expect: 3 lines
