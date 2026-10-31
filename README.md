@@ -157,6 +157,7 @@ v3 (memory without GC, and what realistic programs needed):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
+- Optionals: `if (x) |v| { ... } else { ... }` and `while (x) |v| { ... }`
 - Standard error: `io.eprint(x, ...)`. Standard input (needs `uses alloc`
   too; failures are `error.IoFailed`): `io.read_line(a, &line) !bool` returns
   false at the end, `io.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`

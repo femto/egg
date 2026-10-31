@@ -1,0 +1,15 @@
+// error: E105 @10
+// error: E110 @9
+// error: E110 @12
+fn pick() ?i64 {
+    return 1
+}
+
+fn main() void {
+    if (pick()) |v| {
+        v = 2
+    }
+    if (pick()) |w| {
+        return
+    }
+}

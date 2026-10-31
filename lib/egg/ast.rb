@@ -55,7 +55,7 @@ module Egg
   # name: the variable assigned, or the root variable of target
   # target: nil for `x = v`; a Field/Index expression for `p.x = v`, `a[i] = v`
   Assign   = Struct.new(:name, :value, :line, :col, :target)
-  If       = Struct.new(:cond, :then_body, :else_body, :line, :col)       # else_body: Block, If or nil
+  If       = Struct.new(:cond, :then_body, :else_body, :line, :col, :capture) # else_body: Block, If or nil; capture: |v| name
   While    = Struct.new(:cond, :body, :line, :col)
   For      = Struct.new(:iter, :var, :index_var, :body, :line, :col)      # for (xs) |x| / |x, i|
   # switch (x) { .a, .b => { } .c => |payload| { } else => { } }
@@ -93,7 +93,7 @@ module Egg
   Try        = Struct.new(:expr, :line, :col, :ty, :info)                # try e
   Catch      = Struct.new(:expr, :fallback, :line, :col, :ty, :info, :capture) # e catch f, e catch |err| f; capture: [name, line, col]
   # e orelse f; f is an expression, or a Return, Break or Continue
-  Orelse     = Struct.new(:expr, :fallback, :line, :col, :ty, :info)
+  Orelse     = Struct.new(:expr, :fallback, :line, :col, :ty, :info, :capture)
   IfExpr     = Struct.new(:cond, :then_expr, :else_expr, :line, :col, :ty, :info) # if (c) a else b
   TypeExpr   = Struct.new(:type, :line, :col, :ty, :info)                # a type in value position: []i64
   Deref      = Struct.new(:expr, :line, :col, :ty, :info)                # p.*

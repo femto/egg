@@ -1116,6 +1116,21 @@ module Egg
           vt = check_expr(value, t)
           expect_type(t, vt, value)
         end
+      in If[cond:, then_body:, else_body:, capture: String => name, line:, col:]
+        t = check_expr(cond)
+        unless t == "error" || @types[t]&.kind == :opt
+          err("E118", "'if (x) |v|' needs an optional (?T), found #{t}", cond.line, cond.col)
+        end
+        inner = t != "error" && @types[t]&.kind == :opt ? @types[t].inner : "error"
+        @scopes << {}
+        declare(name, VarInfo.new(inner, false, false, false, line, col, false, false))
+        check_block(then_body)
+        close_scope(@scopes.pop)
+        case else_body
+        in nil then nil
+        in Block then check_block(else_body)
+        in If then check_stmt(else_body)
+        end
       in If[cond:, then_body:, else_body:]
         if fold_comptime_if(stmt)
           # Only the branch the types choose is checked (and generated).
@@ -1647,7 +1662,7 @@ module Egg
       in Orelse[expr:, fallback:, line:, col:]
         t = check_expr(expr)
         unless @types[t]&.kind == :opt
-          err("E118", "'orelse' needs an optional (?T), found #{t}", line, col) unless t == "error"
+          err("E118", "'#{e.capture ? 'while (x) |v|' : 'orelse'}' needs an optional (?T), found #{t}", line, col) unless t == "error"
           check_orelse_fallback(fallback, nil, "orelse", line, col)
           return "error"
         end

@@ -287,9 +287,15 @@ module Egg
             walk_block(arm.body)
             @scopes.pop
           end
-        in If[cond:, then_body:, else_body:]
+        in If[cond:, then_body:, else_body:, capture:, line:, col:]
           walk_expr(cond)
+          @scopes << {}
+          unless capture.nil?
+            tok, = binding_tokens(line, col)
+            declare(Decl.new(:local, capture, tok.line, tok.col, "#{capture}  (the value)", nil, nil))
+          end
           walk_block(then_body)
+          @scopes.pop
           case else_body
           in nil then nil
           in Block then walk_block(else_body)

@@ -1,0 +1,16 @@
+// error: E118 @6
+// error: E118 @9
+uses io
+
+fn plain(io: Io) void {
+    if (1) |v| {
+        io.print(v)
+    }
+    while (true) |v| {
+        io.print(v)
+    }
+}
+
+fn main(io: Io) void {
+    plain(io)
+}
