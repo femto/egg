@@ -47,7 +47,7 @@ fn by_name(a: Row, b: Row) bool {
     return a.name[0] < b.name[0]
 }
 
-fn split(a: Allocator, s: str, sep: i64) Buf(str) {
+fn split(a: Allocator, s: str, sep: u8) Buf(str) {
     var out: Buf(str) = .empty
     var start: i64 = 0
     for (s) |c, i| {
@@ -69,10 +69,11 @@ fn parse_int(s: str) !i64 {
         if (c < 48 or c > 57) {
             return error.NotANumber
         }
-        if (n > (9223372036854775807 - (c - 48)) / 10) {
+        const digit = @as(i64, c - 48)
+        if (n > (9223372036854775807 - digit) / 10) {
             return error.Overflow
         }
-        n = n * 10 + c - 48
+        n = n * 10 + digit
     }
     return n
 }

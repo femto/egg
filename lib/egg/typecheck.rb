@@ -1395,7 +1395,7 @@ module Egg
     end
 
     def elem_type(t)
-      return "i64" if t == "str"
+      return "u8" if t == "str"
       info = @types[t]
       return nil if info.nil?
       return info.elem if %i[array slice buf].include?(info.kind)

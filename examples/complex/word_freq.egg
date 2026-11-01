@@ -14,12 +14,12 @@ uses io, alloc
 const map = @import("std/map")
 const sort = @import("std/sort")
 
-fn is_letter(c: i64) bool {
+fn is_letter(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '\''
 }
 
-fn lower(c: i64) u8 {
-    return if (c >= 'A' and c <= 'Z') @as(u8, c - 'A' + 'a') else @as(u8, c)
+fn lower(c: u8) u8 {
+    return if (c >= 'A' and c <= 'Z') c - 'A' + 'a' else c
 }
 
 const Row = owned struct {

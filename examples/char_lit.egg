@@ -20,7 +20,7 @@ fn count(s: []u8, c: u8) i64 {
     return n
 }
 
-fn is_digit(c: i64) bool {
+fn is_digit(c: u8) bool {
     return c >= '0' and c <= '9'
 }
 

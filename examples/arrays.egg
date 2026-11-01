@@ -59,7 +59,7 @@ fn first_over(xs: []i64, limit: i64) i64 {
     return found
 }
 
-fn count_char(s: str, c: i64) i64 {
+fn count_char(s: str, c: u8) i64 {
     var n = 0
     for (s) |b| {
         if (b == c) {

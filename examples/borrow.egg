@@ -80,7 +80,7 @@ fn Map(comptime V: type) type {
 fn hash(s: str) i64 {
     var h: i64 = 5381
     for (s) |c| {
-        h = (h * 33 + c) % 1000000007
+        h = (h * 33 + @as(i64, c)) % 1000000007
     }
     return h
 }
