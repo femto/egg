@@ -1372,7 +1372,7 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_line_max(a, &line, max) !bool`: the same, but a line of more than max bytes, not counting its line ending, fails with `error.LineTooLong`; `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
+| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_line_max(a, &line, max) !bool`: the same, but a line of more than max bytes, not counting its line ending, fails with `error.LineTooLong`, and a negative max panics; `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. All three show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
 | `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values (with 0, a sender waits for the receiver); see below |
@@ -1435,7 +1435,7 @@ only `fs` makes one (E142), and its methods need `uses fs`.
 `close` cannot fail, so it fits a `defer`. Writing is buffered, so a failure
 such as a full disk may appear only when the buffer is sent: finish with
 `try w.flush()`, or a failure in what is left is lost when `close` runs.
-Reading with `read_line`, `read_all` or `read` needs `uses alloc` too, and
+Reading with `read_line`, `read_line_max`, `read_all` or `read` needs `uses alloc` too, and
 reads and writes fail with `error.IoFailed`; `open`, `create` and `append`
 fail as `fs.read` does.
 
@@ -1478,7 +1478,7 @@ at a time, unless it hands each to a thread.
 
 `TcpConn`, `TcpListener` and `UdpSocket` are owned, like a `Reader`, and
 only `Net` makes them. `Addr` is a plain value, copied freely. `read_line`,
-`read`, `read_all` and `recv_from` need `uses alloc` too.
+`read_line_max`, `read`, `read_all` and `recv_from` need `uses alloc` too.
 
 Nothing is buffered on the way out, so there is no flush, and `close` cannot
 fail. `set_timeout` bounds each later read and write (0 means none; negative
@@ -1493,7 +1493,7 @@ panics), not connecting or accepting.
 | `error.TimedOut` | `set_timeout`'s time passed |
 | `error.PermissionDenied` | the system refused, as for a low port |
 | `error.IoFailed` | any other failure, such as a name server that does not answer |
-| `error.LineTooLong` | `read_line_max` met a longer line; what remains of it is still unread |
+| `error.LineTooLong` | `read_line_max` met a longer line. Its first bytes are gone and reading would go on inside it, so treat the input as bad |
 
 A line from the network can be any length, so `read_line` lets the other
 side use all the memory: use `read_line_max` for anything you do not trust.

@@ -1068,7 +1068,13 @@ module Egg
                 uint8_t *start = c->buf + c->pos;
                 uint8_t *nl = (uint8_t *)memchr(start, '\\n', (size_t)(c->len - c->pos));
                 int64_t n = nl == NULL ? c->len - c->pos : (int64_t)(nl - start);
-                if (max >= 0 && n > max + 1 - *len) return -8;
+                if (max >= 0 && n > max - *len && n - (max - *len) > 1) {
+                    /* One byte over is enough to know; the rest stays unread. */
+                    int64_t take = max - *len + 1;
+                    egg_append(ptr, len, cap, start, take);
+                    c->pos += take;
+                    return -8;
+                }
                 egg_append(ptr, len, cap, start, n);
                 c->pos += nl == NULL ? n : n + 1;
                 if (nl != NULL) {
@@ -2439,10 +2445,9 @@ module Egg
       "((const int32_t[]){ 0, #{ids.join(', ')} })[#{code}]"
     end
 
-    # The longest line wanted, or -1 for no limit: a limit below 0 is a bug.
-    def checked_max(code)
-      return code if code == "INT64_C(-1)"
-      "#{helper('egg_line_max')}(#{code})"
+    # The longest line wanted, checked, or -1 for no limit.
+    def line_limit(m, codes)
+      m.end_with?("_max") ? "#{helper('egg_line_max')}(#{codes[2]})" : "INT64_C(-1)"
     end
 
     def line_too_long(m)
@@ -2513,8 +2518,8 @@ module Egg
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("#{helper('egg_stdin_prepare')}();")
-               max = m == "Io.read_line_max" ? codes[2] : "INT64_C(-1)"
-               line("int #{s} = #{helper('egg_read_line')}(stdin, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{checked_max(max)});")
+               max = line_limit(m, codes)
+               line("int #{s} = #{helper('egg_read_line')}(stdin, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{max});")
                line("#{r}.value = #{s} > 0;")
                line("if (#{s} < 0) #{r}.err = #{s} == -2 ? #{line_too_long(m)} : #{io_failed};")
                r
@@ -2571,8 +2576,8 @@ module Egg
                r = tmp
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               max = m == "TcpConn.read_line_max" ? codes[2] : "INT64_C(-1)"
-               line("int #{s} = #{helper('egg_tcp_read_line')}(#{c}.c, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{checked_max(max)});")
+               max = line_limit(m, codes)
+               line("int #{s} = #{helper('egg_tcp_read_line')}(#{c}.c, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{max});")
                line("if (#{s} < 0) #{r}.err = #{net_error("-#{s}")}; else #{r}.value = #{s} > 0;")
                r
              when "TcpConn.read"
@@ -2648,8 +2653,8 @@ module Egg
                r = tmp
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               max = m == "Reader.read_line_max" ? codes[2] : "INT64_C(-1)"
-               line("int #{s} = #{helper('egg_read_line')}(#{f}, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{checked_max(max)});")
+               max = line_limit(m, codes)
+               line("int #{s} = #{helper('egg_read_line')}(#{f}, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{max});")
                line("#{r}.value = #{s} > 0;")
                line("if (#{s} < 0) #{r}.err = #{s} == -2 ? #{line_too_long(m)} : #{io_failed};")
                r
