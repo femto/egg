@@ -109,6 +109,8 @@ v3 (memory without GC, and what realistic programs needed):
   integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
+  `std/text` searches and takes text apart (`find`, `find_from`, `contains`,
+  `starts_with`, `ends_with`, `trim`, `split`, `parse_int`).
   `std/sort` sorts, reverses and checks a mutable slice in place, also of
   elements that own buffers
   (`sort.sort(i64, &b[0..])`, numbers or text; `sort.sort_by(Row,

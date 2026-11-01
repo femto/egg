@@ -1,0 +1,100 @@
+// std/text: searching and taking text apart. Everything takes a str, a
+// []u8 or a Buf(u8), and nothing here keeps what it is given.
+// const text = @import("std/text")
+// text.find("a=b", "=") is 1; text.parse_int("-12") is -12;
+// text.split(a, "a,b", ",") is a Buf(Buf(u8)) to free with a.free.
+uses alloc
+
+// Where needle first appears in s, from position `from` on. An empty needle
+// is found at once, where it starts.
+fn find_from(s: []u8, needle: []u8, from: i64) ?i64 {
+    var i = if (from < 0) 0 else from
+    while (i <= @len(s) and @len(needle) <= @len(s) - i) {
+        if (s[i..i + @len(needle)] == needle) {
+            return i
+        }
+        i = i + 1
+    }
+    return null
+}
+
+fn find(s: []u8, needle: []u8) ?i64 {
+    return find_from(s, needle, 0)
+}
+
+fn contains(s: []u8, needle: []u8) bool {
+    return (find(s, needle) orelse -1) >= 0
+}
+
+fn starts_with(s: []u8, prefix: []u8) bool {
+    return @len(s) >= @len(prefix) and s[0..@len(prefix)] == prefix
+}
+
+fn ends_with(s: []u8, suffix: []u8) bool {
+    return @len(s) >= @len(suffix) and s[@len(s) - @len(suffix)..] == suffix
+}
+
+fn is_space(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\r' or c == '\n'
+}
+
+// A copy of s without spaces, tabs and line endings at either end.
+fn trim(a: Allocator, s: []u8) Buf(u8) {
+    var lo = 0
+    var hi = @len(s)
+    while (lo < hi and is_space(s[lo])) {
+        lo = lo + 1
+    }
+    while (hi > lo and is_space(s[hi - 1])) {
+        hi = hi - 1
+    }
+    return a.concat(s[lo..hi], "")
+}
+
+// The parts of s between each sep. "a,,b" has three, and "" has one, empty.
+// An empty sep does not split.
+fn split(a: Allocator, s: []u8, sep: []u8) Buf(Buf(u8)) {
+    var parts: Buf(Buf(u8)) = .empty
+    var start = 0
+    if (@len(sep) > 0) {
+        while (true) {
+            const at = find_from(s, sep, start) orelse break
+            a.push(&parts, a.concat(s[start..at], ""))
+            start = at + @len(sep)
+        }
+    }
+    a.push(&parts, a.concat(s[start..], ""))
+    return parts
+}
+
+// The decimal integer that is all of s, with an optional sign; null for
+// anything else, or if it does not fit an i64.
+fn parse_int(s: []u8) ?i64 {
+    var i = 0
+    const negative = @len(s) > 0 and s[0] == '-'
+    if (negative or (@len(s) > 0 and s[0] == '+')) {
+        i = 1
+    }
+    if (i == @len(s)) {
+        return null
+    }
+    // Built downwards: the smallest i64 has no positive twin.
+    var n = 0
+    const limit = -9223372036854775807 - 1
+    while (i < @len(s)) {
+        const c = @as(i64, s[i])
+        if (c < '0' or c > '9') {
+            return null
+        }
+        const d = c - '0'
+        if (n < (limit + d) / 10) {
+            return null
+        }
+        n = n * 10 - d
+        i = i + 1
+    }
+    if (negative) {
+        return n
+    }
+    return if (n == limit) null else -n
+}
