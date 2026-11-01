@@ -1,7 +1,7 @@
 // A small static file server: eggc run server.egg -- ROOT PORT
 // Each connection gets a thread; a logger thread prints what they report.
-// An example, not for the open internet: threads are not limited, a request
-// line can be any length, and symbolic links are followed out of ROOT.
+// An example, not for the open internet: threads are not limited, and
+// symbolic links are followed out of ROOT.
 uses alloc, args, fs, io, net, thread
 
 fn parse_port(s: str) ?i64 {
@@ -104,12 +104,12 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
     try c.set_timeout(5000)
     var line: Buf(u8) = .empty
     defer a.free(line)
-    if (!try c.read_line(a, &line)) {
+    if (!try c.read_line_max(a, &line, 8192)) {
         return
     }
     var header: Buf(u8) = .empty
     defer a.free(header)
-    while (try c.read_line(a, &header)) {
+    while (try c.read_line_max(a, &header, 8192)) {
         if (@len(header) == 0) {
             break
         }

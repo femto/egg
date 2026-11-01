@@ -83,7 +83,7 @@ module Egg
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
     FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Thread" => "thread" }.freeze
-    NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed].freeze
+    NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed LineTooLong].freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
     FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed].freeze
     # Methods of capability values: name -> [parameter types, result]
@@ -93,11 +93,13 @@ module Egg
     # bytes, read in an `allow unsafe` file).
     CAP_METHODS = {
       "Io" => { "print" => [["printable"], "void"], "eprint" => [["printable"], "void"],
-                "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"] },
+                "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
+                "read_all" => [["Allocator"], "!Buf(u8)"] },
       "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
       "Net" => { "tcp_connect" => [%w[text i64], "!TcpConn"], "tcp_listen" => [%w[text i64], "!TcpListener"],
                  "udp_bind" => [%w[text i64], "!UdpSocket"], "resolve" => [%w[text i64], "!Addr"] },
-      "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"],
+      "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
+                     "read_all" => [["Allocator"], "!Buf(u8)"],
                      "read" => [%w[Allocator inout_buffer i64], "!i64"], "write" => [["text"], "!void"],
                      "set_timeout" => [["i64"], "!void"], "close" => [[], "void"] },
       "TcpListener" => { "accept" => [[], "!TcpConn"], "port" => [[], "i64"], "close" => [[], "void"] },
@@ -106,7 +108,8 @@ module Egg
       "Addr" => { "port" => [[], "i64"] },
       "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"] },
       "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
-      "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"],
+      "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
+                    "read_all" => [["Allocator"], "!Buf(u8)"],
                     "read" => [%w[Allocator inout_buffer i64], "!i64"], "close" => [[], "void"] },
       "Writer" => { "print" => [["printable"], "!void"], "write" => [["text"], "!void"], "flush" => [[], "!void"], "close" => [[], "void"] },
       "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"],
@@ -2374,6 +2377,7 @@ module Egg
         error_id("IoFailed")
         @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read") || name == "recv_from"
       end
+      error_id("LineTooLong") if name == "read_line_max"
       NET_ERRORS.each { |n| error_id(n) } if ret.start_with?("!") && (FILE_TYPES[t] == "net" || t == "Net")
       # a.concat(s, t, ...) takes two or more texts.
       params = ["text"] * args.length if t == "Allocator" && name == "concat" && args.length > 2

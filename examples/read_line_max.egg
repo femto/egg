@@ -1,0 +1,52 @@
+// read_line_max bounds how much a line can use: what comes from a file or a
+// connection may be any length.
+// expect: short
+// expect: LineTooLong
+// expect: exact
+// expect: LineTooLong
+// expect: end
+uses alloc, fs, io, net
+
+fn lines(io: Io, files: Fs, a: Allocator) !void {
+    try files.write("egg_lines.txt", "short\nmuch too long for this\n")
+    const r = try files.open("egg_lines.txt")
+    defer r.close()
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    while (true) {
+        const more = r.read_line_max(a, &line, 5) catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        if (!more) {
+            return
+        }
+        io.print(line)
+    }
+}
+
+fn tcp(io: Io, net: Net, a: Allocator) !void {
+    const l = try net.tcp_listen("127.0.0.1", 0)
+    defer l.close()
+    const client = try net.tcp_connect("127.0.0.1", l.port())
+    defer client.close()
+    const peer = try l.accept()
+    defer peer.close()
+    try client.write("exact\r\ntoolong\n")
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    if (try peer.read_line_max(a, &line, 5)) {
+        io.print(line)
+    }
+    const more = peer.read_line_max(a, &line, 5) catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+    io.print(more)
+}
+
+fn main(io: Io, files: Fs, net: Net, a: Allocator) !void {
+    try lines(io, files, a)
+    try tcp(io, net, a)
+    io.print("end")
+}
