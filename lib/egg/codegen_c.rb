@@ -125,6 +125,8 @@ module Egg
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
+                      egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_send egg_chan_recv
+                      egg_chan_tx_close egg_chan_rx_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
@@ -620,6 +622,140 @@ module Egg
         #endif
         }
       C
+      # A fixed ring of values, shared by the receiver and its senders; the
+      # last of them to close frees it.
+      "egg_chan" => <<~C,
+        typedef struct {
+        #ifdef _WIN32
+            CRITICAL_SECTION lock;
+            CONDITION_VARIABLE readable, writable;
+        #else
+            pthread_mutex_t lock;
+            pthread_cond_t readable, writable;
+        #endif
+            uint8_t *items;
+            size_t size;
+            int64_t cap, head, count, senders;
+            bool open;
+        } egg_chan;
+        #ifdef _WIN32
+        #define EGG_CHAN_LOCK(c) EnterCriticalSection(&(c)->lock)
+        #define EGG_CHAN_UNLOCK(c) LeaveCriticalSection(&(c)->lock)
+        #define EGG_CHAN_WAIT(c, on) SleepConditionVariableCS(&(c)->on, &(c)->lock, INFINITE)
+        #define EGG_CHAN_WAKE(c, on) WakeConditionVariable(&(c)->on)
+        #define EGG_CHAN_WAKE_ALL(c, on) WakeAllConditionVariable(&(c)->on)
+        #else
+        #define EGG_CHAN_LOCK(c) pthread_mutex_lock(&(c)->lock)
+        #define EGG_CHAN_UNLOCK(c) pthread_mutex_unlock(&(c)->lock)
+        #define EGG_CHAN_WAIT(c, on) pthread_cond_wait(&(c)->on, &(c)->lock)
+        #define EGG_CHAN_WAKE(c, on) pthread_cond_signal(&(c)->on)
+        #define EGG_CHAN_WAKE_ALL(c, on) pthread_cond_broadcast(&(c)->on)
+        #endif
+      C
+      "egg_chan_new" => <<~C,
+        static void *egg_chan_new(size_t size, int64_t cap) {
+            if (cap < 1) egg_panic("a channel holds at least one value");
+            egg_chan *c = (egg_chan *)egg_buf_resize(NULL, 1, sizeof(egg_chan));
+        #ifdef _WIN32
+            InitializeCriticalSection(&c->lock);
+            InitializeConditionVariable(&c->readable);
+            InitializeConditionVariable(&c->writable);
+        #else
+            if (pthread_mutex_init(&c->lock, NULL) != 0 || pthread_cond_init(&c->readable, NULL) != 0 ||
+                pthread_cond_init(&c->writable, NULL) != 0) {
+                egg_panic("cannot make a channel");
+            }
+        #endif
+            c->items = (uint8_t *)egg_buf_resize(NULL, cap, size > 0 ? size : 1);
+            c->size = size;
+            c->cap = cap;
+            c->head = 0;
+            c->count = 0;
+            c->senders = 0;
+            c->open = true;
+            return c;
+        }
+      C
+      "egg_chan_free" => <<~C,
+        static void egg_chan_free(egg_chan *c) {
+        #ifdef _WIN32
+            DeleteCriticalSection(&c->lock);
+        #else
+            pthread_mutex_destroy(&c->lock);
+            pthread_cond_destroy(&c->readable);
+            pthread_cond_destroy(&c->writable);
+        #endif
+            free(c->items);
+            free(c);
+        }
+      C
+      "egg_chan_sender" => <<~C,
+        static void *egg_chan_sender(void *v) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            c->senders += 1;
+            EGG_CHAN_UNLOCK(c);
+            return c;
+        }
+      C
+      "egg_chan_send" => <<~C,
+        static void egg_chan_send(void *v, const void *value) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            while (c->count == c->cap && c->open) EGG_CHAN_WAIT(c, writable);
+            if (!c->open) {
+                EGG_CHAN_UNLOCK(c);
+                egg_panic("send on a closed channel");
+            }
+            int64_t tail = (c->head + c->count) % c->cap;
+            memcpy(c->items + (size_t)tail * c->size, value, c->size);
+            c->count += 1;
+            EGG_CHAN_WAKE(c, readable);
+            EGG_CHAN_UNLOCK(c);
+        }
+      C
+      "egg_chan_recv" => <<~C,
+        static bool egg_chan_recv(void *v, void *out) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            while (c->count == 0 && c->senders > 0) EGG_CHAN_WAIT(c, readable);
+            bool got = c->count > 0;
+            if (got) {
+                memcpy(out, c->items + (size_t)c->head * c->size, c->size);
+                c->head = (c->head + 1) % c->cap;
+                c->count -= 1;
+                EGG_CHAN_WAKE(c, writable);
+            }
+            EGG_CHAN_UNLOCK(c);
+            return got;
+        }
+      C
+      "egg_chan_tx_close" => <<~C,
+        static void egg_chan_tx_close(void *v) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            c->senders -= 1;
+            bool last = c->senders == 0 && !c->open;
+            if (c->senders == 0) EGG_CHAN_WAKE_ALL(c, readable);
+            EGG_CHAN_UNLOCK(c);
+            if (last) egg_chan_free(c);
+        }
+      C
+      "egg_chan_rx_close" => <<~C,
+        static void egg_chan_rx_close(void *v, bool owned) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            if (owned && c->count > 0) {
+                EGG_CHAN_UNLOCK(c);
+                egg_panic("a channel closed with values left in it");
+            }
+            c->open = false;
+            bool last = c->senders == 0;
+            EGG_CHAN_WAKE_ALL(c, writable);
+            EGG_CHAN_UNLOCK(c);
+            if (last) egg_chan_free(c);
+        }
+      C
       "egg_net_base" => <<~C,
         #ifdef _WIN32
         #ifndef WIN32_LEAN_AND_MEAN
@@ -1085,7 +1221,10 @@ module Egg
                     "egg_net_last" => ["egg_net_base"], "egg_net_close" => ["egg_net_base"], "egg_net_prep" => ["egg_net_base"],
                     "egg_net_addrinfo" => %w[egg_net_base egg_net_start egg_fs_path],
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
-                    "egg_thread_detach" => ["egg_thread_base"], "egg_net_recv" => ["egg_net_base"],
+                    "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
+                    "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
+                    "egg_chan_sender" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan"],
+                    "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
                     "egg_print_addr" => ["egg_net_base"], "egg_net_resolve" => ["egg_net_addrinfo"],
@@ -1102,7 +1241,8 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
-                  egg_thread_base egg_thread_join egg_thread_detach
+                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_recv
+                  egg_chan_tx_close
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
@@ -1479,7 +1619,9 @@ module Egg
         @out << "/* #{canon} */\n" unless info.fn_line.nil?
         mark(info.return_line || info.line)
         @out << "struct #{info.c_name} {\n"
-        if info.fields.empty?
+        if @checker.chan_end?(canon)
+          @out << "    void *c;\n"
+        elsif info.fields.empty?
           @out << "    char unused;\n"
         else
           info.fields.each do |name, t, l|
@@ -2270,6 +2412,31 @@ module Egg
       "((const int32_t[]){ 0, #{ids.join(', ')} })[#{code}]"
     end
 
+    def chan_call(m, obj, recv, args, ret)
+      if m == "Threads.channel"
+        elem = @types[ret].elem
+        return hoist("((void)#{recv}, (#{c_type(ret)}){ #{helper('egg_chan_new')}(sizeof(#{c_type(elem)}), #{expr(args[1])}) })", ret)
+      end
+      c = "#{hoist(recv, obj.ty)}.c"
+      case m
+      when "Sender.send"
+        elem = @types[obj.ty].elem
+        v = hoist(coerce(expr(args[0]), args[0].ty, elem), elem)
+        "#{helper('egg_chan_send')}(#{c}, &#{v})"
+      when "Sender.clone", "Receiver.sender"
+        hoist("(#{c_type(ret)}){ #{helper('egg_chan_sender')}(#{c}) }", ret)
+      when "Sender.close"
+        "#{helper('egg_chan_tx_close')}(#{c})"
+      when "Receiver.close"
+        "#{helper('egg_chan_rx_close')}(#{c}, #{@checker.owned?(@types[obj.ty].elem)})"
+      when "Receiver.recv"
+        r = tmp
+        line("#{c_type(ret)} #{r} = { .has = false };")
+        line("#{r}.has = #{helper('egg_chan_recv')}(#{c}, &#{r}.value);")
+        r
+      end
+    end
+
     # The FILE of a Reader or a Writer, computed once.
     def file_of_value(recv, obj)
       "#{hoist(recv, obj.ty)}.f"
@@ -2283,6 +2450,7 @@ module Egg
     # data but is still evaluated, first, like any receiver.
     def cap_call(m, obj, args, ret)
       recv = expr(obj)
+      return chan_call(m, obj, recv, args, ret) if m.start_with?("Sender.", "Receiver.") || m == "Threads.channel"
       codes = args.each_with_index.map { |a, i| in_order(expr(a), a, args[(i + 1)..]) }
       text = case m
              when "Io.print"

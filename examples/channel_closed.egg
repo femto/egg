@@ -1,0 +1,11 @@
+// Nobody would ever receive this value.
+// panic: send on a closed channel
+uses thread
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    const tx = rx.sender()
+    rx.close()
+    tx.send(1)
+    tx.close()
+}

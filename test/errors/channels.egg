@@ -1,0 +1,21 @@
+// error: E122 @11
+// error: E122 @12
+// error: E103 @13
+// error: E125 @14
+// error: E104 @15
+// error: E104 @16
+// error: E142 @17
+uses alloc, thread
+
+fn misuse(a: Allocator, threads: Threads, tx: Sender(i64), rx: Receiver(i64)) void {
+    rx.send(1)
+    tx.recv()
+    tx.send("x")
+    threads.channel(1, 2).close()
+    threads.channel(i64).close()
+    tx.send()
+    _ = Sender(i64){}
+}
+
+fn main() void {
+}

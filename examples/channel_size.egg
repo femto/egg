@@ -1,0 +1,8 @@
+// A channel holds at least one value.
+// panic: a channel holds at least one value
+uses thread
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, 0)
+    rx.close()
+}

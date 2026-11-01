@@ -1375,7 +1375,7 @@ with a value type that is the only way to use it:
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
-| `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; see below |
+| `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values; see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; see below |
 | `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
@@ -1533,6 +1533,26 @@ checked.
 
 One `print` is one line: lines of different threads do not mix.
 
+**Channels.** A channel carries values between threads: `threads.channel(T,
+n)`, for n at least 1 (a panic otherwise), returns its `Receiver(T)`. Each
+sender comes from it. Both ends are owned, and only `Threads` makes them.
+
+| Type | Methods |
+| --- | --- |
+| `Receiver(T)` | `rx.recv() ?T`: the next value, waiting for one; null when every sender has closed and nothing is left; `rx.sender() Sender(T)`; `rx.close()` |
+| `Sender(T)` | `tx.send(v)`: takes v, waiting while the channel is full; `tx.clone() Sender(T)`; `tx.close()` |
+
+A value sent moves, so an owned one still has one owner. Values from one
+sender arrive in order. A channel with no sender yet gives null, so make
+the senders before receiving, and a thread that keeps a sender it never
+closes makes `recv` wait forever.
+
+Owned values cannot be lost: closing a `Receiver` that still holds owned
+values panics (`a channel closed with values left in it`), and sending once
+it is closed panics for any type (`send on a closed channel`). Plain values
+left in a closed channel are dropped. Receive until `recv` gives null. A
+channel cannot carry a `?T` or `!T` of an owned T (E133).
+
 ```egg
 // expect: 3
 uses alloc, io, thread
@@ -1544,6 +1564,26 @@ fn work(io: Io, a: Allocator, sink data: Buf(i64)) void {
 
 fn main(io: Io, a: Allocator, threads: Threads) void {
     const t = threads.spawn(work, io, a, a.alloc(3, 0))
+    t.join()
+}
+```
+
+```egg
+// expect: 49
+uses alloc, io, thread
+
+fn square(sink tx: Sender(i64), n: i64) void {
+    defer tx.close()
+    tx.send(n * n)
+}
+
+fn main(io: Io, threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    defer rx.close()
+    const t = threads.spawn(square, rx.sender(), 7)
+    while (rx.recv()) |v| {
+        io.print(v)
+    }
     t.join()
 }
 ```
