@@ -670,8 +670,8 @@ end
 def check_http_server(dir)
   root = File.join(dir, "www")
   FileUtils.mkdir_p(File.join(root, "sub"))
-  File.write(File.join(root, "index.html"), "<h1>egg</h1>")
-  File.write(File.join(root, "note.txt"), "hello\n")
+  File.binwrite(File.join(root, "index.html"), "<h1>egg</h1>")
+  File.binwrite(File.join(root, "note.txt"), "hello\n")
   blob = (0..255).map(&:chr).join * 4096
   File.binwrite(File.join(root, "blob.bin"), blob)
   File.write(File.join(dir, "secret.txt"), "secret")
@@ -705,6 +705,7 @@ def check_http_server(dir)
       big = head.("/blob.bin")
       body = big.split("\r\n\r\n", 2)[1]
       report(status.(big) == "200" && body == blob, "http serves binary data whole", big.bytesize.to_s)
+      report(head.("/note.txt?v=1").end_with?("hello\n"), "http ignores the query", "")
       report(status.(head.("/missing")) == "404", "http 404", "")
       report(status.(head.("/sub")) == "404", "http 404 for a directory", "")
       report(status.(head.("/../secret.txt")) == "403", "http refuses to leave the root", "")

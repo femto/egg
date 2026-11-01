@@ -1,5 +1,7 @@
 // A small static file server: eggc run server.egg -- ROOT PORT
 // Each connection gets a thread; a logger thread prints what they report.
+// An example, not for the open internet: threads are not limited, a request
+// line can be any length, and symbolic links are followed out of ROOT.
 uses alloc, args, fs, io, net, thread
 
 fn parse_port(s: str) ?i64 {
@@ -64,6 +66,15 @@ fn safe(path: []u8) bool {
     return true
 }
 
+fn plain(text: []u8) bool {
+    for (text) |c| {
+        if (c < 32 or c > 126) {
+            return false
+        }
+    }
+    return true
+}
+
 fn respond(c: TcpConn, a: Allocator, status: str, kind: str, body: []u8) !void {
     const size = a.int_str(@len(body))
     defer a.free(size)
@@ -109,7 +120,8 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
     const end = find(line, ' ', space + 1) orelse {
         return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
     }
-    try route(c, files, a, root, log, line[0..space], line[space + 1..end])
+    const stop = find(line[0..end], '?', space + 1) orelse end
+    try route(c, files, a, root, log, line[0..space], line[space + 1..stop])
 }
 
 fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), method: []u8, path: []u8) !void {
@@ -129,7 +141,12 @@ fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), m
     }
     const code = a.int_str(status)
     defer a.free(code)
-    log.send(a.concat(code, " ", method, " ", path))
+    // The path is the client's: nothing it holds may reach the terminal.
+    if (plain(method) and plain(path)) {
+        log.send(a.concat(code, " ", method, " ", path))
+    } else {
+        log.send(a.concat(code, " ?"))
+    }
 }
 
 fn connection(sink c: TcpConn, files: Fs, a: Allocator, root: str, sink log: Sender(Buf(u8))) void {
