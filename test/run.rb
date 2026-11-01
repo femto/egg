@@ -666,6 +666,61 @@ def check_rendezvous(dir)
   end
 end
 
+# The example HTTP server, with Ruby as its clients.
+def check_http_server(dir)
+  root = File.join(dir, "www")
+  FileUtils.mkdir_p(File.join(root, "sub"))
+  File.write(File.join(root, "index.html"), "<h1>egg</h1>")
+  File.write(File.join(root, "note.txt"), "hello\n")
+  blob = (0..255).map(&:chr).join * 4096
+  File.binwrite(File.join(root, "blob.bin"), blob)
+  File.write(File.join(dir, "secret.txt"), "secret")
+  ask = lambda do |port, text|
+    sock = TCPSocket.new("127.0.0.1", port)
+    sock.binmode
+    sock.write(text)
+    got = Timeout.timeout(10) { sock.read }
+    sock.close
+    got
+  end
+  # Built first: stopping it must stop the server, not a driver around it.
+  source = File.join(ROOT, "examples", "http_server", "server.egg")
+  exe = File.join(dir, "http_server")
+  built, status = Open3.capture2e(*eggc_command, "build", source, "-o", exe)
+  return report(false, "http server builds", built) unless status.success?
+  Open3.popen3(exe, root, "0") do |_, _, stderr, thread|
+    begin
+      first = Timeout.timeout(60) { stderr.gets }
+      port = first.to_s[/\d+/].to_i
+      if port.zero?
+        report(false, "http server starts", first.inspect)
+        next
+      end
+      head = ->(path) { ask.(port, "GET #{path} HTTP/1.0\r\nHost: x\r\n\r\n") }
+      status = ->(text) { text[/\AHTTP\/1\.0 (\d+)/, 1] }
+      index = head.("/")
+      report(status.(index) == "200" && index.include?("text/html") && index.end_with?("<h1>egg</h1>"), "http serves the index", index)
+      note = head.("/note.txt")
+      report(note.include?("text/plain") && note.include?("Content-Length: 6\r\n") && note.end_with?("hello\n"), "http serves a file", note)
+      big = head.("/blob.bin")
+      body = big.split("\r\n\r\n", 2)[1]
+      report(status.(big) == "200" && body == blob, "http serves binary data whole", big.bytesize.to_s)
+      report(status.(head.("/missing")) == "404", "http 404", "")
+      report(status.(head.("/sub")) == "404", "http 404 for a directory", "")
+      report(status.(head.("/../secret.txt")) == "403", "http refuses to leave the root", "")
+      report(status.(ask.(port, "POST / HTTP/1.0\r\n\r\n")) == "405", "http 405", "")
+      idle = TCPSocket.new("127.0.0.1", port)
+      many = (1..40).map { Thread.new { status.(head.("/note.txt")) } }.map(&:value)
+      idle.close
+      report(many.all? { |s| s == "200" }, "http serves 40 at once beside an idle connection", many.uniq.inspect)
+      Process.kill("KILL", thread.pid)
+    rescue Timeout::Error, SystemCallError => e
+      Process.kill("KILL", thread.pid)
+      report(false, "http server", e.message)
+    end
+  end
+end
+
 # What a program sees on its command line, and the order of its two output
 # streams: eprint must not overtake what print wrote before it.
 def check_args(dir)
@@ -1281,6 +1336,7 @@ Dir.mktmpdir do |dir|
   check_net(dir)
   check_threads(dir)
   check_rendezvous(dir)
+  check_http_server(dir)
   check_args(dir)
   check_stdin(dir)
   check_utf8(dir)

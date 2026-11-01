@@ -1,0 +1,174 @@
+// A small static file server: eggc run server.egg -- ROOT PORT
+// Each connection gets a thread; a logger thread prints what they report.
+uses alloc, args, fs, io, net, thread
+
+fn parse_port(s: str) ?i64 {
+    if (@len(s) == 0) {
+        return null
+    }
+    var n = 0
+    for (s) |c| {
+        if (c < '0' or c > '9' or n > 65535) {
+            return null
+        }
+        n = n * 10 + c - '0'
+    }
+    return if (n <= 65535) n else null
+}
+
+// Where the byte c first appears in text, at from or later.
+fn find(text: []u8, c: i64, from: i64) ?i64 {
+    var i = from
+    while (i < @len(text)) {
+        if (@as(i64, text[i]) == c) {
+            return i
+        }
+        i = i + 1
+    }
+    return null
+}
+
+fn starts_with(text: []u8, prefix: str) bool {
+    return @len(text) >= @len(prefix) and text[0..@len(prefix)] == prefix
+}
+
+fn ends_with(text: []u8, suffix: str) bool {
+    return @len(text) >= @len(suffix) and text[@len(text) - @len(suffix)..] == suffix
+}
+
+fn content_type(path: []u8) str {
+    if (ends_with(path, ".html")) {
+        return "text/html; charset=utf-8"
+    }
+    if (ends_with(path, ".txt")) {
+        return "text/plain; charset=utf-8"
+    }
+    if (ends_with(path, ".json")) {
+        return "application/json"
+    }
+    return "application/octet-stream"
+}
+
+// A request may not leave the root.
+fn safe(path: []u8) bool {
+    if (@len(path) == 0 or path[0] != '/') {
+        return false
+    }
+    var i = 0
+    while (i + 1 < @len(path)) {
+        if (path[i] == '.' and path[i + 1] == '.') {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn respond(c: TcpConn, a: Allocator, status: str, kind: str, body: []u8) !void {
+    const size = a.int_str(@len(body))
+    defer a.free(size)
+    const head = a.concat("HTTP/1.0 ", status, "\r\nContent-Type: ", kind, "\r\nContent-Length: ", size, "\r\nConnection: close\r\n\r\n")
+    defer a.free(head)
+    try c.write(head)
+    try c.write(body)
+}
+
+fn serve_file(c: TcpConn, files: Fs, a: Allocator, root: str, path: []u8) !i64 {
+    const full = a.concat(root, path)
+    defer a.free(full)
+    const body = files.read(a, full) catch |e| {
+        if (e == error.NotFound or e == error.IsDirectory) {
+            try respond(c, a, "404 Not Found", "text/plain", "not found\n")
+            return 404
+        }
+        try respond(c, a, "500 Internal Server Error", "text/plain", "cannot read\n")
+        return 500
+    }
+    defer a.free(body)
+    try respond(c, a, "200 OK", content_type(path), body)
+    return 200
+}
+
+fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) !void {
+    try c.set_timeout(5000)
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    if (!try c.read_line(a, &line)) {
+        return
+    }
+    var header: Buf(u8) = .empty
+    defer a.free(header)
+    while (try c.read_line(a, &header)) {
+        if (@len(header) == 0) {
+            break
+        }
+    }
+    const space = find(line, ' ', 0) orelse {
+        return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
+    }
+    const end = find(line, ' ', space + 1) orelse {
+        return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
+    }
+    try route(c, files, a, root, log, line[0..space], line[space + 1..end])
+}
+
+fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), method: []u8, path: []u8) !void {
+    var status = 400
+    if (method != "GET") {
+        status = 405
+        try respond(c, a, "405 Method Not Allowed", "text/plain", "only GET\n")
+    } else if (!safe(path)) {
+        status = 403
+        try respond(c, a, "403 Forbidden", "text/plain", "forbidden\n")
+    } else if (ends_with(path, "/")) {
+        const index = a.concat(path, "index.html")
+        defer a.free(index)
+        status = try serve_file(c, files, a, root, index)
+    } else {
+        status = try serve_file(c, files, a, root, path)
+    }
+    const code = a.int_str(status)
+    defer a.free(code)
+    log.send(a.concat(code, " ", method, " ", path))
+}
+
+fn connection(sink c: TcpConn, files: Fs, a: Allocator, root: str, sink log: Sender(Buf(u8))) void {
+    defer c.close()
+    defer log.close()
+    handle(c, files, a, root, log) catch {
+        return
+    }
+}
+
+fn logger(sink rx: Receiver(Buf(u8)), io: Io, a: Allocator) void {
+    defer rx.close()
+    while (rx.recv()) |line| {
+        defer a.free(line)
+        io.print(line)
+    }
+}
+
+fn main(io: Io, args: Args, files: Fs, net: Net, a: Allocator, threads: Threads) !void {
+    if (args.len() != 3) {
+        io.eprint("usage: ", args.get(0), " ROOT PORT")
+        return
+    }
+    const port = parse_port(args.get(2)) orelse {
+        io.eprint("bad port: ", args.get(2))
+        return
+    }
+    const server = try net.tcp_listen("127.0.0.1", port)
+    defer server.close()
+    io.eprint("listening on ", server.port())
+
+    const rx = threads.channel(Buf(u8), 64)
+    const log = rx.sender()
+    const printer = threads.spawn(logger, rx, io, a)
+    defer printer.join()
+    defer log.close()        // first, or the logger would wait for it forever
+    while (true) {
+        const c = try server.accept()
+        const t = threads.spawn(connection, c, files, a, args.get(1), log.clone())
+        t.detach()
+    }
+}
