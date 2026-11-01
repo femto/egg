@@ -1,0 +1,64 @@
+// std/text searches and takes text apart.
+// expect: 1
+// expect: 3
+// expect: true
+// expect: false
+// expect: true
+// expect: true
+// expect: [hello there]
+// expect: 3
+// expect: [a]
+// expect: []
+// expect: [b]
+// expect: 1
+// expect: 42
+// expect: -9223372036854775808
+// expect: 9223372036854775807
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+uses alloc, io
+
+const text = @import("std/text")
+
+fn show(io: Io, n: ?i64) void {
+    if (n) |v| {
+        io.print(v)
+    } else {
+        io.print("none")
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    show(io, text.find("a=b=c", "="))
+    show(io, text.find_from("a=b=c", "=", 2))
+    io.print(text.contains("hello", "ell"))
+    io.print(text.contains("hello", "x"))
+    io.print(text.starts_with("hello", "he"))
+    io.print(text.ends_with("hello", "lo"))
+
+    const trimmed = text.trim(a, "  hello there\r\n")
+    defer a.free(trimmed)
+    io.print("[", trimmed, "]")
+
+    const parts = text.split(a, "a,,b", ",")
+    defer a.free(parts)
+    io.print(@len(parts))
+    for (parts) |p| {
+        io.print("[", p, "]")
+    }
+    const one = text.split(a, "", ",")
+    defer a.free(one)
+    io.print(@len(one))
+
+    show(io, text.parse_int("+42"))
+    show(io, text.parse_int("-9223372036854775808"))
+    show(io, text.parse_int("9223372036854775807"))
+    show(io, text.parse_int("9223372036854775808"))
+    show(io, text.parse_int("-9223372036854775809"))
+    show(io, text.parse_int(""))
+    show(io, text.parse_int("-"))
+    show(io, text.parse_int("12x"))
+}

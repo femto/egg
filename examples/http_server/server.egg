@@ -4,48 +4,16 @@
 // line can be any length, and symbolic links are followed out of ROOT.
 uses alloc, args, fs, io, net, thread
 
-fn parse_port(s: str) ?i64 {
-    if (@len(s) == 0) {
-        return null
-    }
-    var n = 0
-    for (s) |c| {
-        if (c < '0' or c > '9' or n > 65535) {
-            return null
-        }
-        n = n * 10 + c - '0'
-    }
-    return if (n <= 65535) n else null
-}
-
-// Where the byte c first appears in text, at from or later.
-fn find(text: []u8, c: i64, from: i64) ?i64 {
-    var i = from
-    while (i < @len(text)) {
-        if (@as(i64, text[i]) == c) {
-            return i
-        }
-        i = i + 1
-    }
-    return null
-}
-
-fn starts_with(text: []u8, prefix: str) bool {
-    return @len(text) >= @len(prefix) and text[0..@len(prefix)] == prefix
-}
-
-fn ends_with(text: []u8, suffix: str) bool {
-    return @len(text) >= @len(suffix) and text[@len(text) - @len(suffix)..] == suffix
-}
+const text = @import("std/text")
 
 fn content_type(path: []u8) str {
-    if (ends_with(path, ".html")) {
+    if (text.ends_with(path, ".html")) {
         return "text/html; charset=utf-8"
     }
-    if (ends_with(path, ".txt")) {
+    if (text.ends_with(path, ".txt")) {
         return "text/plain; charset=utf-8"
     }
-    if (ends_with(path, ".json")) {
+    if (text.ends_with(path, ".json")) {
         return "application/json"
     }
     return "application/octet-stream"
@@ -66,8 +34,8 @@ fn safe(path: []u8) bool {
     return true
 }
 
-fn plain(text: []u8) bool {
-    for (text) |c| {
+fn plain(s: []u8) bool {
+    for (s) |c| {
         if (c < 32 or c > 126) {
             return false
         }
@@ -114,13 +82,13 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
             break
         }
     }
-    const space = find(line, ' ', 0) orelse {
+    const space = text.find(line, " ") orelse {
         return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
     }
-    const end = find(line, ' ', space + 1) orelse {
+    const end = text.find_from(line, " ", space + 1) orelse {
         return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
     }
-    const stop = find(line[0..end], '?', space + 1) orelse end
+    const stop = text.find_from(line[0..end], "?", space + 1) orelse end
     try route(c, files, a, root, log, line[0..space], line[space + 1..stop])
 }
 
@@ -132,7 +100,7 @@ fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), m
     } else if (!safe(path)) {
         status = 403
         try respond(c, a, "403 Forbidden", "text/plain", "forbidden\n")
-    } else if (ends_with(path, "/")) {
+    } else if (text.ends_with(path, "/")) {
         const index = a.concat(path, "index.html")
         defer a.free(index)
         status = try serve_file(c, files, a, root, index)
@@ -170,7 +138,8 @@ fn main(io: Io, args: Args, files: Fs, net: Net, a: Allocator, threads: Threads)
         io.eprint("usage: ", args.get(0), " ROOT PORT")
         return
     }
-    const port = parse_port(args.get(2)) orelse {
+    const port = text.parse_int(args.get(2)) orelse -1
+    if (port < 0 or port > 65535) {
         io.eprint("bad port: ", args.get(2))
         return
     }
