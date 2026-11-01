@@ -100,7 +100,7 @@ First capabilities:
 | `alloc` | heap allocation, allocator passed explicitly | v2 (owned buffers `Buf(T)` that are freed, with ownership checking); v3 (text a program builds is a `Buf(u8)`; `a.leak` and `a.cstr` keep text for the whole program) |
 | `io` | standard streams, one implementation per OS | v2 (standard output first); standard error and input added |
 | `args` | command-line arguments | done (`len` and `get`) |
-| `fs` | files, one implementation per OS | whole-file `read` and `write`; handles next |
+| `fs` | files, one implementation per OS | whole-file `read` and `write`; open files as owned `Reader` and `Writer` values |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:

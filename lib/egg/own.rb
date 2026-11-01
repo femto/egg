@@ -576,9 +576,10 @@ module Egg
             check_inout_arg(obj, info[:sig], 0, obj.line, obj.col)
             walk_place(obj)
           else
-            # self is borrowed unless the method takes `sink self`;
-            # Allocator methods (no params) take what they are given.
-            walk(obj, !info.nil? && !info[:params].nil? && !info[:self_sink])
+            # self is borrowed unless the method takes `sink self`, or it
+            # closes a file; capability values own nothing.
+            cap = info&.[](:cap_method)
+            walk(obj, !info.nil? && ((!cap.nil? && !cap.end_with?("close")) || (!info[:params].nil? && !info[:self_sink])))
           end
         end
         # m.f(K, x): a generic call into a module; info[:args] has no types.

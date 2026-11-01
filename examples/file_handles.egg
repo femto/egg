@@ -1,0 +1,76 @@
+// Open files: a Reader or a Writer is owned, so forgetting to close one does
+// not compile. close cannot fail, so it fits a defer; a write that fails may
+// only show when the data leaves its buffer, so end with flush.
+// expect: 1: one
+// expect: 2: two
+// expect: 3: last
+// expect: 13 2
+// expect: abc
+// expect: 3 2 0
+// expect: de
+// expect: NotFound
+uses alloc, fs, io
+
+fn copy(files: Fs, a: Allocator, from: str, to: str) !void {
+    const src = try files.open(from)
+    defer src.close()
+    const dst = try files.create(to)
+    defer dst.close()
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    while (try src.read_line(a, &line)) {
+        try dst.print(line)
+    }
+    try dst.flush()
+}
+
+fn fill(files: Fs) !void {
+    const w = try files.create("handles.txt")
+    defer w.close()
+    try w.print("one")
+    try w.print("tw", "o")
+    try w.flush()
+    const more = try files.append("handles.txt")
+    defer more.close()
+    try more.write("last")
+    try more.flush()
+}
+
+fn main(io: Io, files: Fs, a: Allocator) !void {
+    try fill(files)
+    try copy(files, a, "handles.txt", "copied.txt")
+
+    const r = try files.open("copied.txt")
+    defer r.close()
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    var n = 0
+    while (try r.read_line(a, &line)) {
+        n = n + 1
+        io.print(n, ": ", line)
+    }
+
+    const again = try files.open("copied.txt")
+    defer again.close()
+    const whole = try again.read_all(a)
+    defer a.free(whole)
+    io.print(@len(whole), " ", n - 1)
+
+    try files.write("bytes.txt", "abcde")
+    const b = try files.open("bytes.txt")
+    defer b.close()
+    var chunk: Buf(u8) = .empty
+    defer a.free(chunk)
+    const got = try b.read(a, &chunk, 3)
+    io.print(chunk)
+    const rest = try b.read(a, &chunk, 3)
+    const none = try b.read(a, &line, 0)
+    io.print(got, " ", rest, " ", none)
+    io.print(chunk)
+
+    const missing = files.open("no/such/file") catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+    missing.close()
+}

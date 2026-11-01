@@ -1,0 +1,21 @@
+// error: E135 @7
+// error: E135 @8
+// error: E136 @15
+uses alloc, fs
+
+fn leak(files: Fs, a: Allocator) !void {
+    const r = try files.open("x")
+    const b = try r.read_all(a)
+    a.free(b)
+}
+
+fn twice(files: Fs) !void {
+    const r = try files.open("x")
+    r.close()
+    r.close()
+}
+
+fn main(files: Fs, a: Allocator) !void {
+    try leak(files, a)
+    try twice(files)
+}

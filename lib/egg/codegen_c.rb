@@ -74,7 +74,9 @@ module Egg
       "Io" => "typedef struct { char unused; } egg_io;\n",
       "Allocator" => "typedef struct { char unused; } egg_allocator;\n",
       "Fs" => "typedef struct { char unused; } egg_fs;\n",
-      "Args" => "typedef struct { char unused; } egg_args;\n"
+      "Args" => "typedef struct { char unused; } egg_args;\n",
+      "Reader" => "typedef struct { FILE *f; } egg_reader;\n",
+      "Writer" => "typedef struct { FILE *f; } egg_writer;\n"
     }.freeze
 
     # Runtime helpers, emitted only when the program uses them
@@ -86,7 +88,7 @@ module Egg
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
-                      egg_stdin_read_line egg_stdin_read_all].freeze
+                      egg_fs_handle egg_read_line egg_read_all egg_read_bytes].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -113,46 +115,6 @@ module Egg
             }
         #endif
             fflush(stdout);
-        }
-      C
-      # 1 with a line (without its line ending), 0 at the end, -1 on failure.
-      "egg_stdin_read_line" => <<~C,
-        static int egg_stdin_read_line(uint8_t **ptr, int64_t *len, int64_t *cap) {
-            egg_stdin_prepare();
-            *len = 0;
-            bool any = false;
-            int c;
-            while ((c = getc(stdin)) != EOF) {
-                any = true;
-                if (c == '\\n') break;
-                uint8_t b = (uint8_t)c;
-                egg_append(ptr, len, cap, &b, 1);
-            }
-            if (c == EOF && ferror(stdin)) return -1;
-            if (!any) return 0;
-            if (c == '\\n' && *len > 0 && (*ptr)[*len - 1] == '\\r') *len -= 1;
-            return 1;
-        }
-      C
-      "egg_stdin_read_all" => <<~C,
-        static bool egg_stdin_read_all(uint8_t **ptr, int64_t *len, int64_t *capacity) {
-            egg_stdin_prepare();
-            int64_t cap = 4096, n = 0;
-            uint8_t *b = (uint8_t *)egg_buf_resize(NULL, cap, 1);
-            for (;;) {
-                n += (int64_t)fread(b + n, 1, (size_t)(cap - n), stdin);
-                if (n < cap) break;
-                cap *= 2;
-                b = (uint8_t *)egg_buf_resize(b, cap, 1);
-            }
-            if (ferror(stdin)) {
-                free(b);
-                return false;
-            }
-            *ptr = b;
-            *len = n;
-            *capacity = cap;
-            return true;
         }
       C
       # Arguments are UTF-8. Windows gives main the ANSI code page, so take
@@ -438,7 +400,7 @@ module Egg
             }
             wchar_t *w = (wchar_t *)egg_buf_resize(NULL, n, sizeof(wchar_t));
             MultiByteToWideChar(65001, 8, path, -1, w, n);
-            FILE *f = _wfopen(w, mode[0] == 'r' ? L"rb" : L"wb");
+            FILE *f = _wfopen(w, mode[0] == 'r' ? L"rb" : mode[0] == 'a' ? L"ab" : L"wb");
             *e = errno;
             struct _stat st;
             if (f == NULL && *e == EACCES && _wstat(w, &st) == 0 && (st.st_mode & _S_IFDIR)) *e = EISDIR;
@@ -478,6 +440,80 @@ module Egg
             *len = n;
             *capacity = cap;
             return 0;
+        }
+      C
+      # A file opened for reading or writing. Opening a directory for reading
+      # succeeds on some systems: the first read tells.
+      "egg_fs_handle" => <<~C,
+        static int egg_fs_handle(egg_str path, const char *mode, FILE **out) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            int e;
+            FILE *f = egg_fs_open(p, mode, &e);
+            free(p);
+            if (f == NULL) return egg_fs_class(e);
+            if (mode[0] == 'r') {
+                int c = getc(f);
+                if (c == EOF && ferror(f)) {
+                    e = errno;
+                    fclose(f);
+                    return egg_fs_class(e);
+                }
+                if (c != EOF) ungetc(c, f);
+            }
+            *out = f;
+            return 0;
+        }
+      C
+      # 1 with a line (without its line ending), 0 at the end, -1 on failure.
+      "egg_read_line" => <<~C,
+        static int egg_read_line(FILE *f, uint8_t **ptr, int64_t *len, int64_t *cap) {
+            *len = 0;
+            bool any = false;
+            int c;
+            while ((c = getc(f)) != EOF) {
+                any = true;
+                if (c == '\\n') break;
+                uint8_t b = (uint8_t)c;
+                egg_append(ptr, len, cap, &b, 1);
+            }
+            if (c == EOF && ferror(f)) return -1;
+            if (!any) return 0;
+            if (c == '\\n' && *len > 0 && (*ptr)[*len - 1] == '\\r') *len -= 1;
+            return 1;
+        }
+      C
+      "egg_read_all" => <<~C,
+        static bool egg_read_all(FILE *f, uint8_t **ptr, int64_t *len, int64_t *capacity) {
+            int64_t cap = 4096, n = 0;
+            uint8_t *b = (uint8_t *)egg_buf_resize(NULL, cap, 1);
+            for (;;) {
+                n += (int64_t)fread(b + n, 1, (size_t)(cap - n), f);
+                if (n < cap) break;
+                cap *= 2;
+                b = (uint8_t *)egg_buf_resize(b, cap, 1);
+            }
+            if (ferror(f)) {
+                free(b);
+                return false;
+            }
+            *ptr = b;
+            *len = n;
+            *capacity = cap;
+            return true;
+        }
+      C
+      # Up to n bytes in place of what the buffer held: how many, or -1.
+      "egg_read_bytes" => <<~C,
+        static int64_t egg_read_bytes(FILE *f, uint8_t **ptr, int64_t *len, int64_t *cap, int64_t n) {
+            if (n > *cap) {
+                *ptr = (uint8_t *)egg_buf_resize(*ptr, n, 1);
+                *cap = n;
+            } else if (n < 0) {
+                egg_panic("negative buffer length");
+            }
+            *len = (int64_t)fread(*ptr, 1, (size_t)n, f);
+            return ferror(f) ? -1 : *len;
         }
       C
       "egg_fs_write" => <<~C,
@@ -545,7 +581,8 @@ module Egg
                     "egg_append_uint" => ["egg_append"], "egg_append_float" => %w[egg_append egg_fmt_float],
                     "egg_fs_path" => ["egg_buf_resize"], "egg_fs_read" => %w[egg_fs_class egg_fs_path egg_fs_open],
                     "egg_fs_write" => %w[egg_fs_class egg_fs_path egg_fs_open],
-                    "egg_stdin_read_line" => %w[egg_stdin_prepare egg_append], "egg_stdin_read_all" => %w[egg_stdin_prepare egg_buf_resize],
+                    "egg_read_line" => ["egg_append"], "egg_read_all" => ["egg_buf_resize"], "egg_read_bytes" => ["egg_buf_resize"],
+                    "egg_fs_handle" => %w[egg_fs_class egg_fs_path egg_fs_open],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare].freeze
@@ -820,7 +857,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_args_get].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_args_get].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -855,6 +892,9 @@ module Egg
       when "Args"
         @need_cap[t] = true
         "egg_args"
+      when "Reader", "Writer"
+        @need_cap[t] = true
+        "egg_#{t.downcase}"
       when *INT_C.keys then INT_C[t][0]
       when *FLOAT_C.keys then FLOAT_C[t]
       else
@@ -882,7 +922,7 @@ module Egg
 
     def emit_type(canon, done)
       info = @types[canon]
-      return if info.nil? || info.kind == :prim || done[canon]
+      return if info.nil? || info.kind == :prim || TypeChecker::FILE_TYPES.key?(canon) || done[canon]
       done[canon] = true
       # Marks name the declaring module's file; emitting a field's type
       # (maybe from another module) first must not change that. Arrays,
@@ -1688,6 +1728,11 @@ module Egg
       "((const int32_t[]){ 0, #{ids.join(', ')} })[#{code}]"
     end
 
+    # The FILE of a Reader or a Writer, computed once.
+    def file_of_value(recv, obj)
+      "#{hoist(recv, obj.ty)}.f"
+    end
+
     def io_failed
       @checker.error_names.index("IoFailed") + 1
     end
@@ -1718,19 +1763,77 @@ module Egg
                r = tmp
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("int #{s} = #{helper('egg_stdin_read_line')}(&#{b}->ptr, &#{b}->len, &#{b}->cap);")
+               line("#{helper('egg_stdin_prepare')}();")
+               line("int #{s} = #{helper('egg_read_line')}(stdin, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
                line("if (#{s} < 0) #{r}.err = #{io_failed}; else #{r}.value = #{s} > 0;")
                r
              when "Io.read_all"
                line("(void)#{codes[0]};")
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("if (!#{helper('egg_stdin_read_all')}(&#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)) #{r}.err = #{io_failed};")
+               line("#{helper('egg_stdin_prepare')}();")
+               line("if (!#{helper('egg_read_all')}(stdin, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)) #{r}.err = #{io_failed};")
                r
              when "Args.len"
                "#{helper('egg_args_len')}()"
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
+             when "Fs.open", "Fs.create", "Fs.append"
+               mode = { "Fs.open" => "rb", "Fs.create" => "wb", "Fs.append" => "ab" }[m]
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{fs_error("#{helper('egg_fs_handle')}(#{coerce(codes[0], args[0].ty, 'str')}, \"#{mode}\", &#{r}.value.f)")};")
+               r
+             when "Reader.read_line"
+               line("(void)#{codes[0]};")
+               f = file_of_value(recv, obj)
+               b = tmp
+               line("#{c_type(args[1].ty)} *#{b} = #{codes[1]};")
+               r = tmp
+               s = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("int #{s} = #{helper('egg_read_line')}(#{f}, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
+               line("if (#{s} < 0) #{r}.err = #{io_failed}; else #{r}.value = #{s} > 0;")
+               r
+             when "Reader.read_all"
+               line("(void)#{codes[0]};")
+               f = file_of_value(recv, obj)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("if (!#{helper('egg_read_all')}(#{f}, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)) #{r}.err = #{io_failed};")
+               r
+             when "Reader.read"
+               line("(void)#{codes[0]};")
+               f = file_of_value(recv, obj)
+               b = tmp
+               line("#{c_type(args[1].ty)} *#{b} = #{codes[1]};")
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.value = #{helper('egg_read_bytes')}(#{f}, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{codes[2]});")
+               line("if (#{r}.value < 0) #{r}.err = #{io_failed};")
+               r
+             when "Reader.close", "Writer.close"
+               "(void)fclose(#{file_of_value(recv, obj)})"
+             when "Writer.flush"
+               f = file_of_value(recv, obj)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("if (fflush(#{f}) != 0) #{r}.err = #{io_failed};")
+               r
+             when "Writer.print"
+               f = file_of_value(recv, obj)
+               codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], i == args.length - 1, f)};") }
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("if (ferror(#{f})) #{r}.err = #{io_failed};")
+               r
+             when "Writer.write"
+               f = file_of_value(recv, obj)
+               v = hoist(coerce(codes[0], args[0].ty, "str"), "str")
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("if (fwrite(#{v}.ptr, 1, (size_t)#{v}.len, #{f}) != (size_t)#{v}.len) #{r}.err = #{io_failed};")
+               r
              when "Fs.read"
                line("(void)#{codes[0]};")
                r = tmp
