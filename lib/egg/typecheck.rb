@@ -1601,8 +1601,7 @@ module Egg
       in ArrayLit[type:, items:, line:, col:]
         check_array_lit(type, items, expected, line, col)
       in EnumLit[name:, line:, col:]
-        target = expected
-        target = @types[expected].inner if !expected.nil? && @types[expected]&.kind == :err
+        target = value_target(expected)
         info = target.nil? ? nil : @types[target]
         if !info.nil? && info.kind == :union
           return union_tag_value(e, info, target, name, line, col)
@@ -1914,11 +1913,17 @@ module Egg
 
     # The number type a literal should take where `expected` is wanted
     # (T, or the T of !T or ?T), or nil.
+    # The type a value has where expected wants it: T for !T, ?T and !?T.
+    def value_target(expected)
+      t = expected
+      t = @types[t].inner if !t.nil? && @types[t]&.kind == :err
+      t = @types[t].inner if !t.nil? && @types[t]&.kind == :opt
+      t
+    end
+
     def num_target(expected)
-      return nil if expected.nil?
-      return expected if num?(expected)
-      info = @types[expected]
-      %i[err opt].include?(info&.kind) && num?(info.inner) ? info.inner : nil
+      t = value_target(expected)
+      !t.nil? && num?(t) ? t : nil
     end
 
     # A literal whose type comes from context: 5, -5, 1.5, .red, null.
@@ -3183,7 +3188,10 @@ module Egg
       return true if want == "[]u8" && (got == "str" || bytes_buf?(got))
       if want.start_with?("!")
         return true if got == "anyerror"
-        return true if @types[want].inner == got
+        inner = @types[want].inner
+        return true if inner == got
+        # A plain value fits a !?T, as in Zig.
+        return true if inner.start_with?("?") && @types[inner].inner == got
       end
       return true if want.start_with?("?") && @types[want].inner == got
       false

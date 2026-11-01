@@ -1414,7 +1414,7 @@ module Egg
       if from == "anyerror"
         "((#{c_type(to)}){ .err = #{code} })"
       else
-        "((#{c_type(to)}){ .value = #{code}, .err = 0 })"
+        "((#{c_type(to)}){ .value = #{coerce(code, from, @types[to].inner)}, .err = 0 })"
       end
     end
 
