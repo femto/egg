@@ -35,7 +35,7 @@ module Egg
   GenericType = Struct.new(:name, :args)         # Pair(i64): args are types
   ThisType    = Struct.new(:line, :col)          # @This() inside a struct body
   PtrType     = Struct.new(:inner)               # *T
-  FnType      = Struct.new(:params, :ret)        # fn(T, U) R
+  FnType      = Struct.new(:params, :ret, :modes) # fn(T, inout U) R; modes: nil, "inout" or "sink" per parameter
 
   # const Name = struct { ... } / enum { ... } / union(enum) { ... }
   # members: FieldDecl list (a union member with no payload has type nil);
@@ -110,7 +110,7 @@ module Egg
     when GenericType then "#{t.name}(#{t.args.map { |a| type_src(a) }.join(', ')})"
     when ThisType then "@This()"
     when PtrType then "*#{type_src(t.inner)}"
-    when FnType then "fn(#{t.params.map { |a| type_src(a) }.join(', ')}) #{type_src(t.ret)}"
+    when FnType then "fn(#{t.params.each_with_index.map { |a, i| [t.modes[i], type_src(a)].compact.join(' ') }.join(', ')}) #{type_src(t.ret)}"
     else t.to_s
     end
   end

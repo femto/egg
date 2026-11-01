@@ -32,7 +32,8 @@ type        = name                                   (* i8..i64 u8..u64 usize f3
             | fn_type
             | "@This" , "(" , ")" ;
 name        = IDENT , [ "." , IDENT ] ;              (* m.Point: a type of an imported module *)
-fn_type     = "fn" , "(" , nl , [ type , nl , { "," , nl , type , nl } , [ "," , nl ] ] , ")" , type ;
+fn_type     = "fn" , "(" , nl , [ fn_param , nl , { "," , nl , fn_param , nl } , [ "," , nl ] ] , ")" , type ;
+fn_param    = [ "inout" | "sink" ] , type ;
 
 type_decl   = "const" , IDENT , "=" , ( struct_body_kw | enum_body | union_body ) ;
 type_alias  = "const" , IDENT , "=" , type , NL ;

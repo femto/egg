@@ -1451,7 +1451,7 @@ module Egg
         emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
       when :fn
         (info.fields + [info.inner]).each { |t| emit_type(t, done) unless %i[struct union].include?(@types[t]&.kind) }
-        params = info.fields.empty? ? "void" : info.fields.map { |t| c_type(t) }.join(", ")
+        params = info.fields.empty? ? "void" : info.fields.each_with_index.map { |t, i| by_ref?(t, info.modes[i]) ? "#{c_type(t)} *" : c_type(t) }.join(", ")
         @out << "typedef #{c_type(info.inner)} (*#{info.c_name})(#{params});\n"
       end
     end

@@ -57,7 +57,7 @@ module Egg
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
   # mod: prefix of the module that declares the type (for #line marks)
   # resource: an `owned struct`; deinit: its deinit method's Sig, if any
-  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource, :deinit)
+  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource, :deinit, :modes)
 
   class TypeChecker
     # Io and Allocator are capability values: opaque, and only `main`
@@ -310,7 +310,9 @@ module Egg
 
     # A type that crosses into C as itself.
     def c_scalar?(t)
-      num?(t) || t == "bool" || %i[ptr fn].include?(@types[t]&.kind)
+      info = @types[t]
+      return false if info&.kind == :fn && info.modes.any?
+      num?(t) || t == "bool" || %i[ptr fn].include?(info&.kind)
     end
 
     # `uses alloc, io`: known capabilities, each named once.
@@ -748,7 +750,7 @@ module Egg
           err("E108", "a function type cannot return #{ret}", line, col)
           return "error"
         end
-        fn_type(params, ret)
+        fn_type(params, ret, t.modes)
       when ThisType
         return @this unless @this.nil?
         err("E108", "@This() is only valid inside a struct", line, col)
@@ -772,12 +774,19 @@ module Egg
     end
 
     # "fn(i64, bool) i64", registered: params in fields, result in inner.
-    def fn_type(params, ret)
-      canon = "fn(#{params.join(', ')}) #{ret}"
+    def fn_type(params, ret, modes)
+      shown = params.each_with_index.map { |p, i| [modes[i], p].compact.join(" ") }
+      canon = "fn(#{shown.join(', ')}) #{ret}"
       info = register(canon, :fn, nil, nil)
       info.fields = params
       info.inner = ret
+      info.modes = modes
       canon
+    end
+
+    # The [type, mode] of each parameter of a function type.
+    def fn_params(info)
+      info.fields.each_with_index.map { |t, i| [t, info.modes[i]] }
     end
 
     def storable?(t)
@@ -2068,15 +2077,11 @@ module Egg
     # (a module may hand out a function that uses its capabilities, as it
     # may hand out a capability value).
     def fn_value(e, sig, name, line, col)
-      if sig.params.any? { |_, mode| !mode.nil? }
-        err("E103", "'#{name}' has inout parameters, so it cannot be used as a value", line, col)
-        return "error"
-      end
       return "error" if sig.params.any? { |t, _| t == "error" } || sig.ret == "error"
       enqueue(sig)
       record_call(sig, line, col)
       e.info[:fn_ref] = sig.c_name
-      fn_type(sig.params.map(&:first), sig.ret)
+      fn_type(sig.params.map(&:first), sig.ret, sig.params.map(&:last))
     end
 
     # f(args) where f is a local of function type.
@@ -2090,7 +2095,7 @@ module Egg
       end
       e.info[:indirect] = true
       e.info[:args] = args
-      e.info[:params] = ft.fields.map { |t| [t, nil] }
+      e.info[:params] = fn_params(ft)
       check_args(Sig.new(written, e.info[:params], ft.inner), args, written, line, col)
       ft.inner
     end
@@ -2178,7 +2183,7 @@ module Egg
         ft = @types[field[1]]
         e.info[:field_call] = true
         e.info[:args] = args
-        e.info[:params] = ft.fields.map { |pt| [pt, nil] }
+        e.info[:params] = fn_params(ft)
         check_args(Sig.new(name, e.info[:params], ft.inner), args, name, line, col, [obj])
         return ft.inner
       end

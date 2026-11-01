@@ -1,0 +1,26 @@
+// error: E103 @17
+// error: E103 @18
+// error: E103 @19
+// error: E121 @21
+uses alloc
+
+fn plain(b: Buf(i64)) i64 {
+    return @len(b)
+}
+
+fn change(inout b: Buf(i64)) void {
+    b[0] = 1
+}
+
+fn main(a: Allocator) void {
+    var b = a.alloc(2, 0)
+    const f: fn(Buf(i64)) i64 = change
+    const g: fn(inout Buf(i64)) void = plain
+    const h: fn(sink Buf(i64)) i64 = plain
+    const k = change
+    k(b)
+    _ = f(b)
+    g(&b)
+    _ = h(b)
+    a.free(b)
+}
