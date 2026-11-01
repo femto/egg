@@ -562,7 +562,7 @@ module Egg
         #endif
         #include <winsock2.h>
         #include <ws2tcpip.h>
-        #ifdef _MSC_VER
+        #if defined(_MSC_VER) || defined(__clang__)
         #pragma comment(lib, "ws2_32")
         #endif
         typedef SOCKET egg_sock;
@@ -646,7 +646,12 @@ module Egg
             hints.ai_flags = flags;
             int rc = getaddrinfo(h, p, &hints, out);
             free(h);
-            return rc == 0 ? 0 : 1;
+            if (rc == 0) return 0;
+            if (rc == EAI_NONAME) return 1;
+        #ifdef EAI_NODATA
+            if (rc == EAI_NODATA) return 1;
+        #endif
+            return 7;
         }
       C
       "egg_net_recv" => <<~C,
@@ -1067,6 +1072,11 @@ module Egg
       @sig = nil
       @defers = []      # per open block: its Defer statements so far
       @loop_marks = []  # per open loop: how many blocks were open outside it
+    end
+
+    # Did generate use sockets? (On Windows they need a library.)
+    def uses_net?
+      @used.key?("egg_net_base")
     end
 
     def generate

@@ -478,7 +478,7 @@ def check_net(dir)
         }
     }
   EGG
-  gone.join
+  gone.kill
   server.close
 
   # A server written in Egg, with Ruby as its client.
@@ -501,8 +501,12 @@ def check_net(dir)
     }
   EGG
   Open3.popen3(*eggc_command, "run", path) do |_, _, stderr, thread|
-    port = Timeout.timeout(60) { stderr.gets }.to_i
-    sock = TCPSocket.new("127.0.0.1", port)
+    first = Timeout.timeout(60) { stderr.gets }
+    if first.nil?
+      report(false, "a server in Egg answers Ruby", "the server did not start")
+      next
+    end
+    sock = TCPSocket.new("127.0.0.1", first.to_i)
     sock.write("one\ntwo\n")
     sock.close_write
     got = Timeout.timeout(10) { sock.read }

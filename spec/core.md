@@ -1370,7 +1370,7 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
+| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; see below |
@@ -1483,13 +1483,13 @@ panics), not connecting or accepting.
 
 | Error | Meaning |
 | --- | --- |
-| `error.HostNotFound` | the name does not resolve, or holds a 0 byte |
+| `error.HostNotFound` | the name does not exist, or holds a 0 byte |
 | `error.ConnectionRefused` | nothing listens at that port |
 | `error.ConnectionReset` | the other side went away |
 | `error.AddressInUse` | something already holds that port |
 | `error.TimedOut` | `set_timeout`'s time passed |
 | `error.PermissionDenied` | the system refused, as for a low port |
-| `error.IoFailed` | any other failure |
+| `error.IoFailed` | any other failure, such as a name server that does not answer |
 
 The other side closing normally is not an error: `read` returns 0 and
 `read_line` returns false.

@@ -40,8 +40,9 @@ module Egg
   def self.compile_to_c(src, path = nil, debug: false)
     r = check(src, path)
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
-    c = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil).generate
-    CompileResult.new(c, [], links(r.program, c.include?("winsock2.h")))
+    gen = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil)
+    c = gen.generate
+    CompileResult.new(c, [], links(r.program, gen.uses_net?))
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end
