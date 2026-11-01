@@ -1,0 +1,11 @@
+// error: E135 @7
+uses alloc
+
+fn main(a: Allocator) void {
+    var bs: Buf(Buf(i64)) = .empty
+    a.push(&bs, a.alloc(1, 0))
+    if (a.pop(&bs)) |b| {
+        _ = @len(b)
+    }
+    a.free(bs)
+}

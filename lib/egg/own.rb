@@ -302,11 +302,13 @@ module Egg
       in If[cond: BoolLit[value: true], then_body:, else_body: nil]
         # Always taken (also what a comptime if folds to).
         walk_block(then_body)
-      in If[cond:, then_body:, else_body:, line:, col:]
+      in If[cond:, then_body:, else_body:, line:, col:, capture:]
         walk(cond)
         start = @st
         @st = dup(start)
-        walk_block(then_body)
+        inner = capture.nil? ? nil : @types[cond.ty].inner
+        pre = !inner.nil? && owned?(inner) ? -> { declare(capture, :local, line, col, inner) } : nil
+        walk_block(then_body, pre)
         after_then = @st
         @st = dup(start)
         case else_body

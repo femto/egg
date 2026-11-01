@@ -322,7 +322,15 @@ module Egg
         expect_op("(")
         cond = parse_expr
         expect_op(")")
-        While.new(cond, parse_block, t.line, t.col)
+        name = parse_capture
+        body = parse_block
+        # while (e) |v| { ... } is while (true) { const v = e orelse break; ... }
+        unless name.nil?
+          unwrap = Orelse.new(cond, Break.new(name.line, name.col), name.line, name.col, nil, nil, true)
+          body.stmts.unshift(VarDecl.new(name.text, false, nil, unwrap, name.line, name.col, nil))
+          cond = BoolLit.new(true, t.line, t.col)
+        end
+        While.new(cond, body, t.line, t.col)
       elsif kw?("for")
         parse_for
       elsif kw?("switch")
@@ -386,6 +394,7 @@ module Egg
       expect_op("(")
       cond = parse_expr
       expect_op(")")
+      name = parse_capture
       then_body = parse_block
       else_body = nil
       # Allow `}` newline `else`: look past newlines for an else.
@@ -397,7 +406,17 @@ module Egg
       else
         @pos = save
       end
-      If.new(cond, then_body, else_body, t.line, t.col)
+      If.new(cond, then_body, else_body, t.line, t.col, name&.text)
+    end
+
+    # The |v| after the condition of an if or a while over an optional.
+    def parse_capture
+      return nil unless op?("|")
+      advance
+      name = expect(:ident, "name for the value")
+      error_at(name, "a capture needs a name, to use the value") if name.text == "_"
+      expect_op("|")
+      name
     end
 
     # for (xs) |x| { }   for (xs) |x, i| { }

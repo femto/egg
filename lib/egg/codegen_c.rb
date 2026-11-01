@@ -1225,12 +1225,25 @@ module Egg
         line("}")
         return
       end
-      c = cond(stmt.cond)
-      line("if (#{c}) {")
-      gen_block(stmt.then_body)
+      if stmt.capture.nil?
+        c = cond(stmt.cond)
+        line("if (#{c}) {")
+        gen_block(stmt.then_body)
+      else
+        gen_capture(stmt)
+      end
       tail = stmt.else_body
       closers = 0
       while tail.is_a?(If)
+        unless tail.capture.nil?
+          line("} else {")
+          @indent += 1
+          mark(tail.line)
+          gen_if(tail)
+          @indent -= 1
+          tail = nil
+          break
+        end
         tc, pre = capture { cond(tail.cond) }
         if pre.empty? && @line_file.nil?
           line("} else if (#{tc}) {")
@@ -1260,6 +1273,20 @@ module Egg
         @indent -= 1
         line("}")
       end
+    end
+
+    # The start of if (x) |v| { ... }: the value is v for the block.
+    def gen_capture(stmt)
+      r = hoist(expr(stmt.cond), stmt.cond.ty)
+      inner = @types[stmt.cond.ty].inner
+      line("if (#{r}.has) {")
+      @locals << {}
+      declare_local(stmt.capture, inner)
+      @indent += 1
+      line("const #{c_type(inner)} v_#{stmt.capture} = #{r}.value;")
+      @indent -= 1
+      gen_block(stmt.then_body)
+      @locals.pop
     end
 
     def gen_for(stmt)
