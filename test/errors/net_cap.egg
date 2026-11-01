@@ -1,0 +1,5 @@
+// error: E128 @2
+uses http
+
+fn main() void {
+}

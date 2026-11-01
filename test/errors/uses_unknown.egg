@@ -1,6 +1,6 @@
 // error: E128 @3
 // error: E128 @4
-uses net, io
+uses nope, io
 uses io
 
 fn main(io: Io) void {

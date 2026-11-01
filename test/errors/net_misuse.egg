@@ -1,0 +1,17 @@
+// error: E122 @9
+// error: E103 @10
+// error: E142 @13
+// error: E113 @13
+// error: E109 @16
+uses net
+
+fn misuse(c: TcpConn, u: UdpSocket) void {
+    c.accept()
+    u.send_to(1, "x") catch {
+        return
+    }
+    _ = TcpConn{}
+}
+
+fn main(c: TcpConn) void {
+}

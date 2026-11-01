@@ -1,0 +1,29 @@
+// UDP has no connections: each datagram names where it goes. A program can
+// send to itself over the loopback address.
+// expect: ping
+// expect: true
+// expect: true
+// expect: 127.0.0.1:80
+uses alloc, io, net
+
+fn main(io: Io, net: Net, a: Allocator) !void {
+    const left = try net.udp_bind("127.0.0.1", 0)
+    defer left.close()
+    const right = try net.udp_bind("127.0.0.1", 0)
+    defer right.close()
+    try right.set_timeout(5000)
+    try left.set_timeout(5000)
+
+    const to = try net.resolve("127.0.0.1", right.port())
+    try left.send_to(to, "ping")
+    var buf: Buf(u8) = .empty
+    defer a.free(buf)
+    const from = try right.recv_from(a, &buf, 1500)
+    io.print(buf)
+    io.print(from.port() == left.port())
+
+    try right.send_to(from, "pong")
+    const back = try left.recv_from(a, &buf, 1500)
+    io.print(back.port() == right.port())
+    io.print(try net.resolve("127.0.0.1", 80))
+}

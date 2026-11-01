@@ -40,18 +40,21 @@ module Egg
   def self.compile_to_c(src, path = nil, debug: false)
     r = check(src, path)
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
-    c = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil).generate
-    CompileResult.new(c, [], links(r.program))
+    gen = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil)
+    c = gen.generate
+    CompileResult.new(c, [], links(r.program, gen.uses_net?))
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end
 
   # The libraries every loaded file links, in load order, each once.
-  def self.links(program)
+  def self.links(program, uses_net = false)
     names = []
     program.modules.each_value do |m|
       m.links.each { |l| names << l.name unless names.include?(l.name) }
     end
+    # Sockets on Windows live in their own library.
+    names << "ws2_32" if Gem.win_platform? && uses_net && !names.include?("ws2_32")
     names
   end
 end

@@ -1,0 +1,19 @@
+// error: E135 @6
+// error: E136 @13
+uses net
+
+fn leak(net: Net) !void {
+    const l = try net.tcp_listen("x", 1)
+    _ = l.port()
+}
+
+fn twice(net: Net) !void {
+    const u = try net.udp_bind("x", 1)
+    u.close()
+    u.close()
+}
+
+fn main(net: Net) !void {
+    try leak(net)
+    try twice(net)
+}

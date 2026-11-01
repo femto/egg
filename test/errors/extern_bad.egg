@@ -11,7 +11,7 @@ extern fn puts(s: *u8) i32
 extern fn egg_x() void
 extern fn takes(s: str) void
 extern fn byref(inout x: i64) void
-extern fn f1(x: i64) void uses net
+extern fn f1(x: i64) void uses nope
 extern fn NULL() void
 extern fn int8_t() void
 extern fn PRId64() void

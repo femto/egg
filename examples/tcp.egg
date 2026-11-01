@@ -1,0 +1,58 @@
+// A TCP server and client in one program, over the loopback address. Port 0
+// asks the system for a free port. A connection is owned, so it must be closed.
+// expect: true
+// expect: hello
+// expect: second
+// expect: 5
+// expect: abc
+// expect: rest
+// expect: end
+uses alloc, io, net
+
+fn say(net: Net, port: i64, s: str) !void {
+    const c = try net.tcp_connect("127.0.0.1", port)
+    defer c.close()
+    try c.write(s)
+}
+
+fn main(io: Io, net: Net, a: Allocator) !void {
+    const server = try net.tcp_listen("127.0.0.1", 0)
+    defer server.close()
+    const port = server.port()
+    io.print(port > 0)
+
+    const client = try net.tcp_connect("127.0.0.1", port)
+    defer client.close()
+    const peer = try server.accept()
+    defer peer.close()
+    try client.set_timeout(5000)
+    try peer.set_timeout(5000)
+
+    try client.write("hello\r\nsecond\nabcrest")
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    if (try peer.read_line(a, &line)) {
+        io.print(line)
+    }
+    if (try peer.read_line(a, &line)) {
+        io.print(line)
+    }
+
+    try peer.write("12345")
+    var part: Buf(u8) = .empty
+    defer a.free(part)
+    io.print(try client.read(a, &part, 5))
+    _ = try peer.read(a, &part, 3)
+    io.print(part)
+
+    // After the other side closes: what is left, then the end.
+    try say(net, port, "rest")
+    const second = try server.accept()
+    defer second.close()
+    const rest = try second.read_all(a)
+    defer a.free(rest)
+    io.print(rest)
+    if (!try second.read_line(a, &line)) {
+        io.print("end")
+    }
+}
