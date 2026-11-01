@@ -123,7 +123,7 @@ module Egg
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
-                      egg_fs_handle egg_read_line egg_read_all egg_read_bytes
+                      egg_fs_handle egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
                       egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_send egg_chan_recv
                       egg_chan_tx_close egg_chan_rx_close
@@ -505,21 +505,31 @@ module Egg
             return 0;
         }
       C
-      # 1 with a line (without its line ending), 0 at the end, -1 on failure.
+      "egg_line_max" => <<~C,
+        static int64_t egg_line_max(int64_t max) {
+            if (max < 0) egg_panic("negative line length");
+            return max;
+        }
+      C
+      # 1 with a line (without its line ending), 0 at the end, -1 on failure,
+      # -2 when the line is longer than max bytes (a negative max: no limit).
       "egg_read_line" => <<~C,
-        static int egg_read_line(FILE *f, uint8_t **ptr, int64_t *len, int64_t *cap) {
+        static int egg_read_line(FILE *f, uint8_t **ptr, int64_t *len, int64_t *cap, int64_t max) {
             *len = 0;
             bool any = false;
             int c;
             while ((c = getc(f)) != EOF) {
                 any = true;
                 if (c == '\\n') break;
+                /* One byte over: a \\r before the line ending does not count. */
+                if (max >= 0 && *len > max) return -2;
                 uint8_t b = (uint8_t)c;
                 egg_append(ptr, len, cap, &b, 1);
             }
             if (c == EOF && ferror(f)) return -1;
             if (!any) return 0;
             if (c == '\\n' && *len > 0 && (*ptr)[*len - 1] == '\\r') *len -= 1;
+            if (max >= 0 && *len > max) return -2;
             return 1;
         }
       C
@@ -1039,9 +1049,10 @@ module Egg
         }
       C
       # 1 with a line (without its line ending), 0 at the end, or minus the
-      # error's index.
+      # error's index; a line of more than max bytes is the last error (a
+      # negative max: no limit).
       "egg_tcp_read_line" => <<~C,
-        static int egg_tcp_read_line(void *v, uint8_t **ptr, int64_t *len, int64_t *cap) {
+        static int egg_tcp_read_line(void *v, uint8_t **ptr, int64_t *len, int64_t *cap, int64_t max) {
             egg_conn *c = (egg_conn *)v;
             *len = 0;
             bool any = false, ended = false;
@@ -1057,6 +1068,7 @@ module Egg
                 uint8_t *start = c->buf + c->pos;
                 uint8_t *nl = (uint8_t *)memchr(start, '\\n', (size_t)(c->len - c->pos));
                 int64_t n = nl == NULL ? c->len - c->pos : (int64_t)(nl - start);
+                if (max >= 0 && n > max + 1 - *len) return -8;
                 egg_append(ptr, len, cap, start, n);
                 c->pos += nl == NULL ? n : n + 1;
                 if (nl != NULL) {
@@ -1066,6 +1078,7 @@ module Egg
             }
             if (!any) return 0;
             if (ended && *len > 0 && (*ptr)[*len - 1] == '\\r') *len -= 1;
+            if (max >= 0 && *len > max) return -8;
             return 1;
         }
       C
@@ -2426,6 +2439,16 @@ module Egg
       "((const int32_t[]){ 0, #{ids.join(', ')} })[#{code}]"
     end
 
+    # The longest line wanted, or -1 for no limit: a limit below 0 is a bug.
+    def checked_max(code)
+      return code if code == "INT64_C(-1)"
+      "#{helper('egg_line_max')}(#{code})"
+    end
+
+    def line_too_long(m)
+      m.end_with?("_max") ? @checker.error_names.index("LineTooLong") + 1 : 0
+    end
+
     # The error id of an index into NET_ERRORS (from 1); 0 is success.
     def net_error(code)
       ids = TypeChecker::NET_ERRORS.map { |n| @checker.error_names.index(n) + 1 }
@@ -2482,7 +2505,7 @@ module Egg
                # streams go to one place (2>&1). Standard error has no buffer.
                line("fflush(stdout);")
                locked_print(args, codes, "stderr")
-             when "Io.read_line"
+             when "Io.read_line", "Io.read_line_max"
                line("(void)#{codes[0]};")
                b = tmp
                line("#{c_type(args[1].ty)} *#{b} = #{codes[1]};")
@@ -2490,8 +2513,10 @@ module Egg
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("#{helper('egg_stdin_prepare')}();")
-               line("int #{s} = #{helper('egg_read_line')}(stdin, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
-               line("if (#{s} < 0) #{r}.err = #{io_failed}; else #{r}.value = #{s} > 0;")
+               max = m == "Io.read_line_max" ? codes[2] : "INT64_C(-1)"
+               line("int #{s} = #{helper('egg_read_line')}(stdin, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{checked_max(max)});")
+               line("#{r}.value = #{s} > 0;")
+               line("if (#{s} < 0) #{r}.err = #{s} == -2 ? #{line_too_long(m)} : #{io_failed};")
                r
              when "Io.read_all"
                line("(void)#{codes[0]};")
@@ -2538,7 +2563,7 @@ module Egg
                       end
                line("#{r}.err = #{net_error(call)};")
                r
-             when "TcpConn.read_line"
+             when "TcpConn.read_line", "TcpConn.read_line_max"
                line("(void)#{codes[0]};")
                c = hoist(recv, obj.ty)
                b = tmp
@@ -2546,7 +2571,8 @@ module Egg
                r = tmp
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("int #{s} = #{helper('egg_tcp_read_line')}(#{c}.c, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
+               max = m == "TcpConn.read_line_max" ? codes[2] : "INT64_C(-1)"
+               line("int #{s} = #{helper('egg_tcp_read_line')}(#{c}.c, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{checked_max(max)});")
                line("if (#{s} < 0) #{r}.err = #{net_error("-#{s}")}; else #{r}.value = #{s} > 0;")
                r
              when "TcpConn.read"
@@ -2614,7 +2640,7 @@ module Egg
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("#{r}.err = #{fs_error("#{helper('egg_fs_handle')}(#{coerce(codes[0], args[0].ty, 'str')}, \"#{mode}\", &#{r}.value.f)")};")
                r
-             when "Reader.read_line"
+             when "Reader.read_line", "Reader.read_line_max"
                line("(void)#{codes[0]};")
                f = file_of_value(recv, obj)
                b = tmp
@@ -2622,8 +2648,10 @@ module Egg
                r = tmp
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("int #{s} = #{helper('egg_read_line')}(#{f}, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
-               line("if (#{s} < 0) #{r}.err = #{io_failed}; else #{r}.value = #{s} > 0;")
+               max = m == "Reader.read_line_max" ? codes[2] : "INT64_C(-1)"
+               line("int #{s} = #{helper('egg_read_line')}(#{f}, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{checked_max(max)});")
+               line("#{r}.value = #{s} > 0;")
+               line("if (#{s} < 0) #{r}.err = #{s} == -2 ? #{line_too_long(m)} : #{io_failed};")
                r
              when "Reader.read_all"
                line("(void)#{codes[0]};")

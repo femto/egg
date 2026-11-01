@@ -1372,7 +1372,7 @@ with a value type that is the only way to use it:
 
 | Capability | Value | Methods |
 | --- | --- | --- |
-| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
+| `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_line_max(a, &line, max) !bool`: the same, but a line of more than max bytes, not counting its line ending, fails with `error.LineTooLong`; `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
 | `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values (with 0, a sender waits for the receiver); see below |
@@ -1424,7 +1424,7 @@ two types, so using the wrong one is a compile error:
 
 | Type | Methods |
 | --- | --- |
-| `Reader` | `r.read_line(a, &line) !bool` and `r.read_all(a) !Buf(u8)`, as on `Io`; `r.read(a, &buf, n) !i64`: up to n bytes in place of what `buf` held, how many, and 0 at the end; `r.close()` |
+| `Reader` | `r.read_line(a, &line) !bool`, `r.read_line_max(a, &line, max) !bool` and `r.read_all(a) !Buf(u8)`, as on `Io`; `r.read(a, &buf, n) !i64`: up to n bytes in place of what `buf` held, how many, and 0 at the end; `r.close()` |
 | `Writer` | `w.print(x, ...) !void`: as `io.print`; `w.write(text) !void`: the bytes, nothing added; `w.flush() !void`: sends what is buffered to the system; `w.close()` |
 
 A `Reader` or `Writer` is owned, like an `owned struct` with no deinit: one
@@ -1471,7 +1471,7 @@ at a time, unless it hands each to a thread.
 
 | Type | Methods |
 | --- | --- |
-| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.close()` |
+| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_line_max(a, &line, max) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.close()` |
 | `TcpListener` | `l.accept() !TcpConn`: waits for the next connection; `l.port() i64`; `l.close()` |
 | `UdpSocket` | `u.recv_from(a, &buf, n) !Addr`: the next datagram, in place of what `buf` held, and who sent it; what does not fit in n bytes is lost; `u.send_to(addr, data) !void`; `u.set_timeout(ms) !void`; `u.port() i64`; `u.close()` |
 | `Addr` | `addr.port() i64`; `io.print` shows it, as `127.0.0.1:80` or `[::1]:80` |
@@ -1493,6 +1493,10 @@ panics), not connecting or accepting.
 | `error.TimedOut` | `set_timeout`'s time passed |
 | `error.PermissionDenied` | the system refused, as for a low port |
 | `error.IoFailed` | any other failure, such as a name server that does not answer |
+| `error.LineTooLong` | `read_line_max` met a longer line; what remains of it is still unread |
+
+A line from the network can be any length, so `read_line` lets the other
+side use all the memory: use `read_line_max` for anything you do not trust.
 
 The other side closing normally is not an error: `read` returns 0 and
 `read_line` returns false.
