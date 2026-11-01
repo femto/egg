@@ -521,6 +521,102 @@ def check_net(dir)
   end
 end
 
+# Threads really run at once. Output is checked by Ruby because its order
+# is not known.
+def check_threads(dir)
+  noisy = File.join(dir, "threads_noisy.egg")
+  File.write(noisy, <<~EGG)
+    uses alloc, io, thread
+
+    const Worker = owned struct {
+        t: Thread
+
+        fn deinit(sink self: Worker, a: Allocator) void {
+            self.t.join()
+            @drop(self)
+        }
+    }
+
+    fn talk(io: Io, id: i64) void {
+        var i = 0
+        while (i < 2000) {
+            io.print("thread ", id, " line ", i, " end")
+            i = i + 1
+        }
+    }
+
+    fn main(io: Io, a: Allocator, threads: Threads) void {
+        var workers: Buf(Worker) = .empty
+        defer a.free(workers)
+        var id = 0
+        while (id < 4) {
+            a.push(&workers, Worker{ .t = threads.spawn(talk, io, id) })
+            id = id + 1
+        }
+    }
+  EGG
+  out, err, status = Open3.capture3(*eggc_command, "run", noisy)
+  got = out.lines.map(&:chomp)
+  whole = got.all? { |l| l.match?(/\Athread \d line \d+ end\z/) }
+  report(status.success? && got.length == 8000 && whole, "lines from threads do not mix", "#{got.length} lines, #{err}")
+
+  server = File.join(dir, "threads_server.egg")
+  File.write(server, <<~EGG)
+    uses alloc, io, net, thread
+
+    fn serve(sink c: TcpConn, a: Allocator) void {
+        defer c.close()
+        var line: Buf(u8) = .empty
+        defer a.free(line)
+        while (true) {
+            const more = c.read_line(a, &line) catch {
+                return
+            }
+            if (!more) {
+                return
+            }
+            c.write(line) catch {
+                return
+            }
+            c.write("!\\n") catch {
+                return
+            }
+        }
+    }
+
+    fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
+        const l = try net.tcp_listen("127.0.0.1", 0)
+        defer l.close()
+        io.eprint(l.port())
+        const first = threads.spawn(serve, try l.accept(), a)
+        defer first.join()
+        const second = threads.spawn(serve, try l.accept(), a)
+        defer second.join()
+    }
+  EGG
+  Open3.popen3(*eggc_command, "run", server) do |_, _, stderr, thread|
+    first = Timeout.timeout(60) { stderr.gets }
+    if first.nil?
+      report(false, "a server serves two connections at once", "the server did not start")
+      next
+    end
+    port = first.to_i
+    idle = TCPSocket.new("127.0.0.1", port)
+    busy = TCPSocket.new("127.0.0.1", port)
+    # Answered while the first connection says nothing.
+    busy.write("hi\n")
+    answer = Timeout.timeout(10) { busy.gets }
+    busy.close
+    idle.write("late\n")
+    late = Timeout.timeout(10) { idle.gets }
+    idle.close
+    report(thread.value.success? && answer&.chomp == "hi!" && late&.chomp == "late!", "a server serves two connections at once", [answer, late].inspect)
+  rescue Timeout::Error
+    Process.kill("KILL", thread.pid)
+    report(false, "a server serves two connections at once", "timed out")
+  end
+end
+
 # What a program sees on its command line, and the order of its two output
 # streams: eprint must not overtake what print wrote before it.
 def check_args(dir)
@@ -1134,6 +1230,7 @@ Dir.mktmpdir do |dir|
   check_fs_errors(dir)
   check_file_errors(dir)
   check_net(dir)
+  check_threads(dir)
   check_args(dir)
   check_stdin(dir)
   check_utf8(dir)

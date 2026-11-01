@@ -579,7 +579,8 @@ module Egg
             # self is borrowed unless the method takes `sink self`, or it
             # closes a file; capability values own nothing.
             cap = info&.[](:cap_method)
-            walk(obj, !info.nil? && ((!cap.nil? && !cap.end_with?("close")) || (!info[:params].nil? && !info[:self_sink])))
+            ends = !cap.nil? && %w[close join detach].include?(cap.split(".").last)
+            walk(obj, !info.nil? && !ends && (!cap.nil? || (!info[:params].nil? && !info[:self_sink])))
           end
         end
         # m.f(K, x): a generic call into a module; info[:args] has no types.
