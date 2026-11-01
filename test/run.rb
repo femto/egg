@@ -512,6 +512,9 @@ def check_net(dir)
     got = Timeout.timeout(10) { sock.read }
     sock.close
     report(thread.value.success? && got.lines.map(&:chomp) == %w[one! two!], "a server in Egg answers Ruby", got.inspect)
+  rescue Timeout::Error
+    Process.kill("KILL", thread.pid)
+    report(false, "a server in Egg answers Ruby", "timed out")
   end
 end
 

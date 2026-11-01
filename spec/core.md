@@ -1483,7 +1483,7 @@ panics), not connecting or accepting.
 
 | Error | Meaning |
 | --- | --- |
-| `error.HostNotFound` | the name does not exist, or holds a 0 byte |
+| `error.HostNotFound` | the name is unknown or has no address, or holds a 0 byte |
 | `error.ConnectionRefused` | nothing listens at that port |
 | `error.ConnectionReset` | the other side went away |
 | `error.AddressInUse` | something already holds that port |
