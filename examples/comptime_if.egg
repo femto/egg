@@ -14,7 +14,7 @@ fn hash(comptime K: type, k: K) i64 {
     if (K == str) {
         var h: i64 = 0
         for (k) |c| {
-            h = (h * 2 + c) % 1000000007
+            h = (h * 2 + @as(i64, c)) % 1000000007
         }
         return h
     } else if (K == i64 or K == i32) {

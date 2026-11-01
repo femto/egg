@@ -7,11 +7,11 @@
 
 uses io
 
-fn parse_digit(c: i64) !i64 {
+fn parse_digit(c: u8) !i64 {
     if (c < 48 or c > 57) {
         return error.NotADigit
     }
-    return c - 48
+    return @as(i64, c - 48)
 }
 
 fn parse_number(s: str) !i64 {

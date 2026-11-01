@@ -331,7 +331,7 @@ fn main(io: Io) void {
 | `x = e`, `p.f = e`, `a[i] = e` | assign to a variable, a field or an element of a mutable variable |
 | `if (c) { } else if (c) { } else { }` | `c` must be `bool`; braces are required |
 | `while (c) { }` | repeats while `c` is true |
-| `for (xs) \|x\| { }`, `for (xs) \|x, i\| { }` | each element of an array, a slice, a `Buf` or a str (bytes as i64), with its index `i` |
+| `for (xs) \|x\| { }`, `for (xs) \|x, i\| { }` | each element of an array, a slice, a `Buf` or a str (bytes, as `u8`), with its index `i` |
 | `break`, `continue` | leave or restart the innermost loop (E126 outside one) |
 | `switch (x) { ... }` | section 10 |
 | `return` / `return e` | section 5 |
@@ -449,8 +449,7 @@ fn main(io: Io) void {
 
 `i8`, `i16`, `i32`, `i64` are signed and `u8`, `u16`, `u32`, `u64` unsigned,
 of that many bits; `usize` is unsigned and as wide as a pointer. Indexes,
-lengths (`@len`) and `for` indexes are `i64`, and so are the bytes of a
-`str`.
+lengths (`@len`) and `for` indexes are `i64`; the bytes of a `str` are `u8`.
 
 Both operands of an arithmetic or ordering operator must have the same
 type (E103): nothing converts implicitly. A literal takes its type from
@@ -637,8 +636,8 @@ fn main(io: Io) void {
 a copy made by `a.leak` (section 17). None of them is ever freed, so a
 `str` is always valid.
 
-- `@len(s)` is its length in bytes; `s[i]` is the byte at `i` as an `i64`
-  (0 to 255), compared with a character literal as `s[i] == 'h'`;
+- `@len(s)` is its length in bytes; `s[i]` is the byte at `i`, a `u8`,
+  compared with a character literal as `s[i] == 'h'`;
   `s[lo..hi]` and `s[lo..]` are `str`s.
 - `==` compares contents. `for (s) |b|` visits each byte.
 - A `str` holds text that lives as long as the program, so it is copied
@@ -1143,11 +1142,11 @@ fn main(io: Io) void {
 // fails: Empty
 uses io
 
-fn parse_digit(c: i64) !i64 {
+fn parse_digit(c: u8) !i64 {
     if (c < 48 or c > 57) {
         return error.NotADigit
     }
-    return c - 48
+    return @as(i64, c - 48)
 }
 
 fn parse(s: str) !i64 {

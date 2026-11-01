@@ -1,6 +1,6 @@
 // A character literal is one byte in single quotes: an integer literal
-// ('a' is 97), so it takes its type from the context, i64 for a byte of
-// a str, u8 for a Buf(u8).
+// ('a' is 97), so it takes its type from the context: u8 for a byte of a
+// str or a Buf(u8).
 // expect: 3
 // expect: 25
 // expect: 104
@@ -20,7 +20,7 @@ fn count(s: []u8, c: u8) i64 {
     return n
 }
 
-fn is_digit(c: i64) bool {
+fn is_digit(c: u8) bool {
     return c >= '0' and c <= '9'
 }
 

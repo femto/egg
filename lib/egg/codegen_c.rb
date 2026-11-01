@@ -2055,8 +2055,8 @@ module Egg
         line("egg_str #{s} = #{expr(it)};")
         @need_str = true
         len = "#{s}.len"
-        item = "(int64_t)(unsigned char)#{s}.ptr[#{idx}]"
-        elem = "i64"
+        item = "(uint8_t)#{s}.ptr[#{idx}]"
+        elem = "u8"
       else
         info = @types[t]
         elem = info.elem
@@ -2917,7 +2917,7 @@ module Egg
       i = expr(index)
       if t == "str"
         s = place?(obj) ? base : base
-        return "((int64_t)(unsigned char)#{s}.ptr[#{helper('egg_index')}(#{i}, #{s}.len)])"
+        return "((uint8_t)#{s}.ptr[#{helper('egg_index')}(#{i}, #{s}.len)])"
       end
       if %i[slice buf].include?(@types[t].kind)
         return "#{base}.ptr[#{helper('egg_index')}(#{i}, #{base}.len)]"
