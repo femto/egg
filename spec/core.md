@@ -1647,8 +1647,18 @@ fn main(io: Io, a: Allocator) void {
 A function's name, used without calling it, is a value of type
 `fn(T, U) R` (its parameter and result types). It can be stored, passed,
 returned, compared with `==`, and called: `f(x)` for a local or parameter
-`f`, `s.f(x)` for a field. A generic function, or one with an `inout`
-parameter, is not a value (E103). There are no closures.
+`f`, `s.f(x)` for a field. A generic function is not a value (E103). There
+are no closures: what a function needs comes through its parameters.
+
+A parameter's mode is part of the type: a function taking `inout b: Buf(u8)`
+has type `fn(inout Buf(u8)) void`, and one taking `sink b: Buf(u8)` has type
+`fn(sink Buf(u8)) void`. These are different types from `fn(Buf(u8)) void`,
+so a function fits only where its modes are expected (E103). A call through
+a function value follows the same rules as a direct call: `f(&b)` for inout,
+and `f(b)` moves `b` into a `sink` parameter. The check takes such a call to
+change everything it is given as inout. An `extern fn` cannot take a function
+type with modes (E132), and `sink` on a type that owns nothing is E145, as
+in a function.
 
 ```egg
 // expect: 8
@@ -1805,9 +1815,8 @@ same either way, `f(b)`. One value may be borrowed by several arguments
 of a call; it may not be both borrowed and passed as `inout` (E117), and
 a value moved into a `sink` parameter may not appear in another argument.
 A borrowed temporary would never be freed, so `count(a.alloc(2, 0))` is
-E133 unless `count` takes it by `sink`; `.empty` may be borrowed. The
-parameters of a function type (`fn(Buf(i64)) i64`) are plain, so a
-function value borrows its owned arguments.
+E133 unless `count` takes it by `sink`; `.empty` may be borrowed. A
+function value follows the modes in its type (section 19).
 
 ```egg
 // expect: 3

@@ -1,0 +1,30 @@
+// error: E136 @15
+// error: E137 @21
+uses alloc
+
+fn eat(a: Allocator, sink b: Buf(i64)) void {
+    a.free(b)
+}
+
+fn grow(a: Allocator, inout b: Buf(i64)) void {
+    a.push(&b, 1)
+}
+
+fn twice(f: fn(Allocator, sink Buf(i64)) void, a: Allocator, sink b: Buf(i64)) void {
+    f(a, b)
+    f(a, b)
+}
+
+fn loop(f: fn(Allocator, inout Buf(i64)) void, a: Allocator) void {
+    var b = a.alloc(2, 0)
+    for (b) |x| {
+        f(a, &b)
+        _ = x
+    }
+    a.free(b)
+}
+
+fn main(a: Allocator) void {
+    twice(eat, a, a.alloc(1, 0))
+    loop(grow, a)
+}

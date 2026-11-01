@@ -1,0 +1,7 @@
+// error: E145 @2
+fn take(f: fn(sink i64) void) void {
+    f(1)
+}
+
+fn main() void {
+}

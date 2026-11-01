@@ -1,0 +1,66 @@
+// A function type names its parameters' modes, so a callback can change what
+// it is given, or take it over, and the checks still see what happens. There
+// are no closures: the context comes as a parameter.
+// expect: 3
+// expect: 12
+// expect: 2
+// expect: 7
+// expect: taken
+uses alloc, io
+
+fn push_it(a: Allocator, inout xs: Buf(i64), x: i64) void {
+    a.push(&xs, x * 2)
+}
+
+fn each(f: fn(Allocator, inout Buf(i64), i64) void, a: Allocator, inout ctx: Buf(i64), xs: []i64) void {
+    for (xs) |x| {
+        f(a, &ctx, x)
+    }
+}
+
+const Stats = struct {
+    n: i64
+    total: i64
+}
+
+fn add(inout s: Stats, x: i64) void {
+    s.n = s.n + 1
+    s.total = s.total + x
+}
+
+fn fill(inout xs: []i64) void {
+    xs[0] = 7
+}
+
+fn free_it(a: Allocator, sink b: Buf(i64)) void {
+    a.free(b)
+}
+
+const Handler = struct {
+    run: fn(Allocator, sink Buf(i64)) void
+}
+
+fn main(io: Io, a: Allocator) void {
+    var out: Buf(i64) = .empty
+    defer a.free(out)
+    const xs = [3]i64{ 1, 2, 3 }
+    each(push_it, a, &out, xs[0..])
+    io.print(@len(out))
+    io.print(out[2] + out[2])
+
+    const f = add
+    var s = Stats{ .n = 0, .total = 0 }
+    f(&s, 4)
+    f(&s, 5)
+    io.print(s.n)
+
+    const g = fill
+    var nums = [2]i64{ 0, 0 }
+    g(&nums[0..])
+    io.print(nums[0])
+
+    const h = Handler{ .run = free_it }
+    const b = a.alloc(1, 0)
+    h.run(a, b)
+    io.print("taken")
+}

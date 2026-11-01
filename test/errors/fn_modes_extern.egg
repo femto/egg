@@ -1,0 +1,9 @@
+// error: E132 @5
+// error: E132 @6
+allow unsafe
+
+extern fn call_me(f: fn(inout i64) void) void
+extern fn call_ptr(f: *fn(inout i64) void) void
+
+fn main() void {
+}

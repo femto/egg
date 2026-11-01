@@ -144,8 +144,17 @@ module Egg
       if kw?("fn")
         advance
         expect_op("(")
-        params = parse_comma_list(")") { parse_type }
-        return FnType.new(params, parse_type)
+        modes = []
+        params = parse_comma_list(")") do
+          mode = nil
+          if kw?("inout") || kw?("sink")
+            mode = cur.text
+            advance
+          end
+          modes << mode
+          parse_type
+        end
+        return FnType.new(params, parse_type, modes)
       end
       if op?("[")
         advance
