@@ -166,7 +166,8 @@ v3 (memory without GC, and what realistic programs needed):
 - Open files, with `uses fs` and an `Fs` value `files`: `files.open(path)`
   gives a `Reader`, `files.create(path)` and `files.append(path)` a `Writer`;
   both are owned and must be closed, and a `Writer` ends with
-  `try w.flush()`, or a failed write can be lost when `close` runs
+  `try w.flush()`, or a failure in what is still buffered is lost when
+  `close` runs
 - Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole
   file as a `Buf(u8)` (so it needs `uses alloc` too), `fs.write(path, data)`
   replaces it, and failures are
