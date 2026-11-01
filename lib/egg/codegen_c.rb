@@ -635,7 +635,9 @@ module Egg
         #endif
             uint8_t *items;
             size_t size;
-            int64_t cap, head, count, senders;
+            /* cap 0 hands each value over: it waits in the one slot, and its
+               sender waits until received has counted it. */
+            int64_t cap, slots, head, count, senders, sent, received;
             bool open;
         } egg_chan;
         #ifdef _WIN32
@@ -654,7 +656,7 @@ module Egg
       C
       "egg_chan_new" => <<~C,
         static void *egg_chan_new(size_t size, int64_t cap) {
-            if (cap < 1) egg_panic("a channel holds at least one value");
+            if (cap < 0) egg_panic("a channel's capacity cannot be negative");
             egg_chan *c = (egg_chan *)egg_buf_resize(NULL, 1, sizeof(egg_chan));
         #ifdef _WIN32
             InitializeCriticalSection(&c->lock);
@@ -666,9 +668,12 @@ module Egg
                 egg_panic("cannot make a channel");
             }
         #endif
-            c->items = (uint8_t *)egg_buf_resize(NULL, cap, size > 0 ? size : 1);
+            c->slots = cap > 0 ? cap : 1;
+            c->items = (uint8_t *)egg_buf_resize(NULL, c->slots, size > 0 ? size : 1);
             c->size = size;
             c->cap = cap;
+            c->sent = 0;
+            c->received = 0;
             c->head = 0;
             c->count = 0;
             c->senders = 0;
@@ -702,15 +707,24 @@ module Egg
         static void egg_chan_send(void *v, const void *value) {
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
-            while (c->count == c->cap && c->open) EGG_CHAN_WAIT(c, writable);
+            while (c->count == c->slots && c->open) EGG_CHAN_WAIT(c, writable);
             if (!c->open) {
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("send on a closed channel");
             }
-            int64_t tail = (c->head + c->count) % c->cap;
+            int64_t tail = (c->head + c->count) % c->slots;
             memcpy(c->items + (size_t)tail * c->size, value, c->size);
             c->count += 1;
+            c->sent += 1;
+            int64_t mine = c->sent;
             EGG_CHAN_WAKE(c, readable);
+            if (c->cap == 0) {
+                while (c->received < mine && c->open) EGG_CHAN_WAIT(c, writable);
+                if (c->received < mine) {
+                    EGG_CHAN_UNLOCK(c);
+                    egg_panic("send on a closed channel");
+                }
+            }
             EGG_CHAN_UNLOCK(c);
         }
       C
@@ -722,9 +736,15 @@ module Egg
             bool got = c->count > 0;
             if (got) {
                 memcpy(out, c->items + (size_t)c->head * c->size, c->size);
-                c->head = (c->head + 1) % c->cap;
+                c->head = (c->head + 1) % c->slots;
                 c->count -= 1;
-                EGG_CHAN_WAKE(c, writable);
+                c->received += 1;
+                /* With cap 0 the waiters want different things. */
+                if (c->cap == 0) {
+                    EGG_CHAN_WAKE_ALL(c, writable);
+                } else {
+                    EGG_CHAN_WAKE(c, writable);
+                }
             }
             EGG_CHAN_UNLOCK(c);
             return got;

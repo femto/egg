@@ -1,0 +1,7 @@
+// error: E103 @5
+uses thread
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, -1)
+    rx.close()
+}

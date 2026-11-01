@@ -1,8 +1,12 @@
-// A channel holds at least one value.
-// panic: a channel holds at least one value
+// A channel's capacity is checked when it is made.
+// panic: a channel's capacity cannot be negative
 uses thread
 
+fn size() i64 {
+    return -1
+}
+
 fn main(threads: Threads) void {
-    const rx = threads.channel(i64, 0)
+    const rx = threads.channel(i64, size())
     rx.close()
 }

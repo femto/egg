@@ -617,6 +617,47 @@ def check_threads(dir)
   end
 end
 
+# A channel of capacity 0: send returns only after recv took the value. The
+# program waits for a line on stdin before it receives.
+def check_rendezvous(dir)
+  path = File.join(dir, "rendezvous.egg")
+  File.write(path, <<~EGG)
+    uses alloc, io, thread
+
+    fn worker(sink tx: Sender(i64), io: Io) void {
+        defer tx.close()
+        io.eprint("before")
+        tx.send(7)
+        io.eprint("after")
+    }
+
+    fn main(io: Io, a: Allocator, threads: Threads) !void {
+        const rx = threads.channel(i64, 0)
+        defer rx.close()
+        const t = threads.spawn(worker, rx.sender(), io)
+        defer t.join()
+        var line: Buf(u8) = .empty
+        defer a.free(line)
+        _ = try io.read_line(a, &line)
+        while (rx.recv()) |v| {
+            io.print(v)
+        }
+    }
+  EGG
+  Open3.popen3(*eggc_command, "run", path) do |stdin, stdout, stderr, thread|
+    first = Timeout.timeout(60) { stderr.gets }
+    early = IO.select([stderr], nil, nil, 0.5)
+    stdin.puts("go")
+    stdin.close
+    second = Timeout.timeout(10) { stderr.gets }
+    ok = first&.chomp == "before" && early.nil? && second&.chomp == "after" && stdout.read.chomp == "7" && thread.value.success?
+    report(ok, "a sender on a channel of capacity 0 waits for the receiver", [first, early.nil?, second].inspect)
+  rescue Timeout::Error
+    Process.kill("KILL", thread.pid)
+    report(false, "a sender on a channel of capacity 0 waits for the receiver", "timed out")
+  end
+end
+
 # What a program sees on its command line, and the order of its two output
 # streams: eprint must not overtake what print wrote before it.
 def check_args(dir)
@@ -1231,6 +1272,7 @@ Dir.mktmpdir do |dir|
   check_file_errors(dir)
   check_net(dir)
   check_threads(dir)
+  check_rendezvous(dir)
   check_args(dir)
   check_stdin(dir)
   check_utf8(dir)
