@@ -1440,7 +1440,7 @@ fail as `fs.read` does.
 uses alloc, fs, io
 
 fn save(files: Fs) !void {
-    const w = try files.create("note.txt")
+    const w = try files.create("egg_spec_note.txt")
     defer w.close()
     try w.print("hello")
     try w.flush()
@@ -1448,7 +1448,7 @@ fn save(files: Fs) !void {
 
 fn main(io: Io, files: Fs, a: Allocator) !void {
     try save(files)
-    const r = try files.open("note.txt")
+    const r = try files.open("egg_spec_note.txt")
     defer r.close()
     var line: Buf(u8) = .empty
     defer a.free(line)

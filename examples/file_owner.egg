@@ -23,6 +23,7 @@ fn run(io: Io, files: Fs, a: Allocator) !void {
     a.push(&logs, Log{ .w = try files.create("log.txt"), .n = 0 })
     try logs[0].line("one")
     try logs[0].line("two")
+    try logs[0].w.flush()
     io.print(logs[0].n)
 }
 

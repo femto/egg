@@ -163,9 +163,10 @@ v3 (memory without GC, and what realistic programs needed):
   false at the end, `io.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
   with the program's name at 0 and the first argument at 1
-- Open files: `files.open(path)` gives a `Reader`, `files.create(path)` and
-  `files.append(path)` a `Writer`; both are owned and must be closed, and a
-  `Writer` ends with `try w.flush()`
+- Open files, with `uses fs` and an `Fs` value `files`: `files.open(path)`
+  gives a `Reader`, `files.create(path)` and `files.append(path)` a `Writer`;
+  both are owned and must be closed, and a `Writer` ends with
+  `try w.flush()`, or a failed write can be lost when `close` runs
 - Files: `uses fs` gives an `Fs` value; `fs.read(a, path)` returns the whole
   file as a `Buf(u8)` (so it needs `uses alloc` too), `fs.write(path, data)`
   replaces it, and failures are
