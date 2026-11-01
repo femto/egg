@@ -311,7 +311,8 @@ module Egg
     # A type that crosses into C as itself.
     def c_scalar?(t)
       info = @types[t]
-      return false if info&.kind == :fn && info.modes.any?
+      target = info&.kind == :ptr ? @types[info.inner] : info
+      return false if target&.kind == :fn && target.modes.any?
       num?(t) || t == "bool" || %i[ptr fn].include?(info&.kind)
     end
 
@@ -748,6 +749,13 @@ module Egg
         return value_type_error(bad, "a function parameter", line, col) unless bad.nil?
         if ret.start_with?("[]") || ret == "type"
           err("E108", "a function type cannot return #{ret}", line, col)
+          return "error"
+        end
+        # As in a function: T may or may not own something in a generic one.
+        known = @registering.zero? && (@tenv.nil? || @tenv.empty?) && !generic_instance?
+        wasted = known ? params.each_index.find { |i| t.modes[i] == "sink" && !owned?(params[i]) } : nil
+        unless wasted.nil?
+          err("E145", "'sink' takes ownership, but #{params[wasted]} owns nothing; remove 'sink'", line, col)
           return "error"
         end
         fn_type(params, ret, t.modes)

@@ -1657,7 +1657,8 @@ so a function fits only where its modes are expected (E103). A call through
 a function value follows the same rules as a direct call: `f(&b)` for inout,
 and `f(b)` moves `b` into a `sink` parameter. The check takes such a call to
 change everything it is given as inout. An `extern fn` cannot take a function
-type with modes (E132).
+type with modes (E132), and `sink` on a type that owns nothing is E145, as
+in a function.
 
 ```egg
 // expect: 8
