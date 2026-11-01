@@ -1,0 +1,43 @@
+// A channel carries values from threads to a receiver. A value that is sent
+// moves, so it still has one owner. recv waits, and gives null when every
+// sender has closed and nothing is left. send waits while the channel is full.
+// expect: 3 values, total 18
+// expect: egg
+uses alloc, io, thread
+
+fn square(sink tx: Sender(i64), n: i64) void {
+    defer tx.close()
+    tx.send(n * n)
+}
+
+fn word(sink tx: Sender(Buf(u8)), a: Allocator) void {
+    defer tx.close()
+    tx.send(a.concat("e", "gg"))
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(i64, 2)
+    defer rx.close()
+    const t1 = threads.spawn(square, rx.sender(), 3)
+    const t2 = threads.spawn(square, rx.sender(), 3)
+    const t3 = threads.spawn(square, rx.sender(), 0)
+    var n = 0
+    var total = 0
+    while (rx.recv()) |v| {
+        n = n + 1
+        total = total + v
+    }
+    t1.join()
+    t2.join()
+    t3.join()
+    io.print(n, " values, total ", total)
+
+    const texts = threads.channel(Buf(u8), 1)
+    defer texts.close()
+    const t4 = threads.spawn(word, texts.sender(), a)
+    while (texts.recv()) |s| {
+        defer a.free(s)
+        io.print(s)
+    }
+    t4.join()
+}

@@ -1,0 +1,12 @@
+// error: E148 @10
+uses thread
+
+fn read(rx: Receiver(i64)) void {
+    _ = rx.recv() orelse 0
+}
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    threads.spawn(read, rx).join()
+    rx.close()
+}

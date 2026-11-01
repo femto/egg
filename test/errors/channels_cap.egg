@@ -1,0 +1,7 @@
+// error: E130 @3
+fn use(tx: Sender(i64)) void {
+    tx.send(1)
+}
+
+fn main() void {
+}

@@ -1,0 +1,11 @@
+// Closing a receiver would lose the owned values still in it.
+// panic: a channel closed with values left in it
+uses alloc, thread
+
+fn main(a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 1)
+    const tx = rx.sender()
+    tx.send(a.alloc(1, 0))
+    tx.close()
+    rx.close()
+}

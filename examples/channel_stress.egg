@@ -1,0 +1,42 @@
+// Four threads send through a small channel, so they keep waiting for the
+// receiver. Owned values change threads and every one arrives once.
+// expect: 4000 values, 10000 bytes
+uses alloc, io, thread
+
+const Worker = owned struct {
+    t: Thread
+
+    fn deinit(sink self: Worker, a: Allocator) void {
+        self.t.join()
+        @drop(self)
+    }
+}
+
+fn produce(sink tx: Sender(Buf(u8)), a: Allocator, n: i64) void {
+    defer tx.close()
+    var i = 0
+    while (i < 1000) {
+        tx.send(a.alloc(n, 0))
+        i = i + 1
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 4)
+    defer rx.close()
+    var workers: Buf(Worker) = .empty
+    defer a.free(workers)
+    var n = 1
+    while (n <= 4) {
+        a.push(&workers, Worker{ .t = threads.spawn(produce, rx.sender(), a, n) })
+        n = n + 1
+    }
+    var count = 0
+    var bytes = 0
+    while (rx.recv()) |b| {
+        defer a.free(b)
+        count = count + 1
+        bytes = bytes + @len(b)
+    }
+    io.print(count, " values, ", bytes, " bytes")
+}

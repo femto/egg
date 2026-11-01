@@ -104,7 +104,7 @@ module Egg
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
       "Addr" => { "port" => [[], "i64"] },
-      "Threads" => { "spawn" => [[], "Thread"] },
+      "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"] },
       "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
       "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"],
                     "read" => [%w[Allocator inout_buffer i64], "!i64"], "close" => [[], "void"] },
@@ -122,7 +122,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + ["Buf"]).freeze
+    RESERVED_TYPES = (PRIMS + %w[Buf Sender Receiver]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -736,6 +736,7 @@ module Egg
         args = t.args.map { |a| resolve_type(a, line, col) }
         return "error" if args.include?("error")
         return buf_type(args, line, col) if t.name == "Buf"
+        return chan_type(t.name, args, line, col) if %w[Sender Receiver].include?(t.name)
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
         inner = resolve_type(t.inner, line, col)
@@ -775,6 +776,31 @@ module Egg
     def generic_instance?
       !@current.nil? && !@current.tenv.nil? && !@current.tenv.empty?
     end
+
+    # Sender(T), Receiver(T): the two ends of a channel, owned. Types of
+    # their own for each T, with methods like a capability value's.
+    def chan_type(name, args, line, col)
+      if args.length != 1
+        err("E104", "#{name} takes one type argument, but #{args.length} were given", line, col)
+        return "error"
+      end
+      t = args[0]
+      return "error" if t == "error"
+      return value_type_error(t, "a channel's value", line, col) unless storable?(t)
+      canon = "#{name}(#{t})"
+      info = register(canon, :struct, line, col)
+      info.resource = true
+      info.fields = []
+      info.elem = t
+      info.mod = ""
+      canon
+    end
+
+    def chan_end?(t)
+      info = @types[t]
+      info&.kind == :struct && !info.elem.nil?
+    end
+    public :chan_end?
 
     # ?T: a T or null.
     def opt_type(inner)
@@ -896,7 +922,7 @@ module Egg
 
     # Declared in the file being checked?
     def own_type?(t)
-      return false if FILE_TYPES.key?(t)
+      return false if FILE_TYPES.key?(t) || chan_end?(t)
       (@types[t].mod || "") == (@mod.prefix || "")
     end
 
@@ -2165,6 +2191,8 @@ module Egg
       t = check_expr(obj)
       return check_all_error(args) if t == "error"
       return check_spawn(e, args, line, col) if t == "Threads" && name == "spawn"
+      return check_channel(e, args, line, col) if t == "Threads" && name == "channel"
+      return check_chan_method(e, t, name, args, line, col) if chan_end?(t)
       if CAP_METHODS.key?(t)
         r = check_cap_method(e, obj, t, name, args, line, col, expected)
         check_nested_writes(args)
@@ -2271,6 +2299,46 @@ module Egg
       e.info[:args] = args[1..]
       e.info[:params] = params
       "Thread"
+    end
+
+    # threads.channel(T, n): the receiving end of a channel of T that holds
+    # up to n values.
+    def check_channel(e, args, line, col)
+      @current.direct["thread"] ||= [line, col, "Threads.channel"]
+      if args.length != 2
+        err("E104", "'channel' takes a type and a capacity, but #{args.length} were given", line, col)
+        return check_all_error(args)
+      end
+      t = type_arg(args[0])
+      expect_type("i64", check_expr(args[1], "i64"), args[1])
+      return "error" if t == "error"
+      e.info[:cap_method] = "Threads.channel"
+      e.info[:chan_of] = t
+      e.info[:args] = [args[1]]
+      e.info[:params] = [["i64", nil]]
+      chan_type("Receiver", [t], line, col)
+    end
+
+    CHAN_METHODS = { "Sender" => %w[send clone close], "Receiver" => %w[recv sender close] }.freeze
+
+    def check_chan_method(e, t, name, args, line, col)
+      kind = t[0...t.index("(")]
+      elem = @types[t].elem
+      @current.direct["thread"] ||= [line, col, "#{kind}.#{name}"]
+      unless CHAN_METHODS[kind].include?(name)
+        err("E122", "#{kind} has no method '#{name}' (methods: #{CHAN_METHODS[kind].join(', ')})", line, col)
+        return check_all_error(args)
+      end
+      params = name == "send" ? [[elem, "sink"]] : []
+      check_args(Sig.new(name, params, "void"), args, name, line, col)
+      e.info[:cap_method] = "#{kind}.#{name}"
+      e.info[:args] = args
+      e.info[:params] = params
+      case name
+      when "send", "close" then "void"
+      when "recv" then opt_type(elem)
+      else chan_type("Sender", [elem], line, col)
+      end
     end
 
     # io.print(x), a.concat(s, t): a direct use of a capability.
