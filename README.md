@@ -168,7 +168,7 @@ v3 (memory without GC, and what realistic programs needed):
   thread and plain values are copied, so outside `allow unsafe` raw pointers
   nothing is shared and no locks are needed. `threads.channel(T, n)` returns a
   `Receiver(T)`, `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and
-  `rx.recv()` gives null when every sender has closed
+  `rx.recv()` gives null once every sender has closed and it is empty
 - Network: `uses net` gives a `Net` value; `net.tcp_connect(host, port)`,
   `net.tcp_listen(host, port)`, `net.udp_bind(host, port)` and
   `net.resolve(host, port)`. Sockets are owned and must be closed; everything

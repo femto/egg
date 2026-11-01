@@ -787,6 +787,7 @@ module Egg
       t = args[0]
       return "error" if t == "error"
       return value_type_error(t, "a channel's value", line, col) unless storable?(t)
+      return owned_place_error(t, "a channel's value", line, col) if owned_err?(t)
       canon = "#{name}(#{t})"
       info = register(canon, :struct, line, col)
       info.resource = true

@@ -1547,9 +1547,11 @@ sender arrive in order. A channel with no sender yet gives null, so make
 the senders before receiving, and a thread that keeps a sender it never
 closes makes `recv` wait forever.
 
-Values cannot be lost: closing a `Receiver` that still holds owned values
-panics (`a channel closed with values left in it`), and so does sending once
-it is closed (`send on a closed channel`): receive until `recv` gives null.
+Owned values cannot be lost: closing a `Receiver` that still holds owned
+values panics (`a channel closed with values left in it`), and sending once
+it is closed panics for any type (`send on a closed channel`). Plain values
+left in a closed channel are dropped. Receive until `recv` gives null. A
+channel cannot carry a `?T` or `!T` of an owned T (E133).
 
 ```egg
 // expect: 3

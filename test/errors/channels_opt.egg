@@ -1,0 +1,9 @@
+// error: E133 @4
+uses thread
+
+fn use(tx: Sender(?Buf(u8))) void {
+    tx.close()
+}
+
+fn main() void {
+}

@@ -661,9 +661,10 @@ module Egg
             InitializeConditionVariable(&c->readable);
             InitializeConditionVariable(&c->writable);
         #else
-            pthread_mutex_init(&c->lock, NULL);
-            pthread_cond_init(&c->readable, NULL);
-            pthread_cond_init(&c->writable, NULL);
+            if (pthread_mutex_init(&c->lock, NULL) != 0 || pthread_cond_init(&c->readable, NULL) != 0 ||
+                pthread_cond_init(&c->writable, NULL) != 0) {
+                egg_panic("cannot make a channel");
+            }
         #endif
             c->items = (uint8_t *)egg_buf_resize(NULL, cap, size > 0 ? size : 1);
             c->size = size;
