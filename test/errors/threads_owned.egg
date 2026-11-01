@@ -1,0 +1,25 @@
+// error: E135 @11
+// error: E136 @19
+uses thread
+
+fn run() void {
+}
+
+fn forget(threads: Threads, n: i64) void {
+    const t = threads.spawn(run)
+    if (n > 0) {
+        return
+    }
+    t.join()
+}
+
+fn twice(threads: Threads) void {
+    const t = threads.spawn(run)
+    t.join()
+    t.join()
+}
+
+fn main(threads: Threads) void {
+    forget(threads, 1)
+    twice(threads)
+}

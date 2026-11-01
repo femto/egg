@@ -45,9 +45,9 @@
 
 module Egg
   class CodegenC
-    # Before the first include: sockets are not in ISO C, so -std=c99 hides
-    # them. Only for a program that uses them.
-    NET_FEATURES = <<~C.freeze
+    # Before the first include: sockets and threads are not in ISO C, so
+    # -std=c99 hides them. Only for a program that uses them.
+    SYSTEM_FEATURES = <<~C.freeze
       #ifdef _WIN32
       #ifndef _WIN32_WINNT
       #define _WIN32_WINNT 0x0600
@@ -82,6 +82,21 @@ module Egg
       #endif
     C
 
+    # One print is one line, whatever other threads print.
+    NO_LOCKS = <<~C.freeze
+      #define EGG_LOCK(f) ((void)0)
+      #define EGG_UNLOCK(f) ((void)0)
+    C
+    LOCKS = <<~C.freeze
+      #ifdef _WIN32
+      #define EGG_LOCK(f) _lock_file(f)
+      #define EGG_UNLOCK(f) _unlock_file(f)
+      #else
+      #define EGG_LOCK(f) flockfile(f)
+      #define EGG_UNLOCK(f) funlockfile(f)
+      #endif
+    C
+
     STR_TYPEDEF = "typedef struct { const char *ptr; int64_t len; } egg_str;\n"
     CAP_TYPEDEFS = {
       "Io" => "typedef struct { char unused; } egg_io;\n",
@@ -94,7 +109,9 @@ module Egg
       "TcpConn" => "typedef struct { void *c; } egg_tcp_conn;\n",
       "TcpListener" => "typedef struct { int64_t s; } egg_tcp_listener;\n",
       "UdpSocket" => "typedef struct { int64_t s; } egg_udp_socket;\n",
-      "Addr" => "typedef struct { uint8_t b[28]; int32_t len; } egg_addr;\n"
+      "Addr" => "typedef struct { uint8_t b[28]; int32_t len; } egg_addr;\n",
+      "Threads" => "typedef struct { char unused; } egg_threads;\n",
+      "Thread" => "typedef struct { void *h; } egg_thread;\n"
     }.freeze
 
     # Runtime helpers, emitted only when the program uses them
@@ -107,7 +124,8 @@ module Egg
                       egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_read_line egg_read_all egg_read_bytes
-                      egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_addrinfo egg_net_recv
+                      egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
+                      egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
                       egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_close egg_udp_recv egg_udp_send].freeze
@@ -128,14 +146,12 @@ module Egg
         #include <fcntl.h>
         #include <io.h>
         #endif
-        static void egg_stdin_prepare(void) {
+        static void egg_stdin_binary(void) {
         #ifdef _WIN32
-            static bool binary = false;
-            if (!binary) {
-                _setmode(_fileno(stdin), _O_BINARY);
-                binary = true;
-            }
+            _setmode(_fileno(stdin), _O_BINARY);
         #endif
+        }
+        static void egg_stdin_prepare(void) {
             fflush(stdout);
         }
       C
@@ -555,6 +571,55 @@ module Egg
             return bad ? egg_fs_class(e) : 0;
         }
       C
+      "egg_thread_base" => <<~C,
+        #ifdef _WIN32
+        #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+        #endif
+        #include <windows.h>
+        #include <process.h>
+        typedef unsigned (__stdcall *egg_thread_fn)(void *);
+        #define EGG_THREAD_FN(name) unsigned __stdcall name(void *arg)
+        #else
+        #include <pthread.h>
+        typedef void *(*egg_thread_fn)(void *);
+        #define EGG_THREAD_FN(name) void *name(void *arg)
+        #endif
+      C
+      "egg_thread_start" => <<~C,
+        static egg_thread egg_thread_start(egg_thread_fn f, void *arg) {
+        #ifdef _WIN32
+            uintptr_t h = _beginthreadex(NULL, 0, f, arg, 0, NULL);
+            if (h == 0) egg_panic("cannot start a thread");
+            return (egg_thread){ (void *)h };
+        #else
+            pthread_t *t = (pthread_t *)egg_buf_resize(NULL, 1, sizeof(pthread_t));
+            if (pthread_create(t, NULL, f, arg) != 0) egg_panic("cannot start a thread");
+            return (egg_thread){ t };
+        #endif
+        }
+      C
+      "egg_thread_join" => <<~C,
+        static void egg_thread_join(egg_thread t) {
+        #ifdef _WIN32
+            WaitForSingleObject((HANDLE)t.h, INFINITE);
+            CloseHandle((HANDLE)t.h);
+        #else
+            pthread_join(*(pthread_t *)t.h, NULL);
+            free(t.h);
+        #endif
+        }
+      C
+      "egg_thread_detach" => <<~C,
+        static void egg_thread_detach(egg_thread t) {
+        #ifdef _WIN32
+            CloseHandle((HANDLE)t.h);
+        #else
+            pthread_detach(*(pthread_t *)t.h);
+            free(t.h);
+        #endif
+        }
+      C
       "egg_net_base" => <<~C,
         #ifdef _WIN32
         #ifndef WIN32_LEAN_AND_MEAN
@@ -624,17 +689,17 @@ module Egg
         #endif
         }
       C
+      "egg_net_start" => <<~C,
+        static void egg_net_start(void) {
+        #ifdef _WIN32
+            WSADATA data;
+            if (WSAStartup(MAKEWORD(2, 2), &data) != 0) egg_panic("cannot start the network");
+        #endif
+        }
+      C
       "egg_net_addrinfo" => <<~C,
         static int egg_net_addrinfo(egg_str host, int64_t port, int type, int flags, struct addrinfo **out) {
             if (port < 0 || port > 65535) egg_panic("port out of range");
-        #ifdef _WIN32
-            static bool started = false;
-            if (!started) {
-                WSADATA data;
-                if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 7;
-                started = true;
-            }
-        #endif
             char *h = egg_fs_path(host);
             if (h == NULL) return 1;
             char p[8];
@@ -1018,7 +1083,9 @@ module Egg
                     "egg_read_line" => ["egg_append"], "egg_read_all" => ["egg_buf_resize"], "egg_read_bytes" => ["egg_buf_resize"],
                     "egg_fs_handle" => %w[egg_fs_class egg_fs_path egg_fs_open],
                     "egg_net_last" => ["egg_net_base"], "egg_net_close" => ["egg_net_base"], "egg_net_prep" => ["egg_net_base"],
-                    "egg_net_addrinfo" => %w[egg_net_base egg_fs_path], "egg_net_recv" => ["egg_net_base"],
+                    "egg_net_addrinfo" => %w[egg_net_base egg_net_start egg_fs_path],
+                    "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
+                    "egg_thread_detach" => ["egg_thread_base"], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
                     "egg_print_addr" => ["egg_net_base"], "egg_net_resolve" => ["egg_net_addrinfo"],
@@ -1035,6 +1102,7 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
+                  egg_thread_base egg_thread_join egg_thread_detach
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
 
@@ -1066,6 +1134,7 @@ module Egg
       @indent = 0
       @locals = []
       @used = {}
+      @spawns = []
       @enum_names = {}
       @need_str = false
       @tmp = 0
@@ -1079,6 +1148,10 @@ module Egg
       @used.key?("egg_net_base")
     end
 
+    def uses_threads?
+      @used.key?("egg_thread_base")
+    end
+
     def generate
       # Function bodies first, so we know which helpers and tables they use.
       @checker.concrete.each { |sig| gen_func(sig) }
@@ -1089,7 +1162,8 @@ module Egg
       emit_types
       types = @out
 
-      out = @used["egg_net_base"] ? NET_FEATURES + HEADER : HEADER.dup
+      out = uses_net? || uses_threads? ? SYSTEM_FEATURES + HEADER : HEADER.dup
+      out << (uses_threads? ? LOCKS : NO_LOCKS)
       out << "\n"
       out << STR_TYPEDEF << "\n" if @need_str
       CAP_TYPEDEFS.each { |t, text| out << text << "\n" if @need_cap[t] }
@@ -1118,6 +1192,7 @@ module Egg
       @checker.externs.uniq(&:c_name).each { |sig| out << extern_prototype(sig) << ";\n" }
       @checker.concrete.each { |sig| out << signature(sig) << ";\n" }
       out << "\n"
+      @spawns.each { |text| out << text << "\n" }
       # After the prototypes: an owned struct's drop calls its deinit.
       emit_drops(out)
       out << body
@@ -1347,7 +1422,7 @@ module Egg
       when "Args"
         @need_cap[t] = true
         "egg_args"
-      when "Reader", "Writer", "Net", "Addr"
+      when "Reader", "Writer", "Net", "Addr", "Threads", "Thread"
         @need_cap[t] = true
         "egg_#{t.downcase}"
       when "TcpConn", "TcpListener", "UdpSocket"
@@ -1518,6 +1593,9 @@ module Egg
       else
         @out << "int main(void) {\n"
       end
+      # Once, before any thread could race to do it.
+      @out << "    egg_stdin_binary();\n" if @used["egg_stdin_prepare"]
+      @out << "    egg_net_start();\n" if @used["egg_net_start"]
       args = main.params.map { |t, _| "(#{c_type(t)}){ 0 }" }.join(", ")
       case main.ret
       when "i64"
@@ -2210,16 +2288,12 @@ module Egg
              when "Io.print"
                # All arguments are computed first (codes), then printed one
                # after another; only the last ends the line.
-               last = args.length - 1
-               codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false)};") unless i == last }
-               print_one(args[last].ty, codes[last], true)
+               locked_print(args, codes, "stdout")
              when "Io.eprint"
                # Whatever was printed before comes first, also when both
                # streams go to one place (2>&1). Standard error has no buffer.
                line("fflush(stdout);")
-               last = args.length - 1
-               codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], false, 'stderr')};") unless i == last }
-               print_one(args[last].ty, codes[last], true, "stderr")
+               locked_print(args, codes, "stderr")
              when "Io.read_line"
                line("(void)#{codes[0]};")
                b = tmp
@@ -2242,6 +2316,28 @@ module Egg
                "#{helper('egg_args_len')}()"
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
+             when "Threads.spawn"
+               ft = @types[args[0].ty]
+               name = "egg_spawn_#{@spawns.length}"
+               fields = ["#{c_type(args[0].ty)} f;"] + ft.fields.each_with_index.map { |t, i| "#{c_type(t)} a#{i};" }
+               call_args = ft.fields.each_index.map { |i| "c.a#{i}" }.join(", ")
+               helper("egg_thread_base")
+               @spawns << <<~C
+                 typedef struct { #{fields.join(' ')} } #{name};
+                 static EGG_THREAD_FN(#{name}_run) {
+                     #{name} c = *(#{name} *)arg;
+                     free(arg);
+                     c.f(#{call_args});
+                     return 0;
+                 }
+               C
+               p = tmp
+               line("#{name} *#{p} = (#{name} *)#{helper('egg_buf_resize')}(NULL, 1, sizeof(#{name}));")
+               line("#{p}->f = #{codes[0]};")
+               ft.fields.each_with_index { |t, i| line("#{p}->a#{i} = #{coerce(codes[i + 1], args[i + 1].ty, t)};") }
+               "#{helper('egg_thread_start')}(#{name}_run, #{p})"
+             when "Thread.join", "Thread.detach"
+               "#{helper(m == 'Thread.join' ? 'egg_thread_join' : 'egg_thread_detach')}(#{recv})"
              when "Net.tcp_connect", "Net.tcp_listen", "Net.udp_bind", "Net.resolve"
                host = coerce(codes[0], args[0].ty, "str")
                r = tmp
@@ -2368,7 +2464,7 @@ module Egg
                r
              when "Writer.print"
                f = file_of_value(recv, obj)
-               codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], i == args.length - 1, f)};") }
+               locked_print(args, codes, f)
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("if (ferror(#{f})) #{r}.err = #{io_failed};")
@@ -2626,6 +2722,14 @@ module Egg
       else
         "((#{c_type(e.ty)}){ #{base}.a + #{lo}, #{hi} - #{lo} })"
       end
+    end
+
+    # All the values of one print; only the last ends the line.
+    def locked_print(args, codes, f)
+      line("EGG_LOCK(#{f});")
+      codes.each_index { |i| line("#{print_one(args[i].ty, codes[i], i == args.length - 1, f)};") }
+      line("EGG_UNLOCK(#{f});")
+      "((void)0)"
     end
 
     # One value of io.print (or eprint), ending the line if nl.

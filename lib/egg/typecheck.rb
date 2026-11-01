@@ -77,12 +77,12 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer TcpConn TcpListener UdpSocket Addr]).freeze
-    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Args" => "args" }.freeze
-    CAPABILITIES = %w[alloc args fs io net].freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer TcpConn TcpListener UdpSocket Addr Threads Thread]).freeze
+    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args" }.freeze
+    CAPABILITIES = %w[alloc args fs io net thread].freeze
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
-    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net" }.freeze
+    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Thread" => "thread" }.freeze
     NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed].freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
     FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed].freeze
@@ -104,6 +104,8 @@ module Egg
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
       "Addr" => { "port" => [[], "i64"] },
+      "Threads" => { "spawn" => [[], "Thread"] },
+      "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
       "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"],
                     "read" => [%w[Allocator inout_buffer i64], "!i64"], "close" => [[], "void"] },
       "Writer" => { "print" => [["printable"], "!void"], "write" => [["text"], "!void"], "flush" => [[], "!void"], "close" => [[], "void"] },
@@ -2162,6 +2164,7 @@ module Egg
       end
       t = check_expr(obj)
       return check_all_error(args) if t == "error"
+      return check_spawn(e, args, line, col) if t == "Threads" && name == "spawn"
       if CAP_METHODS.key?(t)
         r = check_cap_method(e, obj, t, name, args, line, col, expected)
         check_nested_writes(args)
@@ -2239,6 +2242,35 @@ module Egg
         end
       end
       sig.ret
+    end
+
+    # threads.spawn(f, x, ...): f(x, ...) on a new thread. Nothing may be
+    # lent to it: what it is given it owns, or it is a plain value, so no
+    # two threads can reach the same memory.
+    def check_spawn(e, args, line, col)
+      @current.direct["thread"] ||= [line, col, "Threads.spawn"]
+      if args.empty?
+        err("E104", "'spawn' takes a function and its arguments", line, col)
+        return "error"
+      end
+      t = check_expr(args[0])
+      ft = @types[t]
+      unless ft&.kind == :fn
+        err("E103", "'spawn' needs a function, found #{t}", args[0].line, args[0].col) unless t == "error"
+        return check_all_error(args[1..])
+      end
+      err("E148", "a thread's function returns nothing, found #{ft.inner}: nobody could use the result yet", args[0].line, args[0].col) unless ft.inner == "void"
+      params = fn_params(ft)
+      params.each do |pt, mode|
+        lent = mode == "inout" || (mode.nil? && (owned?(pt) || pt.start_with?("[]")))
+        next unless lent
+        err("E148", "a thread cannot borrow a #{pt}: it may outlive the owner; take it as `sink`, or pass a copy", args[0].line, args[0].col)
+      end
+      check_args(Sig.new("spawn", params, "void"), args[1..], "spawn", line, col)
+      e.info[:cap_method] = "Threads.spawn"
+      e.info[:args] = args[1..]
+      e.info[:params] = params
+      "Thread"
     end
 
     # io.print(x), a.concat(s, t): a direct use of a capability.

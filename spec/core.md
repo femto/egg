@@ -2,7 +2,7 @@
 
 This is the complete definition of the v2 core: the v1 language plus
 integer types of every width (section 7), modules (section 16), the `io`,
-`args`, `fs`, `net` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
+`args`, `fs`, `net`, `thread` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
 (section 18), function values (section 19), `extern fn` (section 20), and
 owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
@@ -149,6 +149,7 @@ fn main(io: Io) void {
 | `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
 | `Fs` | the fs capability | received by `main`, passed down; section 17 |
 | `Net` | the net capability | received by `main`, passed down; section 17 |
+| `Threads` | the thread capability | received by `main`, passed down; section 17 |
 | `Args` | the args capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 
@@ -1359,7 +1360,8 @@ version of this section.
 ## 17. Capabilities
 
 A capability is something the core does not have: the standard streams,
-command-line arguments, files, the network and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
+command-line arguments, files, the network, threads and heap allocation so
+far. A file declares the capabilities it needs on a `uses` line:
 
 ```
 uses alloc, io
@@ -1373,6 +1375,7 @@ with a value type that is the only way to use it:
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
+| `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; see below |
 | `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
@@ -1463,8 +1466,8 @@ fn main(io: Io, files: Fs, a: Allocator) !void {
 
 **The network.** `host` is a name or an IPv4 or IPv6 address, and `port`
 is 0 to 65535 (a panic otherwise); port 0 asks the system for a free one.
-Everything blocks: there is one thread, so a server handles one connection
-at a time.
+Everything blocks, so a server handles one connection
+at a time, unless it hands each to a thread.
 
 | Type | Methods |
 | --- | --- |
@@ -1509,6 +1512,39 @@ fn main(io: Io, net: Net, a: Allocator) !void {
     var buf: Buf(u8) = .empty
     defer a.free(buf)
     io.print(try peer.read(a, &buf, 16))
+}
+```
+
+**Threads.** `threads.spawn(f, x, ...)` runs `f(x, ...)` at once on a new
+system thread, for `f` a function returning `void`. It returns an owned
+`Thread`, which must end with `t.join()`, which waits for it, or
+`t.detach()`, which lets it run on; one that does neither is E135. When
+`main` returns, the program ends, detached threads with it. A panic on any
+thread ends the program, and so does failing to start a thread.
+
+Nothing is shared. The arguments must be things a thread can own: `f`
+takes owned values by `sink`, so they move to the new thread, and plain
+values by copy. A parameter that would lend something to it, `inout`, a slice
+or a plain owned value, is E148, as is a function that returns a value. So
+two threads never reach the same memory, without locks. Capability values
+are plain values, and `str`s never change, so both may be passed. Raw pointers
+in an `allow unsafe` file are the exception: what they point at is not
+checked.
+
+One `print` is one line: lines of different threads do not mix.
+
+```egg
+// expect: 3
+uses alloc, io, thread
+
+fn work(io: Io, a: Allocator, sink data: Buf(i64)) void {
+    defer a.free(data)
+    io.print(@len(data))
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const t = threads.spawn(work, io, a, a.alloc(3, 0))
+    t.join()
 }
 ```
 
@@ -2250,7 +2286,7 @@ pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but
 not a plain `UserId`), and capabilities other
-than `io`, `args`, `fs`, `net` and `alloc`. See the design document's roadmap for when each
+than `io`, `args`, `fs`, `net`, `thread` and `alloc`. See the design document's roadmap for when each
 arrives.
 
 ## 23. A complete program

@@ -1,0 +1,11 @@
+// error: E130 @6
+fn run() void {
+}
+
+fn go(threads: Threads) void {
+    threads.spawn(run).join()
+}
+
+fn main(threads: Threads) void {
+    go(threads)
+}

@@ -1,0 +1,7 @@
+// error: E113 @6
+uses thread
+fn run() void {
+}
+fn main(threads: Threads) void {
+    threads.spawn(run)
+}
