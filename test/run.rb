@@ -34,6 +34,9 @@ require "timeout"
 require "tmpdir"
 require_relative "../lib/egg"
 
+# Sources and program output are UTF-8 whatever the locale's default encoding is.
+Encoding.default_external = Encoding::UTF_8
+
 ROOT = File.expand_path("..", __dir__)
 CC = ENV["CC"] || "cc"
 CFLAGS = ["-std=c99", "-Wall", "-Wextra", "-pedantic", "-Werror", "-O2"].freeze
