@@ -101,6 +101,7 @@ First capabilities:
 | `io` | standard streams, one implementation per OS | v2 (standard output first); standard error and input added |
 | `args` | command-line arguments | done (`len` and `get`) |
 | `fs` | files, one implementation per OS | done: whole-file `read` and `write`, open files as owned `Reader` and `Writer` values; seek, read-write, delete and rename not yet |
+| `net` | TCP, UDP and name resolution, one implementation per OS | done: blocking sockets; Unix sockets, TLS and concurrency not yet |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:

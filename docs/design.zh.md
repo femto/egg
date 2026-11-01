@@ -90,6 +90,7 @@ fn read_config(files: Fs, a: Allocator, path: str) !Config {
 | `io` | 标准输入输出，按操作系统各有实现 | v2（先做标准输出）；已加标准错误和标准输入 |
 | `args` | 命令行参数 | 已完成（`len` 和 `get`） |
 | `fs` | 文件，按操作系统各有实现 | 已完成：整文件 `read` 和 `write`，打开的文件是 owned 的 `Reader` 和 `Writer`；seek、读写同时打开、删除和重命名还没有 |
+| `net` | TCP、UDP 和域名解析，按操作系统各有实现 | 已完成：阻塞式 socket；Unix socket、TLS 和并发还没有 |
 | `raise` | 异常抛出与捕获，用核心代码实现 | v3 之后 |
 
 检查规则：

@@ -29,6 +29,7 @@
 require "json"
 require "rbconfig"
 require "open3"
+require "socket"
 require "timeout"
 require "tmpdir"
 require_relative "../lib/egg"
@@ -350,6 +351,164 @@ def check_file_errors(dir)
         }
     }
   EGG
+end
+
+# Failures of the network that need another side, played here by Ruby. Only
+# the loopback address is used.
+def check_net(dir)
+  closed = TCPServer.new("127.0.0.1", 0)
+  free_port = closed.addr[1]
+  closed.close
+  check_program("net_refused", <<~EGG, dir)
+    // expect: ConnectionRefused
+    uses io, net
+
+    fn main(io: Io, net: Net) void {
+        const c = net.tcp_connect("127.0.0.1", #{free_port}) catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        c.close()
+    }
+  EGG
+  check_program("net_bad_host", <<~EGG, dir)
+    // expect: HostNotFound
+    uses io, net
+
+    fn main(io: Io, net: Net) void {
+        const r = net.resolve("a\\x00b", 80) catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        io.print(r)
+    }
+  EGG
+  # Some networks answer every name, so see what this one does first.
+  answered = begin
+    Addrinfo.getaddrinfo("no-such-host.invalid", 80)
+    true
+  rescue SocketError
+    false
+  end
+  if answered
+    puts "  skip  a name that does not resolve (this network answers every name)"
+  else
+    check_program("net_no_host", <<~EGG, dir)
+      // expect: HostNotFound
+      uses io, net
+
+      fn main(io: Io, net: Net) void {
+          const c = net.tcp_connect("no-such-host.invalid", 80) catch |e| {
+              io.print(@errorName(e))
+              return
+          }
+          c.close()
+      }
+    EGG
+  end
+  check_program("net_in_use", <<~EGG, dir)
+    // expect: AddressInUse
+    uses io, net
+
+    fn main(io: Io, net: Net) !void {
+        const l = try net.tcp_listen("127.0.0.1", 0)
+        defer l.close()
+        const m = net.tcp_listen("127.0.0.1", l.port()) catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        m.close()
+    }
+  EGG
+  check_program("net_timeout", <<~EGG, dir)
+    // expect: TimedOut
+    // expect: TimedOut
+    uses alloc, io, net
+
+    fn wait(io: Io, c: TcpConn, a: Allocator) void {
+        const b = c.read_all(a) catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        a.free(b)
+    }
+
+    fn main(io: Io, net: Net, a: Allocator) !void {
+        const l = try net.tcp_listen("127.0.0.1", 0)
+        defer l.close()
+        const c = try net.tcp_connect("127.0.0.1", l.port())
+        defer c.close()
+        const peer = try l.accept()
+        defer peer.close()
+        try c.set_timeout(100)
+        wait(io, c, a)
+        const u = try net.udp_bind("127.0.0.1", 0)
+        defer u.close()
+        try u.set_timeout(100)
+        var buf: Buf(u8) = .empty
+        defer a.free(buf)
+        const from = u.recv_from(a, &buf, 16) catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        io.print(from)
+    }
+  EGG
+  # The other side goes away: the write fails, it does not kill the program.
+  server = TCPServer.new("127.0.0.1", 0)
+  port = server.addr[1]
+  gone = Thread.new { server.accept.close }
+  check_program("net_reset", <<~EGG, dir)
+    // expect: ConnectionReset
+    uses io, net
+
+    fn pump(c: TcpConn) !void {
+        var i = 0
+        while (i < 100000) {
+            try c.write("0123456789012345678901234567890123456789")
+            i = i + 1
+        }
+    }
+
+    fn main(io: Io, net: Net) !void {
+        const c = try net.tcp_connect("127.0.0.1", #{port})
+        defer c.close()
+        pump(c) catch |e| {
+            io.print(@errorName(e))
+        }
+    }
+  EGG
+  gone.join
+  server.close
+
+  # A server written in Egg, with Ruby as its client.
+  path = File.join(dir, "net_server.egg")
+  File.write(path, <<~EGG)
+    uses alloc, io, net
+
+    fn main(io: Io, net: Net, a: Allocator) !void {
+        const l = try net.tcp_listen("127.0.0.1", 0)
+        defer l.close()
+        io.eprint(l.port())
+        const c = try l.accept()
+        defer c.close()
+        var line: Buf(u8) = .empty
+        defer a.free(line)
+        while (try c.read_line(a, &line)) {
+            try c.write(line)
+            try c.write("!\\n")
+        }
+    }
+  EGG
+  Open3.popen3(*eggc_command, "run", path) do |_, _, stderr, thread|
+    port = Timeout.timeout(60) { stderr.gets }.to_i
+    sock = TCPSocket.new("127.0.0.1", port)
+    sock.write("one\ntwo\n")
+    sock.close_write
+    got = Timeout.timeout(10) { sock.read }
+    sock.close
+    report(thread.value.success? && got.lines.map(&:chomp) == %w[one! two!], "a server in Egg answers Ruby", got.inspect)
+  end
 end
 
 # What a program sees on its command line, and the order of its two output
@@ -964,6 +1123,7 @@ Dir.mktmpdir do |dir|
   check_lsp_capture
   check_fs_errors(dir)
   check_file_errors(dir)
+  check_net(dir)
   check_args(dir)
   check_stdin(dir)
   check_utf8(dir)

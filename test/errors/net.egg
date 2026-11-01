@@ -1,0 +1,18 @@
+// error: E130 @6
+// error: E130 @13
+uses alloc
+
+fn dial(net: Net) void {
+    const c = net.tcp_connect("x", 1) catch {
+        return
+    }
+    c.close()
+}
+
+fn wait(sink l: TcpListener) void {
+    l.close()
+}
+
+fn main(net: Net) void {
+    dial(net)
+}

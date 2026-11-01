@@ -2,7 +2,7 @@
 
 This is the complete definition of the v2 core: the v1 language plus
 integer types of every width (section 7), modules (section 16), the `io`,
-`args`, `fs` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
+`args`, `fs`, `net` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
 (section 18), function values (section 19), `extern fn` (section 20), and
 owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
@@ -148,6 +148,7 @@ fn main(io: Io) void {
 | `Io` | the io capability | received by `main`, passed down; section 17 |
 | `Allocator` | the alloc capability | received by `main`, passed down; section 17 |
 | `Fs` | the fs capability | received by `main`, passed down; section 17 |
+| `Net` | the net capability | received by `main`, passed down; section 17 |
 | `Args` | the args capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 
@@ -1358,7 +1359,7 @@ version of this section.
 ## 17. Capabilities
 
 A capability is something the core does not have: the standard streams,
-command-line arguments, files and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
+command-line arguments, files, the network and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
 
 ```
 uses alloc, io
@@ -1371,6 +1372,7 @@ with a value type that is the only way to use it:
 | --- | --- | --- |
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
+| `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; see below |
 | `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
@@ -1456,6 +1458,57 @@ fn main(io: Io, files: Fs, a: Allocator) !void {
         io.print(line)
     }
     io.print("done")
+}
+```
+
+**The network.** `host` is a name or an IPv4 or IPv6 address, and `port`
+is 0 to 65535 (a panic otherwise); port 0 asks the system for a free one.
+Everything blocks: there is one thread, so a server handles one connection
+at a time.
+
+| Type | Methods |
+| --- | --- |
+| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.close()` |
+| `TcpListener` | `l.accept() !TcpConn`: waits for the next connection; `l.port() i64`; `l.close()` |
+| `UdpSocket` | `u.recv_from(a, &buf, n) !Addr`: the next datagram, in place of what `buf` held, and who sent it; what does not fit in n bytes is lost; `u.send_to(addr, data) !void`; `u.set_timeout(ms) !void`; `u.port() i64`; `u.close()` |
+| `Addr` | `addr.port() i64`; `io.print` shows it, as `127.0.0.1:80` or `[::1]:80` |
+
+`TcpConn`, `TcpListener` and `UdpSocket` are owned, like a `Reader`, and
+only `Net` makes them. `Addr` is a plain value, copied freely. `read_line`,
+`read`, `read_all` and `recv_from` need `uses alloc` too.
+
+Nothing is buffered on the way out, so there is no flush, and `close` cannot
+fail. `set_timeout` bounds each later read and write (0 means none; negative
+panics), not connecting or accepting.
+
+| Error | Meaning |
+| --- | --- |
+| `error.HostNotFound` | the name does not resolve, or holds a 0 byte |
+| `error.ConnectionRefused` | nothing listens at that port |
+| `error.ConnectionReset` | the other side went away |
+| `error.AddressInUse` | something already holds that port |
+| `error.TimedOut` | `set_timeout`'s time passed |
+| `error.PermissionDenied` | the system refused, as for a low port |
+| `error.IoFailed` | any other failure |
+
+The other side closing normally is not an error: `read` returns 0 and
+`read_line` returns false.
+
+```egg
+// expect: 5
+uses alloc, io, net
+
+fn main(io: Io, net: Net, a: Allocator) !void {
+    const server = try net.tcp_listen("127.0.0.1", 0)
+    defer server.close()
+    const client = try net.tcp_connect("127.0.0.1", server.port())
+    defer client.close()
+    const peer = try server.accept()
+    defer peer.close()
+    try client.write("hello")
+    var buf: Buf(u8) = .empty
+    defer a.free(buf)
+    io.print(try peer.read(a, &buf, 16))
 }
 ```
 
@@ -2188,7 +2241,7 @@ pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but
 not a plain `UserId`), and capabilities other
-than `io`, `args`, `fs` and `alloc`. See the design document's roadmap for when each
+than `io`, `args`, `fs`, `net` and `alloc`. See the design document's roadmap for when each
 arrives.
 
 ## 23. A complete program
