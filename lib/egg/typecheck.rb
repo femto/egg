@@ -2240,8 +2240,7 @@ module Egg
       end
       # The element type of a.alloc / a.resize: from the buffer, or from
       # the type the context expects (`var b: Buf(u8) = a.alloc(4, 0)`).
-      want = expected
-      want = @types[want].inner if !want.nil? && @types[want]&.kind == :err
+      want = value_target(expected)
       elem = owned?(want) ? @types[want].elem : nil
       params.each_with_index do |pt, i|
         a = args[i]
