@@ -1094,7 +1094,9 @@ fn main(io: Io) void {
 a pointer (which can already be null), `!U` or `?U` (E108).
 
 - A `T` or `null` fits where a `?T` is expected: `var best: ?i64 = null`,
-  then `best = 7`.
+  then `best = 7`. A function may return `!?T`, value or nothing or error:
+  a `T`, `null` and `error.Name` all fit, and the caller writes
+  `try f() orelse v` or `if (try f()) |v| { ... }`.
 - `e orelse f` unwraps `e: ?T`, giving `f: T` when `e` is null (E118 if
   `e` is not an optional). The fallback may instead leave: `orelse return`
   (or `return v`), `orelse break`, `orelse continue`, or be a block that

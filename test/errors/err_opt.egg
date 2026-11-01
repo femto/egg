@@ -1,0 +1,10 @@
+// error: E103 @3
+fn f() !?i64 {
+    return "x"
+}
+
+fn main() void {
+    _ = f() catch {
+        return
+    } orelse 0
+}

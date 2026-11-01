@@ -1,0 +1,93 @@
+// !?T: a value, nothing, or an error, such as the next token of a file that
+// may end or be malformed. A plain value fits without any conversion.
+// expect: 3
+// expect: 2
+// expect: 1
+// expect: 200
+// expect: -5
+// expect: red
+// expect: end
+// expect: xy
+// expect: 2
+// expect: nothing
+// expect: Bad
+uses alloc, io
+
+fn next(n: i64) !?i64 {
+    if (n < 0) {
+        return error.Bad
+    }
+    if (n == 0) {
+        return null
+    }
+    return n
+}
+
+fn small(n: i64) !?u8 {
+    return if (n > 0) @as(u8, 200) else null
+}
+
+fn literal() !?u8 {
+    return 200
+}
+
+fn negative() !?i8 {
+    return -5
+}
+
+const Color = enum { red, green }
+
+fn color() !?Color {
+    return .red
+}
+
+fn text(a: Allocator, n: i64) !?Buf(u8) {
+    if (n < 0) {
+        return error.Bad
+    }
+    if (n == 0) {
+        return null
+    }
+    return a.concat("x", "y")
+}
+
+fn bytes(a: Allocator) !?Buf(u8) {
+    return a.alloc(2, 0)
+}
+
+fn run(io: Io, a: Allocator) !void {
+    var n = 3
+    while (try next(n)) |v| {
+        io.print(v)
+        n = n - 1
+    }
+    io.print(try literal() orelse 0)
+    io.print(try negative() orelse 0)
+    io.print(try color() orelse .green)
+    const last = try small(0) orelse 0
+    if (last == 0) {
+        io.print("end")
+    }
+    if (try text(a, 1)) |t| {
+        defer a.free(t)
+        io.print(t)
+    }
+    if (try bytes(a)) |b| {
+        defer a.free(b)
+        io.print(@len(b))
+    }
+    if (try text(a, 0)) |t| {
+        a.free(t)
+    } else {
+        io.print("nothing")
+    }
+    if (try text(a, -1)) |t| {
+        a.free(t)
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    run(io, a) catch |e| {
+        io.print(@errorName(e))
+    }
+}
