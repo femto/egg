@@ -1,5 +1,5 @@
 // With capacity 0 a value is handed over: send returns once it is received.
-// Many senders take turns, and owned values arrive once each.
+// With many senders, owned values arrive once each.
 // expect: 300 values, 600 bytes
 uses alloc, io, thread
 
