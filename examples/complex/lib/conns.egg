@@ -20,7 +20,7 @@ const Conn = owned struct {
     fn deinit(sink self: Conn, a: Allocator) void {
         self.log.print("close ", self.id)
         a.free(self.sent)
-        @drop(self)
+        @forget(self)
     }
 }
 

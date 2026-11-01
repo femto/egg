@@ -28,7 +28,7 @@ const Row = owned struct {
 
     fn deinit(sink self: Row, a: Allocator) void {
         a.free(self.word)
-        @drop(self)
+        @forget(self)
     }
 }
 

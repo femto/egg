@@ -38,7 +38,7 @@
 #
 # An `owned struct` (a resource, such as a database handle) is owned even
 # without buffers. Only its own file may build one (Db{ ... }) or end one
-# (@drop(v)), so elsewhere it ends only through its API. Without a
+# (@forget(v)), so elsewhere it ends only through its API. Without a
 # `deinit` a.free cannot end it, so it lives in locals, parameters, results
 # and struct fields, not in arrays or buffers (E141); with one, a.free
 # calls it, and those are allowed.
@@ -130,7 +130,7 @@ module Egg
     SHIFT_OPS = %w[<< >>].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
-                      "replace" => 2, "take" => 1, "swap" => 3, "drop" => 1, "errorName" => 1, "compileError" => 1,
+                      "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
@@ -3238,26 +3238,26 @@ module Egg
         check_swap(name, args, line, col)
       when "swap"
         check_elem_swap(args, line, col)
-      when "drop"
+      when "forget"
         check_drop(a)
       end
     end
 
-    # @drop(v): ends an owned struct without running anything, in the file
+    # @forget(v): ends an owned struct without running anything, in the file
     # that declares it (its API's way to say the resource is released).
     def check_drop(a)
       t = check_expr(a)
       return "void" if t == "error"
       unless @types[t]&.resource
-        err("E103", "@drop ends an owned struct, found #{t}#{owned?(t) ? '; free buffers with a.free' : ''}", a.line, a.col)
+        err("E103", "@forget ends an owned struct, found #{t}#{owned?(t) ? '; free buffers with a.free' : ''}", a.line, a.col)
         return "void"
       end
       unless own_type?(t)
-        err("E142", "#{t} is an owned struct, so only its own file can @drop one; end it with its API", a.line, a.col)
+        err("E142", "#{t} is an owned struct, so only its own file can @forget one; end it with its API", a.line, a.col)
         return "void"
       end
       unless a.is_a?(Var) || a.is_a?(Field)
-        err("E133", "@drop needs a variable or a field of one, not a temporary #{t}", a.line, a.col)
+        err("E133", "@forget needs a variable or a field of one, not a temporary #{t}", a.line, a.col)
       end
       "void"
     end

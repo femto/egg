@@ -15,7 +15,7 @@ const Res = owned struct {
     fn deinit(sink self: Res, a: Allocator) void {
         self.log.*.n = self.log.*.n * 10 + self.id
         a.free(self.data)
-        @drop(self)
+        @forget(self)
     }
 }
 

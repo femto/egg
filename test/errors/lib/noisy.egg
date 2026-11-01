@@ -7,7 +7,7 @@ const N = owned struct {
     fn deinit(sink self: N) void {
         if (getpid() < 0) {
         }
-        @drop(self)
+        @forget(self)
     }
 }
 fn make() N {

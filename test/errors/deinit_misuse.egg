@@ -9,7 +9,7 @@ const Bad = owned struct {
 
     fn deinit(sink self: Bad, io: Io) void {
         io.print(self.id)
-        @drop(self)
+        @forget(self)
     }
 }
 
@@ -24,7 +24,7 @@ const Own = owned struct {
 
     fn deinit(sink self: Own, a: Allocator) void {
         a.free(self.data)
-        @drop(self)
+        @forget(self)
     }
 }
 

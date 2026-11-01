@@ -1,4 +1,4 @@
-// @drop ends only the owned struct: its buffers must be freed on their
+// @forget ends only the owned struct: its buffers must be freed on their
 // own, and an inout one must hold a value again.
 uses alloc, io
 
@@ -6,12 +6,12 @@ const Cache = owned struct {
     data: Buf(i64)
 
     fn close(sink self: Cache) void {
-        @drop(self)
+        @forget(self)
     }
 
     fn reset(inout self: Cache, a: Allocator) void {
         a.free(self.data)
-        @drop(self)
+        @forget(self)
     }
 }
 

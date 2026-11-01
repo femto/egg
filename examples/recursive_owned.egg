@@ -10,7 +10,7 @@ const Node = owned struct {
 
     fn deinit(sink self: Node, a: Allocator) void {
         a.free(self.kids)
-        @drop(self)
+        @forget(self)
     }
 }
 

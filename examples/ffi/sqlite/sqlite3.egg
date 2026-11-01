@@ -42,7 +42,7 @@ const Db = owned struct {
     // first neither fails nor leaks.
     fn close(sink self: Db) void {
         _ = sqlite3_close_v2(self.handle)
-        @drop(self)
+        @forget(self)
     }
 
     // The last error, as SQLite words it.
@@ -125,7 +125,7 @@ const Stmt = owned struct {
 
     fn finalize(sink self: Stmt) void {
         _ = sqlite3_finalize(self.handle)
-        @drop(self)
+        @forget(self)
     }
 }
 
