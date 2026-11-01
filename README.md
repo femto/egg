@@ -166,9 +166,10 @@ v3 (memory without GC, and what realistic programs needed):
 - Threads: `uses thread` gives a `Threads` value; `threads.spawn(f, x, ...)`
   returns an owned `Thread` to `join` or `detach`. Owned arguments move to the
   thread and plain values are copied, so outside `allow unsafe` raw pointers
-  nothing is shared and no locks are needed. `threads.channel(T, n)`
-  returns a `Receiver(T)` (with n of 0, `send` waits for the receiver), `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and
-  `rx.recv()` gives null once every sender has closed and it is empty
+  nothing is shared and no locks are needed. `threads.channel(T, n)` returns
+  a `Receiver(T)` (with n of 0, `send` waits for the receiver), and
+  `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and `rx.recv()` gives
+  null once every sender has closed and it is empty
 - Network: `uses net` gives a `Net` value; `net.tcp_connect(host, port)`,
   `net.tcp_listen(host, port)`, `net.udp_bind(host, port)` and
   `net.resolve(host, port)`. Sockets are owned and must be closed; everything
