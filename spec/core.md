@@ -449,8 +449,7 @@ fn main(io: Io) void {
 
 `i8`, `i16`, `i32`, `i64` are signed and `u8`, `u16`, `u32`, `u64` unsigned,
 of that many bits; `usize` is unsigned and as wide as a pointer. Indexes,
-lengths (`@len`) and `for` indexes are `i64`, and so are the bytes of a
-`str`.
+lengths (`@len`) and `for` indexes are `i64`; the bytes of a `str` are `u8`.
 
 Both operands of an arithmetic or ordering operator must have the same
 type (E103): nothing converts implicitly. A literal takes its type from
