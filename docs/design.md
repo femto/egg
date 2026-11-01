@@ -102,7 +102,7 @@ First capabilities:
 | `args` | command-line arguments | done (`len` and `get`) |
 | `fs` | files, one implementation per OS | done: whole-file `read` and `write`, open files as owned `Reader` and `Writer` values; seek, read-write, delete and rename not yet |
 | `net` | TCP, UDP and name resolution, one implementation per OS | done: blocking sockets; Unix sockets and TLS not yet |
-| `thread` | system threads; values move between them, so nothing is shared | `spawn`, `join`, `detach`; channels next |
+| `thread` | system threads; owned values move between them, so nothing is shared outside `allow unsafe` | done: `spawn`, `join`, `detach`; channels next |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:

@@ -164,12 +164,14 @@ v3 (memory without GC, and what realistic programs needed):
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
   with the program's name at 0 and the first argument at 1
 - Threads: `uses thread` gives a `Threads` value; `threads.spawn(f, x, ...)`
-  returns an owned `Thread` to `join` or `detach`. Arguments move to the thread,
-  so nothing is shared and no locks are needed
+  returns an owned `Thread` to `join` or `detach`. Owned arguments move to the
+  thread and plain values are copied, so outside `allow unsafe` raw pointers
+  nothing is shared and no locks are needed
 - Network: `uses net` gives a `Net` value; `net.tcp_connect(host, port)`,
   `net.tcp_listen(host, port)`, `net.udp_bind(host, port)` and
   `net.resolve(host, port)`. Sockets are owned and must be closed; everything
-  blocks, so a server handles one connection per thread
+  blocks, so a server handles one connection at a time unless it hands each
+  to a thread
 - Open files, with `uses fs` and an `Fs` value `files`: `files.open(path)`
   gives a `Reader`, `files.create(path)` and `files.append(path)` a `Writer`;
   both are owned and must be closed, and a `Writer` ends with
