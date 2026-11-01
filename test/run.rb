@@ -533,7 +533,7 @@ def check_threads(dir)
 
         fn deinit(sink self: Worker, a: Allocator) void {
             self.t.join()
-            @drop(self)
+            @forget(self)
         }
     }
 

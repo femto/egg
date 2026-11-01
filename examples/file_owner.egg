@@ -13,7 +13,7 @@ const Log = owned struct {
 
     fn deinit(sink self: Log, a: Allocator) void {
         self.w.close()
-        @drop(self)
+        @forget(self)
     }
 }
 

@@ -43,7 +43,7 @@
 # method) may change all of its argument.
 #
 # An `owned struct` (a resource) is owned for itself, not only for its
-# buffers: its `v.#` path is followed like a buffer, and `@drop(v)` (in its
+# buffers: its `v.#` path is followed like a buffer, and `@forget(v)` (in its
 # own file) moves just that path, so its buffer fields must still be
 # given away on their own.
 #
@@ -585,9 +585,9 @@ module Egg
         end
         # m.f(K, x): a generic call into a module; info[:args] has no types.
         walk_args(info&.[](:args) || args, info)
-      in Builtin[name: "drop", args:, line:, col:]
+      in Builtin[name: "forget", args:, line:, col:]
         path = path_of(args[0])
-        path.nil? ? walk(args[0]) : drop(path, line, col)
+        path.nil? ? walk(args[0]) : forget(path, line, col)
       in Builtin[name: "replace" | "take" => name, args:, line:, col:]
         place = args[0].expr
         check_elem_change(place, line, col, name == "take" ? "taken from" : "replaced")
@@ -738,8 +738,8 @@ module Egg
       paths.each { |k| @st[k] = [:moved, line] }
     end
 
-    # @drop(v): moves only v.#, the owned struct itself.
-    def drop(path, line, col)
+    # @forget(v): moves only v.#, the owned struct itself.
+    def forget(path, line, col)
       leaf = "#{path}.#"
       return if @st[leaf].nil? || @st[leaf][0] == :poison
       if @st[leaf][0] == :moved
@@ -748,10 +748,10 @@ module Egg
         return
       end
       if @decl[root(path)][0] == :bparam
-        borrowed_param_error(path, "dropped", line, col)
+        borrowed_param_error(path, "forgotten", line, col)
         return
       end
-      check_iterated(path, line, col, "dropped")
+      check_iterated(path, line, col, "forgotten")
       @st[leaf] = [:moved, line]
     end
 
@@ -777,7 +777,7 @@ module Egg
     def moved_error(path, moved, line, col)
       at = @st[moved][1]
       m = shown(moved)
-      what = if m == path && @res.key?(moved) then "'#{path}' was moved or dropped on line #{at}"
+      what = if m == path && @res.key?(moved) then "'#{path}' was moved or forgotten on line #{at}"
              elsif m == path then "'#{path}' was moved on line #{at} and no longer owns a buffer"
              elsif path.start_with?("#{m}.") then "'#{m}' was moved on line #{at}"
              else "'#{m}' was moved on line #{at}, so '#{path}' does not own all its buffers"

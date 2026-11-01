@@ -1,5 +1,5 @@
 // An owned struct: a connection that must be closed exactly once. Only
-// this file can make one (open) or end one (close, with @drop).
+// this file can make one (open) or end one (close, with @forget).
 uses io
 
 const Conn = owned struct {
@@ -10,10 +10,10 @@ const Conn = owned struct {
         io.print(self.id * 100 + n)
     }
 
-    // Taking self by value moves it in; @drop ends it.
+    // Taking self by value moves it in; @forget ends it.
     fn close(sink self: Conn, io: Io) void {
         io.print(-self.id)
-        @drop(self)
+        @forget(self)
     }
 }
 

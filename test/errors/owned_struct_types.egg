@@ -1,4 +1,4 @@
-// An owned struct from another file cannot be built, dropped, changed
+// An owned struct from another file cannot be built, forgotten, changed
 // field by field, freed or kept in an array or buffer.
 uses alloc, io
 
@@ -8,7 +8,7 @@ const Pair = struct { c: conn.Conn, n: i64 }
 
 fn forge(io: Io) void {
     const c = conn.Conn{ .id = 9 }
-    @drop(c)
+    @forget(c)
     io.print(0)
 }
 
@@ -25,7 +25,7 @@ fn bufs(b: Buf(Pair)) void {
 
 fn plain(a: Allocator) void {
     const b = a.alloc(2, 0)
-    @drop(b)
+    @forget(b)
 }
 
 fn bump(inout n: i64) void {

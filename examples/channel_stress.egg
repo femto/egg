@@ -8,7 +8,7 @@ const Worker = owned struct {
 
     fn deinit(sink self: Worker, a: Allocator) void {
         self.t.join()
-        @drop(self)
+        @forget(self)
     }
 }
 

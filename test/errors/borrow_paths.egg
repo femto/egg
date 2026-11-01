@@ -6,7 +6,7 @@ const Res = owned struct {
     id: i64
 
     fn close(self: Res) void {
-        @drop(self)
+        @forget(self)
     }
 }
 

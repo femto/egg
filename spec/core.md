@@ -1279,7 +1279,7 @@ Builtins start with `@`; any other name is E112.
 | `@replace(&p, v)` | puts v in the place p and returns what was there (section 21) |
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
 | `@swap(&xs, i, j)` | exchanges elements i and j of a buffer, array or inout slice (section 21) |
-| `@drop(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
+| `@forget(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 | `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
@@ -1883,7 +1883,7 @@ parameter. Everything else **moves** it: assigning it, passing it to a
 borrows the caller's value for the call: the function may read it, index
 it, slice it, loop over it, copy plain fields out of it and pass it on to
 another plain parameter, but not move any of it (free it, return it,
-assign it, pass it to `sink`, `@drop` it; E144), and it does not have to
+assign it, pass it to `sink`, `@forget` it; E144), and it does not have to
 give it away. Like a slice, a borrow cannot outlive the call. A `sink`
 parameter takes the value over: the caller's variable is moved, and the
 function must give it away on every path (E135). The call is written the
@@ -2005,14 +2005,14 @@ that is owned for itself, with or without buffers: a resource such as an
 open file or a database handle, which must be released exactly once. It
 moves like a buffer, so a copy cannot release it again (E136), and it
 must be given away on every path (E135, E134). Only the file that
-declares it may build one (`Db{ ... }`) or end one with `@drop(v)`, which
+declares it may build one (`Db{ ... }`) or end one with `@forget(v)`, which
 runs nothing (E142); everywhere else a value comes from that file's
 functions and ends by being passed to one that takes it by `sink`, such
-as `fn close(sink self: Db) void { ...; @drop(self) }`. Methods that only
+as `fn close(sink self: Db) void { ...; @forget(self) }`. Methods that only
 read it take `self`, methods that change it `inout self`; only its file
 may change its fields (assign them,
 pass them as `inout`, `@replace` them; E142), though any file may read
-them. `@drop` ends only the struct itself: buffers in its fields must
+them. `@forget` ends only the struct itself: buffers in its fields must
 still be freed, and it needs a variable or a field of one, not a
 temporary (E133).
 
@@ -2046,7 +2046,7 @@ const File = owned struct {
 
     fn close(sink self: File, io: Io) void {
         io.print("closed 1")
-        @drop(self)
+        @forget(self)
     }
 }
 
@@ -2070,7 +2070,7 @@ const File = owned struct {
     fd: i64
 
     fn close(sink self: File) void {
-        @drop(self)
+        @forget(self)
     }
 }
 
@@ -2090,7 +2090,7 @@ const Conn = owned struct {
     id: i64
 
     fn deinit(sink self: Conn) void {
-        @drop(self)
+        @forget(self)
     }
 }
 

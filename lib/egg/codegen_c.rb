@@ -2805,7 +2805,7 @@ module Egg
         name = e.info[:type]
         @need_str = true
         "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
-      when "drop" then "((void)#{expr(a)})"
+      when "forget" then "((void)#{expr(a)})"
       when "errorName"
         @need_str = true
         @need_error_names = true

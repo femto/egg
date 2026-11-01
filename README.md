@@ -224,7 +224,7 @@ From v2:
   everything a value holds
 - Owned structs for resources: `const Db = owned struct { ... }` is
   checked like a buffer (a copy is a move, it must be ended on every
-  path), and only its own file can build one or end one (`@drop(v)`), so
+  path), and only its own file can build one or end one (`@forget(v)`), so
   callers release it only through its API (`db.close()`). With a
   `fn deinit(sink self: Db) void`, `a.free` ends ones held in a `Buf`, an
   array or a struct, so a pool is `Buf(Db)` filled with `a.push(&pool, db)`

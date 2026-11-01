@@ -60,7 +60,7 @@ buffers:
 - each one must be ended on every path: forgetting `defer st.finalize()`
   is E135 at every `try` that could leave without it;
 - only `sqlite3.egg` can build one (`Db{ .handle = p }`) or end one
-  without SQLite (`@drop`), so `blog.egg` gets them only from `open` and
+  without SQLite (`@forget`), so `blog.egg` gets them only from `open` and
   `prepare` and ends them only with `close` and `finalize`.
 
 Methods that only use a handle take `inout self`, so `blog.egg` keeps
