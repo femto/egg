@@ -646,11 +646,19 @@ def check_rendezvous(dir)
   EGG
   Open3.popen3(*eggc_command, "run", path) do |stdin, stdout, stderr, thread|
     first = Timeout.timeout(60) { stderr.gets }
-    early = IO.select([stderr], nil, nil, 0.5)
+    if first.nil?
+      report(false, "a sender on a channel of capacity 0 waits for the receiver", "the program did not start")
+      next
+    end
+    early = begin
+      Timeout.timeout(0.5) { stderr.gets }
+    rescue Timeout::Error
+      nil
+    end
     stdin.puts("go")
     stdin.close
     second = Timeout.timeout(10) { stderr.gets }
-    ok = first&.chomp == "before" && early.nil? && second&.chomp == "after" && stdout.read.chomp == "7" && thread.value.success?
+    ok = first.chomp == "before" && early.nil? && second&.chomp == "after" && stdout.read.chomp == "7" && thread.value.success?
     report(ok, "a sender on a channel of capacity 0 waits for the receiver", [first, early.nil?, second].inspect)
   rescue Timeout::Error
     Process.kill("KILL", thread.pid)
