@@ -2312,6 +2312,10 @@ module Egg
       end
       t = type_arg(args[0])
       expect_type("i64", check_expr(args[1], "i64"), args[1])
+      if args[1].ty == "i64" && args[1].is_a?(Unary) && args[1].op == "-" && args[1].operand.is_a?(IntLit) &&
+         args[1].operand.value.between?(1, 9_223_372_036_854_775_808)
+        err("E103", "a channel's capacity cannot be negative", args[1].line, args[1].col)
+      end
       return "error" if t == "error"
       e.info[:cap_method] = "Threads.channel"
       e.info[:chan_of] = t
