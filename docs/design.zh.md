@@ -89,7 +89,7 @@ fn read_config(files: Fs, a: Allocator, path: str) !Config {
 | `alloc` | 堆分配，分配器显式传递 | v2（可释放的独占缓冲区 `Buf(T)`，带所有权检查）；v3（程序构造的文本是 `Buf(u8)`；`a.leak` 和 `a.cstr` 让文本留到程序结束） |
 | `io` | 标准输入输出，按操作系统各有实现 | v2（先做标准输出）；已加标准错误和标准输入 |
 | `args` | 命令行参数 | 已完成（`len` 和 `get`） |
-| `fs` | 文件，按操作系统各有实现 | 先做整文件 `read` 和 `write`，之后加句柄 |
+| `fs` | 文件，按操作系统各有实现 | 已完成：整文件 `read` 和 `write`，打开的文件是 owned 的 `Reader` 和 `Writer`；seek、读写同时打开、删除和重命名还没有 |
 | `raise` | 异常抛出与捕获，用核心代码实现 | v3 之后 |
 
 检查规则：

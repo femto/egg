@@ -301,6 +301,57 @@ def check_fs_errors(dir)
   EGG
 end
 
+# Failures of open files that a program cannot set up by itself.
+def check_file_errors(dir)
+  work = File.join(dir, "file_errors")
+  FileUtils.mkdir_p(File.join(work, "folder"))
+  check_program("file_open_dir", <<~EGG, work)
+    // expect: IsDirectory
+    uses fs, io
+
+    fn main(io: Io, files: Fs) void {
+        const r = files.open("folder") catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        r.close()
+    }
+  EGG
+  check_program("file_create_dir", <<~EGG, work)
+    // expect: IsDirectory
+    uses fs, io
+
+    fn main(io: Io, files: Fs) void {
+        const w = files.create("folder") catch |e| {
+            io.print(@errorName(e))
+            return
+        }
+        w.close()
+    }
+  EGG
+  unless File.exist?("/dev/full")
+    puts "  skip  a Writer reports a full disk (no /dev/full)"
+    return
+  end
+  check_program("file_full_disk", <<~EGG, work)
+    // expect: IoFailed
+    uses fs, io
+
+    fn write(files: Fs) !void {
+        const w = try files.create("/dev/full")
+        defer w.close()
+        try w.print("data")
+        try w.flush()
+    }
+
+    fn main(io: Io, files: Fs) void {
+        write(files) catch |e| {
+            io.print(@errorName(e))
+        }
+    }
+  EGG
+end
+
 # What a program sees on its command line, and the order of its two output
 # streams: eprint must not overtake what print wrote before it.
 def check_args(dir)
@@ -912,6 +963,7 @@ Dir.mktmpdir do |dir|
   check_lsp_alias
   check_lsp_capture
   check_fs_errors(dir)
+  check_file_errors(dir)
   check_args(dir)
   check_stdin(dir)
   check_utf8(dir)

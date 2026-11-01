@@ -1,0 +1,32 @@
+// A file in a struct: the struct owns it and ends it in its deinit.
+// expect: 2
+uses alloc, fs, io
+
+const Log = owned struct {
+    w: Writer
+    n: i64
+
+    fn line(inout self: Log, s: str) !void {
+        try self.w.print(s)
+        self.n = self.n + 1
+    }
+
+    fn deinit(sink self: Log, a: Allocator) void {
+        self.w.close()
+        @drop(self)
+    }
+}
+
+fn run(io: Io, files: Fs, a: Allocator) !void {
+    var logs: Buf(Log) = .empty
+    defer a.free(logs)
+    a.push(&logs, Log{ .w = try files.create("log.txt"), .n = 0 })
+    try logs[0].line("one")
+    try logs[0].line("two")
+    try logs[0].w.flush()
+    io.print(logs[0].n)
+}
+
+fn main(io: Io, files: Fs, a: Allocator) !void {
+    try run(io, files, a)
+}

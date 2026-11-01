@@ -11,7 +11,7 @@ fn wrong(files: Fs, a: Allocator) void {
 }
 
 fn nope(files: Fs) void {
-    files.open("x")
+    files.remove("x")
 }
 
 fn main(a: Fs, b: Fs) void {

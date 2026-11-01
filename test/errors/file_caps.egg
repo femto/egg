@@ -1,0 +1,18 @@
+// error: E130 @6
+// error: E130 @10
+uses alloc
+
+fn close_it(sink r: Reader) void {
+    r.close()
+}
+
+fn grab(files: Fs) void {
+    const w = files.create("x") catch {
+        return
+    }
+    w.close()
+}
+
+fn main(files: Fs) void {
+    grab(files)
+}

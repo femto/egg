@@ -1,0 +1,7 @@
+// error: E142 @5
+uses fs
+
+fn main() void {
+    const r = Reader{}
+    r.close()
+}

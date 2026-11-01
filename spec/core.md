@@ -1371,7 +1371,7 @@ with a value type that is the only way to use it:
 | --- | --- | --- |
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. Both show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
-| `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; see below |
+| `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; see below |
 | `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 `fs` is separate from `io` so that a file's `uses` line says what it can
@@ -1410,6 +1410,52 @@ uses alloc, fs
 fn main(files: Fs, a: Allocator) !void {
     const text = try files.read(a, "/nonexistent/egg/file")
     a.free(text)
+}
+```
+
+**Open files.** For a file read or written bit by bit, `fs.open`,
+`fs.create` and `fs.append` return an owned value. Reading and writing are
+two types, so using the wrong one is a compile error:
+
+| Type | Methods |
+| --- | --- |
+| `Reader` | `r.read_line(a, &line) !bool` and `r.read_all(a) !Buf(u8)`, as on `Io`; `r.read(a, &buf, n) !i64`: up to n bytes in place of what `buf` held, how many, and 0 at the end; `r.close()` |
+| `Writer` | `w.print(x, ...) !void`: as `io.print`; `w.write(text) !void`: the bytes, nothing added; `w.flush() !void`: sends what is buffered to the system; `w.close()` |
+
+A `Reader` or `Writer` is owned, like an `owned struct` with no deinit: one
+that is not closed on every path is E135, and one used after `close` is
+E136. It can be held by an `owned struct` that closes it in its deinit, but
+only `fs` makes one (E142), and its methods need `uses fs`.
+
+`close` cannot fail, so it fits a `defer`. Writing is buffered, so a failure
+such as a full disk may appear only when the buffer is sent: finish with
+`try w.flush()`, or a failure in what is left is lost when `close` runs.
+Reading with `read_line`, `read_all` or `read` needs `uses alloc` too, and
+reads and writes fail with `error.IoFailed`; `open`, `create` and `append`
+fail as `fs.read` does.
+
+```egg
+// expect: hello
+// expect: done
+uses alloc, fs, io
+
+fn save(files: Fs) !void {
+    const w = try files.create("egg_spec_note.txt")
+    defer w.close()
+    try w.print("hello")
+    try w.flush()
+}
+
+fn main(io: Io, files: Fs, a: Allocator) !void {
+    try save(files)
+    const r = try files.open("egg_spec_note.txt")
+    defer r.close()
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    while (try r.read_line(a, &line)) {
+        io.print(line)
+    }
+    io.print("done")
 }
 ```
 

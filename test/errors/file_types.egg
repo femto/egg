@@ -1,0 +1,15 @@
+// error: E122 @9
+// error: E122 @10
+// error: E103 @11
+// error: E113 @11
+// error: E109 @14
+uses fs
+
+fn misuse(r: Reader, w: Writer) void {
+    r.write("x")
+    w.read_all()
+    w.write(1)
+}
+
+fn main(r: Reader) void {
+}

@@ -77,9 +77,12 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Args]).freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Args Reader Writer]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Args" => "args" }.freeze
     CAPABILITIES = %w[alloc args fs io].freeze
+    # Open files: owned values, made by an Fs and only by one. They work
+    # like capability values, but main cannot receive them.
+    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs" }.freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
     FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed].freeze
     # Methods of capability values: name -> [parameter types, result]
@@ -91,7 +94,11 @@ module Egg
       "Io" => { "print" => [["printable"], "void"], "eprint" => [["printable"], "void"],
                 "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"] },
       "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
-      "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"] },
+      "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_all" => [["Allocator"], "!Buf(u8)"],
+                    "read" => [%w[Allocator inout_buffer i64], "!i64"], "close" => [[], "void"] },
+      "Writer" => { "print" => [["printable"], "!void"], "write" => [["text"], "!void"], "flush" => [[], "!void"], "close" => [[], "void"] },
+      "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"],
+                "open" => [["text"], "!Reader"], "create" => [["text"], "!Writer"], "append" => [["text"], "!Writer"] },
       "Allocator" => { "concat" => [%w[text text], "Buf(u8)"], "leak" => [["text"], "str"], "int_str" => [["integer"], "Buf(u8)"],
                        "float_str" => [["float"], "Buf(u8)"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
@@ -178,6 +185,12 @@ module Egg
       @modules = program.modules || { "" => ModuleInfo.new("", nil, nil, program.uses || [], {}, [], [], program.allows || [], program.links || []) }
       @mod = @modules[""]
       PRIMS.each { |p| @types[p] = TInfo.new(p, :prim) }
+      FILE_TYPES.each_key do |t|
+        info = @types[t]
+        info.kind = :struct
+        info.resource = true
+        info.fields = []
+      end
     end
 
     def check
@@ -854,6 +867,7 @@ module Egg
 
     # Declared in the file being checked?
     def own_type?(t)
+      return false if FILE_TYPES.key?(t)
       (@types[t].mod || "") == (@mod.prefix || "")
     end
 
@@ -2211,13 +2225,16 @@ module Egg
         err("E122", "#{t} has no method '#{name}' (methods: #{CAP_METHODS[t].keys.join(', ')})", line, col)
         return check_all_error(args)
       end
-      cap = CAP_TYPES[t]
+      cap = CAP_TYPES[t] || FILE_TYPES[t]
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"]
       params, ret = m
       ret = ptr_type("u8") if ret == "*u8"
       ret = resolve_type(ErrType.new(GenericType.new("Buf", ["u8"])), line, col) if ret == "!Buf(u8)"
       ret = resolve_type(ErrType.new("void"), line, col) if ret == "!void"
       ret = resolve_type(ErrType.new("bool"), line, col) if ret == "!bool"
+      ret = resolve_type(ErrType.new("i64"), line, col) if ret == "!i64"
+      ret = resolve_type(ErrType.new("Reader"), line, col) if ret == "!Reader"
+      ret = resolve_type(ErrType.new("Writer"), line, col) if ret == "!Writer"
       ret = resolve_type(GenericType.new("Buf", ["u8"]), line, col) if ret == "Buf(u8)"
       pop = ret == "?T"
       if t == "Fs"
@@ -2226,14 +2243,14 @@ module Egg
         @current.direct["alloc"] ||= [line, col, "Fs.read"] if name == "read"
       end
       # Reading standard input can fail, and fills a buffer.
-      if t == "Io" && name.start_with?("read_")
+      if (t == "Io" && name.start_with?("read_")) || (FILE_TYPES.key?(t) && name != "close")
         error_id("IoFailed")
-        @current.direct["alloc"] ||= [line, col, "Io.#{name}"]
+        @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read")
       end
       # a.concat(s, t, ...) takes two or more texts.
       params = ["text"] * args.length if t == "Allocator" && name == "concat" && args.length > 2
       # io.print(x, y, ...) and io.eprint take one or more values.
-      params = ["printable"] * args.length if t == "Io" && name.end_with?("print") && !args.empty?
+      params = ["printable"] * args.length if %w[Io Writer].include?(t) && name.end_with?("print") && !args.empty?
       if params.length != args.length
         err("E104", "'#{name}' takes #{params.length} argument(s) but #{args.length} were given", line, col)
         return check_all_error(args)
@@ -2283,7 +2300,7 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
-          if (name.start_with?("append_") || name == "read_line") && elem != "u8"
+          if (name.start_with?("append_") || name.start_with?("read")) && elem != "u8"
             err("E103", "'#{name}' writes text to a Buf(u8), found #{at}", a.line, a.col)
             return "error"
           end
