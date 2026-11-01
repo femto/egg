@@ -19,6 +19,15 @@
 // expect: none
 // expect: none
 // expect: none
+// expect: none
+// expect: 0
+// expect: 2
+// expect: 0
+// expect: none
+// expect: 1
+// expect: [a,b]
+// expect: true
+// expect: 1
 uses alloc, io
 
 const text = @import("std/text")
@@ -61,4 +70,17 @@ fn main(io: Io, a: Allocator) void {
     show(io, text.parse_int(""))
     show(io, text.parse_int("-"))
     show(io, text.parse_int("12x"))
+    show(io, text.parse_int("--1"))
+    show(io, text.find("abc", ""))
+    show(io, text.find_from("abc", "c", -5))
+    show(io, text.find_from("", "", 0))
+    show(io, text.find_from("abc", "a", 9223372036854775807))
+    const none = text.split(a, "a,b", "")
+    defer a.free(none)
+    io.print(@len(none))
+    io.print("[", none[0], "]")
+    const built = a.concat("he", "llo")
+    defer a.free(built)
+    io.print(text.starts_with(built, "he"))
+    show(io, text.find(built[1..], "l"))
 }

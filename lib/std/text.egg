@@ -9,7 +9,7 @@ uses alloc
 // is found at once, where it starts.
 fn find_from(s: []u8, needle: []u8, from: i64) ?i64 {
     var i = if (from < 0) 0 else from
-    while (i + @len(needle) <= @len(s)) {
+    while (i <= @len(s) and @len(needle) <= @len(s) - i) {
         if (s[i..i + @len(needle)] == needle) {
             return i
         }
