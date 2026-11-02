@@ -10,7 +10,7 @@ Egg compiles to portable C99. It is designed to be written by AI and read by peo
 
 - **Capabilities, not ambient power.** The core language can't do IO or allocate. A file declares `uses io, alloc`, and `main` passes the values down, so a signature shows what a function can touch.
 - **Ownership without a GC.** A buffer has one owner. Use after free, double free and leaks are compile errors, with no lifetime annotations.
-- **No undefined behaviour.** Integer overflow, division by zero and out-of-bounds indexing panic.
+- **No undefined behaviour.** Integer overflow, integer division by zero and out-of-bounds indexing panic.
 - **Fast enough to be a systems language.** Near C on most programs, with every check on ([numbers](#performance)).
 - **Threads without shared data.** Owned values move between threads over channels.
 
@@ -103,7 +103,6 @@ fn main(io: Io) void {
     const shapes = [3]Shape{ Shape{ .circle = 2 }, Shape{ .rect = Size{ .w = 3, .h = 4 } }, .empty }
     io.print(total(shapes[0..]))   // 24
 }
-```
 ```
 
 More in [examples/](examples), including an [HTTP server](examples/http_server/server.egg) with a thread pool and keep-alive, a [bytecode VM](examples/complex) and a [SQLite blog](examples/ffi).
@@ -348,7 +347,7 @@ Design choices worth knowing:
   its last use (E149).
 - **Left-to-right evaluation** on every C compiler: each call is evaluated
   into a temporary in source order.
-- **No undefined behaviour**: integer overflow, division by zero and
+- **No undefined behaviour**: integer overflow, integer division by zero and
   out-of-bounds indexing panic.
 - **Zig-style strictness**, all compile errors: unused locals, a `var`
   never changed, an ignored result or error, shadowing, missing returns,
