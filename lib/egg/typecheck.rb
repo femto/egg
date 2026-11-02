@@ -466,7 +466,7 @@ module Egg
         end
         r = resolve_type(f.ret, f.line, f.col)
         if r.start_with?("[]")
-          err("E116", "a function cannot return a slice; slices exist only as parameters and local constants", f.line, f.col)
+          err("E116", "a function cannot return a slice; slices exist only as parameters and local slices", f.line, f.col)
         elsif r == "type"
           err("E120", "only a type function (`fn Name(comptime T: type) type`) returns 'type'", f.line, f.col)
         end
@@ -651,7 +651,7 @@ module Egg
           err("E108", "a field cannot have type #{t}", f.line, f.col)
           t = "error"
         elsif t.start_with?("[]")
-          err("E116", "a struct cannot hold a slice; slices exist only as parameters and local constants", f.line, f.col)
+          err("E116", "a struct cannot hold a slice; slices exist only as parameters and local slices", f.line, f.col)
           t = "error"
         elsif owned_err?(t)
           err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
@@ -1020,7 +1020,7 @@ module Egg
 
     def value_type_error(t, what, line, col)
       if t.start_with?("[]")
-        err("E116", "#{what} cannot be a slice; slices exist only as parameters and local constants", line, col)
+        err("E116", "#{what} cannot be a slice; slices exist only as parameters and local slices", line, col)
       else
         err("E108", "#{what} cannot have type #{t}", line, col)
       end
@@ -2615,7 +2615,7 @@ module Egg
         return "error"
       end
       unless @slice_ok
-        err("E116", "a slice can only be passed directly as an argument; slices exist only as parameters and local constants", line, col)
+        err("E116", "a slice can only be passed directly as an argument; slices exist only as parameters and local slices", line, col)
         return "error"
       end
       canon = "[]#{info.elem}"

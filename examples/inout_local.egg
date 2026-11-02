@@ -58,7 +58,7 @@ fn main(io: Io, a: Allocator) void {
         i = i + 1
     }
 
-    // a read-only slice of s only reads, so x can be read beside it
+    // a read-only slice of w only reads, so x can be read beside it
     inout w = &x[0..]
     w[0] = 1
     const seen = w[0..]
