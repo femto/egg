@@ -777,6 +777,16 @@ def check_http_server(dir)
       report(one && one[0].include?("Connection: keep-alive") && answer.(sock), "http keeps open after an empty body", one.inspect)
       sock.close
 
+      # Each of these could frame a body: what follows must not run.
+      ["Content-Length: 0, 28", "Content-Length: 0\r\nContent-Length: 28", "Content-Length : 28", "Transfer-Encoding : chunked",
+       "tRaNsFeR-eNcOdInG: chunked", "X: a\r\n Content-Length: 28", "no colon"].each do |h|
+        sock = open.()
+        sock.write("GET /missing HTTP/1.1\r\n#{h}\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
+        one = answer.(sock)
+        report(one && one[0].include?("Connection: close") && closed.(sock), "http does not run a hidden request: #{h.inspect}", one.inspect)
+        sock.close
+      end
+
       sock = open.()
       sock.write("POST / HTTP/1.1\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
       one = answer.(sock)

@@ -84,6 +84,20 @@ fn is_header(line: []u8, name: str) bool {
     return @len(line) > n and line[n] == ':' and same(line[0..n], name)
 }
 
+// A line with no name, or a name that is not one word, may hide a header.
+fn odd_header(line: []u8) bool {
+    const colon = text.find(line, ":") orelse -1
+    if (colon < 0) {
+        return true
+    }
+    for (line[0..colon]) |c| {
+        if (c == ' ' or c == '\t') {
+            return true
+        }
+    }
+    return false
+}
+
 // Is word one of the comma-separated words of list?
 fn has_word(list: []u8, word: str) bool {
     var i = 0
@@ -154,12 +168,16 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
             if (@len(header) == 0) {
                 break
             }
-            if (is_header(header, "Connection")) {
+            if (odd_header(header)) {
+                has_body = true
+            } else if (is_header(header, "Connection")) {
                 const value = header[@len("Connection:")..]
                 close = close or has_word(value, "close")
                 ask_keep = ask_keep or has_word(value, "keep-alive")
             } else if (is_header(header, "Content-Length")) {
-                has_body = has_body or !has_word(header[@len("Content-Length:")..], "0")
+                // Exactly 0: a list could disagree with itself.
+                const value = header[@len("Content-Length:")..]
+                has_body = has_body or text.contains(value, ",") or !has_word(value, "0")
             } else if (is_header(header, "Transfer-Encoding")) {
                 has_body = true
             }
@@ -174,7 +192,8 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
         const method = line[0..space]
         const path = line[space + 1..stop]
         const wanted = text.ends_with(line, " HTTP/1.1") or ask_keep
-        // A body nobody reads would be taken for the next request.
+        // A body nobody reads would be taken for the next request. Anything
+        // that might frame one ends the connection, and with it what follows.
         const keep = wanted and !close and !has_body and method == "GET" and served < 100
         try route(c, files, a, root, log, method, path, keep)
         if (!keep) {
