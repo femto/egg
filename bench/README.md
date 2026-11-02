@@ -79,3 +79,30 @@ Before #6, `egg_mul` checked overflow with a division (`r / b != a`): a
 5806 ms (20.89x) and fib 594 ms (2.57x). With gcc 5+ or clang, add, sub and
 mul now use `__builtin_*_overflow`, which compiles to the CPU's overflow
 flag. Other compilers, or `-DEGG_PORTABLE`, get the portable checks.
+
+## HTTP servers
+
+`ruby bench/http.rb` runs `examples/http_server/server.egg` against the same
+design in C, Rust, Go and Python (`bench/http/`): 8 workers on a queue of 16, a
+logger thread, keep-alive, up to 100 requests per connection, the file read for
+each request. `go-net/http` and `node` are those languages' usual servers,
+without these limits. It needs `wrk`, which runs on the same machine, so the
+numbers compare servers and are not their ceilings.
+
+Everything in `bench/http/` is a load-test fixture for `wrk` on loopback, not
+an example to copy: only the Egg server checks methods, paths, queries and
+request framing. That work gives the others a small head start.
+
+2026-11-02, Intel i7-9700K, macOS 14, over loopback. Requests per second,
+median of 3 runs of 5 seconds, with that run's p99 latency. p99 varies a lot
+between runs for the pool servers.
+
+| server | 12 B response, 8 conns | 12 B response, 64 conns | 10 KiB response, 8 conns | 1 MiB response, 8 conns |
+| --- | ---: | ---: | ---: | ---: |
+| egg | 66800 (48 ms) | 54169 (297 ms) | 54409 (281 ms) | 3040 (89 ms) |
+| c | 65999 (21 ms) | 59662 (181 ms) | 54978 (104 ms) | 3688 (97 ms) |
+| rust | 67348 (64 ms) | 57307 (330 ms) | 61439 (125 ms) | 4213 (72 ms) |
+| go-pool | 64428 (22 ms) | 64973 (223 ms) | 47235 (289 ms) | 3544 (128 ms) |
+| go-net/http | 74198 (1.3 ms) | 97254 (7.6 ms) | 57761 (0.5 ms) | 3643 (4.8 ms) |
+| node | 21448 (5.7 ms) | 21272 (40 ms) | 18172 (43 ms) | 2437 (17 ms) |
+| python | 8079 (13 ms) | 7427 (774 ms) | 7622 (14 ms) | 3585 (105 ms) |
