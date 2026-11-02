@@ -4,6 +4,7 @@
 // expect: 2
 // expect: 9
 // expect: 7
+// expect: 2
 // expect: 0
 // expect: 33
 uses io, alloc
@@ -56,6 +57,12 @@ fn main(io: Io, a: Allocator) void {
         w[0] = before
         i = i + 1
     }
+
+    // a read-only slice of s only reads, so x can be read beside it
+    inout w = &x[0..]
+    w[0] = 1
+    const seen = w[0..]
+    io.print(x[0] + seen[0])
 
     // the other field is not borrowed
     var p = Pair{ .left = [2]i64{ 0, 0 }, .right = [2]i64{ 0, 0 } }
