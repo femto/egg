@@ -45,7 +45,7 @@
 
 module Egg
   class CodegenC
-    # Before the first include: sockets and threads are not in ISO C, so
+    # Before the first include: sockets, threads and fstat are not in ISO C, so
     # -std=c99 hides them. Only for a program that uses them.
     SYSTEM_FEATURES = <<~C.freeze
       #ifdef _WIN32
@@ -477,7 +477,7 @@ module Egg
             if (f == NULL) return egg_fs_class(e);
             /* One byte more, so the first read sees the end. The size is only
                a hint: a file can change, and a special one reports 0. */
-            int64_t size = egg_fs_size(f), cap = size >= 4096 ? size + 1 : 4096, n = 0;
+            int64_t size = egg_fs_size(f), cap = size >= 4096 && size < INT64_MAX ? size + 1 : 4096, n = 0;
             uint8_t *b = (uint8_t *)egg_buf_resize(NULL, cap, 1);
             for (;;) {
                 n += (int64_t)fread(b + n, 1, (size_t)(cap - n), f);
@@ -1374,7 +1374,7 @@ module Egg
       emit_types
       types = @out
 
-      out = uses_net? || uses_threads? ? SYSTEM_FEATURES + HEADER : HEADER.dup
+      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") ? SYSTEM_FEATURES + HEADER : HEADER.dup
       out << (uses_threads? ? LOCKS : NO_LOCKS)
       out << "\n"
       out << STR_TYPEDEF << "\n" if @need_str
