@@ -1,0 +1,33 @@
+// files.read knows a file's size at the start: all of it comes back around the
+// sizes where its buffer could be off by one.
+// The file is left behind, as in fs.egg.
+// expect: 0 true
+// expect: 1 true
+// expect: 4095 true
+// expect: 4096 true
+// expect: 4097 true
+// expect: 65536 true
+// expect: 65537 true
+uses alloc, fs, io
+
+fn check(io: Io, files: Fs, a: Allocator, n: i64) !void {
+    var data: Buf(u8) = a.alloc(n, 'x')
+    defer a.free(data)
+    if (n > 0) {
+        data[n - 1] = 'y'
+    }
+    try files.write("fs_read_sizes.tmp", data)
+    const back = try files.read(a, "fs_read_sizes.tmp")
+    defer a.free(back)
+    io.print(@len(back), " ", back == data)
+}
+
+fn main(io: Io, files: Fs, a: Allocator) !void {
+    try check(io, files, a, 0)
+    try check(io, files, a, 1)
+    try check(io, files, a, 4095)
+    try check(io, files, a, 4096)
+    try check(io, files, a, 4097)
+    try check(io, files, a, 65536)
+    try check(io, files, a, 65537)
+}
