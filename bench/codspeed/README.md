@@ -15,9 +15,7 @@ There are four groups:
 
 The programs here are the ones in `bench/egg/` with smaller inputs (fib(30),
 a 5M sieve, collatz up to 300K, a 200×200 matmul), so that each run takes a
-few milliseconds natively and stays quick under simulation. `multiply` in
-`matmul.egg` takes its buffers with `sink`, which the current compiler
-requires (`bench/egg/matmul.egg` does not build without it).
+few milliseconds natively and stays quick under simulation.
 
 For the `http` benchmarks, `http_load.c` starts a server, waits until it
 accepts connections, sends 200 GET requests on 4 keep-alive connections,

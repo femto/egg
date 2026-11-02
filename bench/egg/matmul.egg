@@ -9,7 +9,7 @@ fn fill(inout m: Buf(i64), n: i64, seed: i64) void {
     }
 }
 
-fn multiply(a: Allocator, x: Buf(i64), y: Buf(i64), n: i64) Buf(i64) {
+fn multiply(a: Allocator, sink x: Buf(i64), sink y: Buf(i64), n: i64) Buf(i64) {
     var z = a.alloc(n * n, 0)
     var i = 0
     while (i < n) {

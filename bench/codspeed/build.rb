@@ -58,4 +58,17 @@ no_cgo = { "CGO_ENABLED" => "0" }
 build(out("http-go-pool"), "go", "build", "-o", out("http-go-pool"), File.join(HTTP, "pool.go"), env: no_cgo)
 build(out("http-go-nethttp"), "go", "build", "-o", out("http-go-nethttp"), File.join(HTTP, "nethttp.go"), env: no_cgo)
 
+# Check that every server answers, once, outside the measure. This also
+# writes the bytecode cache of the Python modules server.py imports, which
+# would otherwise be compiled during the first python benchmark.
+unless $failed
+  [
+    [out("http-egg")], [out("http-c")], [out("http-rust")],
+    [out("http-go-pool")], [out("http-go-nethttp")],
+    ["python3", File.join(HTTP, "server.py")],
+  ].each do |server|
+    build("a request to #{File.basename(server.last)}", out("http_load"), "/index.html", "1", "1", "--", *server)
+  end
+end
+
 exit($failed ? 1 : 0)
