@@ -466,7 +466,7 @@ module Egg
         end
         r = resolve_type(f.ret, f.line, f.col)
         if r.start_with?("[]")
-          err("E116", "a function cannot return a slice; slices exist only as parameters", f.line, f.col)
+          err("E116", "a function cannot return a slice; slices exist only as parameters and local constants", f.line, f.col)
         elsif r == "type"
           err("E120", "only a type function (`fn Name(comptime T: type) type`) returns 'type'", f.line, f.col)
         end
@@ -651,7 +651,7 @@ module Egg
           err("E108", "a field cannot have type #{t}", f.line, f.col)
           t = "error"
         elsif t.start_with?("[]")
-          err("E116", "a struct cannot hold a slice; slices exist only as parameters", f.line, f.col)
+          err("E116", "a struct cannot hold a slice; slices exist only as parameters and local constants", f.line, f.col)
           t = "error"
         elsif owned_err?(t)
           err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
@@ -1020,7 +1020,7 @@ module Egg
 
     def value_type_error(t, what, line, col)
       if t.start_with?("[]")
-        err("E116", "#{what} cannot be a slice; slices exist only as parameters", line, col)
+        err("E116", "#{what} cannot be a slice; slices exist only as parameters and local constants", line, col)
       else
         err("E108", "#{what} cannot have type #{t}", line, col)
       end
@@ -1148,7 +1148,7 @@ module Egg
       case stmt
       in VarDecl[name:, mutable:, type:, value:, line:, col:]
         declared = type.nil? ? nil : resolve_type(type, line, col)
-        vt = check_expr(value, declared)
+        vt = value.is_a?(SliceExpr) ? check_slice_arg(value, declared) : check_expr(value, declared)
         ty = declared.nil? ? vt : declared
         expect_type(declared, vt, value) unless declared.nil?
         if ty == "void"
@@ -1157,8 +1157,8 @@ module Egg
         elsif ty == "type"
           err("E125", "'#{name}' would hold a type; types exist only at compile time", line, col)
           ty = "error"
-        elsif ty.start_with?("[]")
-          err("E116", "'#{name}' cannot hold a slice; slices exist only as parameters", line, col)
+        elsif ty.start_with?("[]") && (mutable || !local_view?(value, vt))
+          err("E116", "'#{name}' cannot hold this slice; a local slice is `const #{name} = x[lo..hi]`, of a variable", line, col)
           ty = "error"
         elsif owned_err?(ty)
           err("E133", "'#{name}' cannot hold a #{ty}; unwrap it right away with #{unwrap_how(ty)}", line, col)
@@ -2597,12 +2597,26 @@ module Egg
         return "error"
       end
       unless @slice_ok
-        err("E116", "a slice can only be passed directly as an argument; slices exist only as parameters", line, col)
+        err("E116", "a slice can only be passed directly as an argument; slices exist only as parameters and local constants", line, col)
         return "error"
       end
       canon = "[]#{info.elem}"
       register(canon, :slice, line, col).elem = info.elem
       canon
+    end
+
+    # A local slice names a part of a place, or another slice.
+    def local_view?(value, vt)
+      return vt.start_with?("[]") if value.is_a?(Var)
+      value.is_a?(SliceExpr) && viewable?(value.obj)
+    end
+
+    def viewable?(e)
+      case e
+      in Var | Deref then true
+      in Field | Index | SliceExpr then viewable?(e.obj)
+      else false
+      end
     end
 
     def root_name(e)

@@ -892,10 +892,20 @@ bounds-checked; `@len(a)` is N.
 
 `[]T` is a **slice**: a read-only view of consecutive elements of an array,
 written `a[lo..hi]` or `a[lo..]` (an `inout` slice is writable; section 12). Slices are **second-class** (E116): a
-slice can be a parameter type, an argument, or the subject of `for`, and
-nothing else. It cannot be stored in a variable or a field, or returned. So
-a view can never outlive the array it looks into, without any lifetime
-annotations. An array is not implicitly a slice: pass `a[0..]` (E103).
+slice can be a parameter type, an argument, the subject of `for`, or a local
+`const`, and nothing else. It cannot be stored in a `var` or a field, or
+returned. So a view can never outlive the array it looks into, without any
+lifetime annotations. An array is not implicitly a slice: pass `a[0..]`
+(E103).
+
+`const s = x[lo..hi]` names a part of a variable, or of a part of one (E116
+for a temporary, or for a slice chosen by an `if`); `const t = s` names a
+slice again. It is read-only, and it borrows `x` until its last use: while
+`s` is used later, on a path that can really get there, `x` cannot be moved,
+assigned, resized, passed as `inout` or have its elements written (E149).
+Reading `x` is always fine, and after the last use of `s` all of it is
+allowed again. A `defer` that uses `s` is a use at the end of the block. A
+slice of a slice borrows what the first one does.
 
 ```egg
 // expect: 10
@@ -921,12 +931,40 @@ fn main(io: Io) void {
 ```
 
 ```egg
+// expect: GET
+// expect: GET /a!
+uses alloc, io
+
+fn main(io: Io, a: Allocator) void {
+    var line = a.concat("GET /a", "")
+    defer a.free(line)
+    const method = line[0..3]
+    io.print(method)
+    a.push(&line, '!')          // method is finished with
+    io.print(line)
+}
+```
+
+```egg
+// error: E149
+uses alloc, io
+
+fn main(io: Io, a: Allocator) void {
+    var line = a.concat("GET /a", "")
+    defer a.free(line)
+    const method = line[0..3]
+    a.push(&line, '!')          // may move the bytes method looks at
+    io.print(method)
+}
+```
+
+```egg
 // error: E116
 uses io
 
 fn main(io: Io) void {
     const a = [3]i64{ 1, 2, 3 }
-    const view = a[0..2]
+    var view = a[0..2]
     io.print(@len(view))
 }
 ```
