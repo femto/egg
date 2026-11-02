@@ -697,7 +697,7 @@ def check_http_server(dir)
         next
       end
       head = ->(path) { ask.(port, "GET #{path} HTTP/1.0\r\nHost: x\r\n\r\n") }
-      status = ->(text) { text[/\AHTTP\/1\.0 (\d+)/, 1] }
+      status = ->(text) { text[/\AHTTP\/1\.1 (\d+)/, 1] }
       index = head.("/")
       report(status.(index) == "200" && index.include?("text/html") && index.end_with?("<h1>egg</h1>"), "http serves the index", index)
       note = head.("/note.txt")
@@ -721,6 +721,97 @@ def check_http_server(dir)
       many = (1..40).map { Thread.new { status.(head.("/note.txt")) } }.map(&:value)
       idle.close
       report(many.all? { |s| s == "200" }, "http serves 40 at once beside an idle connection", many.uniq.inspect)
+      # Reads one response; nil once the server has closed.
+      answer = lambda do |sock|
+        head = Timeout.timeout(10) { sock.gets("\r\n\r\n") }
+        next nil if head.nil?
+        [head, Timeout.timeout(10) { sock.read(head[/Content-Length: (\d+)/, 1].to_i) }]
+      end
+      open = lambda do
+        sock = TCPSocket.new("127.0.0.1", port)
+        sock.binmode
+        sock
+      end
+      closed = ->(sock) { Timeout.timeout(10) { sock.read } == "" }
+      get11 = "GET /note.txt HTTP/1.1\r\nHost: x\r\n\r\n"
+
+      sock = open.()
+      sock.write(get11)
+      one = answer.(sock)
+      sock.write(get11)
+      two = answer.(sock)
+      report(one && two && one[0].include?("Connection: keep-alive") && two[1] == "hello\n", "http keeps a connection open", [one, two].inspect)
+      sock.write(get11 * 3)
+      report((1..3).all? { answer.(sock)&.last == "hello\n" }, "http answers pipelined requests", "")
+      sock.close
+
+      sock = open.()
+      sock.write("GET /note.txt HTTP/1.1\r\nHost: x\r\ncOnNeCtIoN: foo, CLOSE\r\n\r\n")
+      one = answer.(sock)
+      report(one && one[0].include?("Connection: close") && closed.(sock), "http closes when asked, in any case", one.inspect)
+      sock.close
+
+      sock = open.()
+      sock.write("GET /note.txt HTTP/1.0\r\n\r\n")
+      one = answer.(sock)
+      report(one && one[0].include?("Connection: close") && closed.(sock), "http/1.0 closes by default", one.inspect)
+      sock.close
+
+      sock = open.()
+      sock.write("GET /note.txt HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")
+      one = answer.(sock)
+      sock.write(get11)
+      report(one && one[0].include?("Connection: keep-alive") && answer.(sock), "http/1.0 keeps when asked", one.inspect)
+      sock.close
+
+      # What follows a request with a body must not run as a request.
+      sock = open.()
+      sock.write("GET /note.txt HTTP/1.1\r\nContent-Length: 28\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
+      one = answer.(sock)
+      report(one && one[0].include?("Connection: close") && closed.(sock), "http closes after a request with a body", one.inspect)
+      sock.close
+
+      sock = open.()
+      sock.write("GET /note.txt HTTP/1.1\r\nContent-Length: 0\r\n\r\n" + get11)
+      one = answer.(sock)
+      report(one && one[0].include?("Connection: keep-alive") && answer.(sock), "http keeps open after an empty body", one.inspect)
+      sock.close
+
+      # Each of these could frame a body: what follows must not run.
+      ["Content-Length: 0, 28", "Content-Length: 0\r\nContent-Length: 28", "Content-Length : 28", "Transfer-Encoding : chunked",
+       "tRaNsFeR-eNcOdInG: chunked", "X: a\r\n Content-Length: 28", "no colon", ": 28"].each do |h|
+        sock = open.()
+        sock.write("GET /missing HTTP/1.1\r\n#{h}\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
+        one = answer.(sock)
+        report(one && one[0].include?("Connection: close") && closed.(sock), "http does not run a hidden request: #{h.inspect}", one.inspect)
+        sock.close
+      end
+
+      sock = open.()
+      sock.write("POST / HTTP/1.1\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
+      one = answer.(sock)
+      report(one && one[0].include?(" 405 ") && closed.(sock), "http closes after a method it refuses", one.inspect)
+      sock.close
+
+      sock = open.()
+      99.times do
+        sock.write(get11)
+        answer.(sock)
+      end
+      sock.write(get11)
+      one = answer.(sock)
+      report(one && one[0].include?("Connection: close") && closed.(sock), "http closes after 100 requests", one.inspect)
+      sock.close
+
+      sock = open.()
+      sock.write(get11)
+      answer.(sock)
+      start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      gone = closed.(sock)
+      took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start
+      report(gone && took > 1 && took < 4, "http closes an idle connection", took.to_s)
+      sock.close
+
       Process.kill("KILL", thread.pid)
     rescue Timeout::Error, SystemCallError => e
       Process.kill("KILL", thread.pid)
