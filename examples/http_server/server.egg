@@ -87,7 +87,7 @@ fn is_header(line: []u8, name: str) bool {
 // A line with no name, or a name that is not one word, may hide a header.
 fn odd_header(line: []u8) bool {
     const colon = text.find(line, ":") orelse -1
-    if (colon < 0) {
+    if (colon <= 0) {
         return true
     }
     for (line[0..colon]) |c| {

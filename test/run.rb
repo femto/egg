@@ -779,7 +779,7 @@ def check_http_server(dir)
 
       # Each of these could frame a body: what follows must not run.
       ["Content-Length: 0, 28", "Content-Length: 0\r\nContent-Length: 28", "Content-Length : 28", "Transfer-Encoding : chunked",
-       "tRaNsFeR-eNcOdInG: chunked", "X: a\r\n Content-Length: 28", "no colon"].each do |h|
+       "tRaNsFeR-eNcOdInG: chunked", "X: a\r\n Content-Length: 28", "no colon", ": 28"].each do |h|
         sock = open.()
         sock.write("GET /missing HTTP/1.1\r\n#{h}\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
         one = answer.(sock)
