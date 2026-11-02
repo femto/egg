@@ -2,19 +2,79 @@
 
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/femto/egg?utm_source=badge)
 
-An AI-native systems language with a core that has no capabilities at all.
-Exceptions, IO and allocation are capability modules a program declares
-on demand, and there is no GC: heap memory is managed by ownership (text a program
-builds is a `Buf(u8)` it frees; literals and `a.leak` copies last for the whole program). See the design doc ([English](docs/design.md) · [中文](docs/design.zh.md))
-for the full picture.
+**A systems language where a function's power is in its signature, and memory is safe without a GC or lifetime annotations.**
 
-This repository holds **eggc**, the first compiler, with **v2** done
-(modules, capabilities, integer types, pointers, `extern fn` and owned
-buffers) and **v3** (memory without a GC) done: written
-in Ruby (aiming at the subset [Spinel](https://github.com/matz/spinel)
-compiles), running on CRuby 3.0+, emitting portable C99.
+Egg compiles to portable C99. It is designed to be written by AI and read by people: strict errors with stable codes, diagnostics as JSON, and a spec you can paste into a prompt.
 
+<p align="center">
+  <img src="screenshot/word_freq.png" alt="A word frequency program in Egg and its output" width="760">
+</p>
+
+- **Capabilities, not ambient power.** The core language can't do IO or allocate. A file declares `uses io, alloc`, and `main` passes the values down, so a signature shows what a function can touch.
+- **Ownership without a GC.** A buffer has one owner. Use after free, double free and leaks are compile errors, with no lifetime annotations.
+- **No undefined behaviour.** Integer overflow, integer division by zero and out-of-bounds indexing panic.
+- **Fast enough to be a systems language.** Near C on most programs, with every check on ([numbers](#performance)).
+- **Threads without shared data.** Owned values move between threads over channels.
+
+## Quick start
+
+You need Ruby 3.0+ and a C compiler.
+
+```bash
+git clone https://github.com/femto/egg
+cd egg
+bin/eggc run examples/complex/word_freq.egg
 ```
+
+Save this as `hello.egg` and run `bin/eggc run hello.egg`:
+
+```zig
+uses alloc, io
+
+fn greet(io: Io, a: Allocator, name: str) void {
+    const msg = a.concat("hello, ", name)
+    defer a.free(msg)
+    io.print(msg)
+}
+
+fn main(io: Io, a: Allocator) void {
+    greet(io, a, "egg")
+}
+```
+
+Code blocks here are highlighted as Zig, because GitHub does not know Egg yet.
+
+## The compiler catches it
+
+Forget the `defer`, and the leak does not compile:
+
+```text
+hello.egg:4:11: error[E135]: 'msg' still owns its buffer when 'greet' ends; free it (a.free(msg)), return it or pass it on
+```
+
+Drop `io` from `uses`, and neither does the capability:
+
+```text
+hello.egg:6:8: error[E130]: 'greet' uses io (Io.print), but its module does not declare it; add `uses io` at the top of the file
+```
+
+Change a buffer while a slice of it is still needed:
+
+```zig
+const path = line[4..]
+a.push(&line, '!')      // may move the bytes
+io.print(path)
+```
+
+```text
+slice.egg:7:12: error[E149]: 'line' cannot be changed here: the slice 'path' of it is used later
+```
+
+Once `path` is finished with, the same `push` is fine: a borrow ends at its last use.
+
+## A longer example
+
+```zig
 uses io
 
 const Shape = union(enum) {
@@ -47,18 +107,33 @@ fn main(io: Io) void {
 }
 ```
 
+More in [examples/](examples), including an [HTTP server](examples/http_server/server.egg) with a thread pool and keep-alive, a [bytecode VM](examples/complex) and a [SQLite blog](examples/ffi).
+
+## Documentation
+
+- [Language spec](spec/core.md), with tested examples
+- [Every error code](spec/diagnostics.md)
+- Design doc: [English](docs/design.md) · [中文](docs/design.zh.md)
+- [Editor support](#editor-support) and [debugging](#debugging)
+
+## Commands
+
 ```bash
 bin/eggc run examples/fib.egg        # 6765
 bin/eggc emit-c examples/fib.egg     # show the generated C
 bin/eggc build examples/fib.egg -o fib
 bin/eggc check file.egg --json       # diagnostics as JSON lines
 bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
-bin/eggc run app.egg -- one two     # what follows -- goes to the program
+bin/eggc run app.egg -- one two      # what follows -- goes to the program
 bin/eggc run app.egg -lfoo -L lib    # link a C library (or `link "foo"` in an `allow unsafe` file)
 bin/eggc spec                        # whole spec, for pasting into an AI
 bin/eggc lsp                         # language server for editors (stdin/stdout)
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ```
+
+## Status
+
+**eggc** is the first compiler. **v2** (modules, capabilities, integer types, pointers, `extern fn`, owned buffers) and **v3** (memory without a GC) are done. It is written in Ruby, aiming at the subset [Spinel](https://github.com/matz/spinel) compiles, and runs on CRuby 3.0+. Egg is young: expect breaking changes.
 
 ## Performance
 
@@ -77,9 +152,16 @@ So Egg is **25 to 149 times faster than CPython** and **21 to 71 times
 faster than Ruby** on the same loops. matmul is behind Rust and Zig because
 eggc does not yet remove bounds checks from inner loops.
 
+The [HTTP example](examples/http_server/server.egg) keeps up with the same
+design in C and Rust, about 54,000 to 67,000 small requests per second on
+loopback, against about 21,000 for Node and 8,000 for Python
+([details](bench/README.md#http-servers)). Go's `net/http` is ahead, with far
+better tail latency: Egg has blocking IO and no event loop yet.
+
 ```bash
 ruby bench/run.rb          # Egg, C, Rust, Go, Zig
 ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
+ruby bench/http.rb         # HTTP servers; needs wrk
 ```
 
 [CodSpeed](https://app.codspeed.io/femto/egg) also tracks the compiler's
@@ -106,6 +188,9 @@ rebuild to switch back.
 ## What eggc supports
 
 The full definition, with tested examples, is [spec/core.md](spec/core.md).
+
+<details>
+<summary>The feature list, by version</summary>
 
 v3 (memory without GC, and what realistic programs needed):
 
@@ -178,7 +263,8 @@ v3 (memory without GC, and what realistic programs needed):
   nothing is shared and no locks are needed. `threads.channel(T, n)` returns
   a `Receiver(T)` (with n of 0, `send` waits for the receiver), and
   `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and `rx.recv()` gives
-  null once every sender has closed and it is empty
+  null once every sender has closed and it is empty. `rx.clone()` gives a
+  pool of threads one queue: each value goes to one receiver
 - Network: `uses net` gives a `Net` value; `net.tcp_connect(host, port)`,
   `net.tcp_listen(host, port)`, `net.udp_bind(host, port)` and
   `net.resolve(host, port)`. Sockets are owned and must be closed; everything
@@ -268,7 +354,7 @@ Design choices worth knowing:
   its last use (E149).
 - **Left-to-right evaluation** on every C compiler: each call is evaluated
   into a temporary in source order.
-- **No undefined behaviour**: integer overflow, division by zero and
+- **No undefined behaviour**: integer overflow, integer division by zero and
   out-of-bounds indexing panic.
 - **Zig-style strictness**, all compile errors: unused locals, a `var`
   never changed, an ignored result or error, shadowing, missing returns,
@@ -276,12 +362,16 @@ Design choices worth knowing:
 - **Lazy generics**: a method of a generic type is checked only when
   called, as in Zig.
 
+</details>
+
 ## Layout
 
 ```
 bin/eggc               command-line driver
+bench/                 benchmarks against other languages
 docs/design.md         design doc (English; Chinese in design.zh.md)
 editors/vscode/        VS Code syntax highlighting (install the .vsix)
+editors/codeshot/      renders an .egg file as a PNG (screenshot/ is made with it)
 lib/egg/lexer.rb       source -> tokens (newlines are significant)
 lib/egg/parser.rb      tokens -> AST (recursive descent)
 lib/egg/ast.rb         AST as Structs
@@ -319,8 +409,9 @@ test/run.rb            test runner, no gems
 - Passes `-std=c99 -Wall -Wextra -pedantic -Werror` on gcc and clang
 - Overflow checks use `__builtin_*_overflow` where the compiler has them
   (clang, gcc 5+), and portable C elsewhere or with `-DEGG_PORTABLE`
-- No POSIX calls; only `<stdio.h>`, `<stdlib.h>`, `<stdint.h>`,
-  `<stdbool.h>`, `<inttypes.h>`
+- Only `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<stdint.h>`, `<stdbool.h>`
+  and `<inttypes.h>` by default; system calls only in a program that uses files,
+  the network or threads
 
 ## Editor support
 
