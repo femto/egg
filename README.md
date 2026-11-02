@@ -1,5 +1,7 @@
 # Egg
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/femto/egg?utm_source=badge)
+
 **A systems language where a function's power is in its signature, and memory is safe without a GC or lifetime annotations.**
 
 Egg compiles to portable C99. It is designed to be written by AI and read by people: strict errors with stable codes, diagnostics as JSON, and a spec you can paste into a prompt.
@@ -161,6 +163,11 @@ ruby bench/run.rb          # Egg, C, Rust, Go, Zig
 ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
 ruby bench/http.rb         # HTTP servers; needs wrk
 ```
+
+[CodSpeed](https://app.codspeed.io/femto/egg) also tracks the compiler's
+speed, smaller versions of these programs and the CPU cost per request of
+the HTTP servers on every pull request
+([bench/codspeed/](bench/codspeed/README.md)).
 
 ## Native eggc
 

@@ -1,0 +1,66 @@
+$schema: https://raw.githubusercontent.com/CodSpeedHQ/codspeed/refs/heads/main/schemas/codspeed.schema.json
+
+# Benchmarks measured by CodSpeed (see bench/codspeed/README.md).
+# The `run` and `http` benchmarks need `ruby bench/codspeed/build.rb` first,
+# and the `http` ones `--simulation-track-subprocess`.
+
+benchmarks:
+  # The compiler, in one process: lexing, parsing, checking, C generation.
+  - name: "compile examples"
+    exec: ruby bench/codspeed/compile.rb examples
+  - name: "compile examples/complex"
+    exec: ruby bench/codspeed/compile.rb examples/complex
+  - name: "compile http_server"
+    exec: ruby bench/codspeed/compile.rb examples/http_server/server.egg
+  - name: "diagnose test/errors"
+    exec: ruby bench/codspeed/compile.rb test/errors
+
+  # The eggc command line, start-up included.
+  - name: "eggc emit-c complex/word_freq.egg"
+    exec: ruby bin/eggc emit-c examples/complex/word_freq.egg
+  - name: "eggc check complex/calc.egg"
+    exec: ruby bin/eggc check examples/complex/calc.egg
+
+  # The generated code: programs built by eggc (bench/codspeed/*.egg).
+  - name: "run fib"
+    exec: bench/build/codspeed/fib
+  - name: "run sieve"
+    exec: bench/build/codspeed/sieve
+  - name: "run collatz"
+    exec: bench/build/codspeed/collatz
+  - name: "run matmul"
+    exec: bench/build/codspeed/matmul
+
+
+  # The HTTP servers of bench/http/ against the Egg one (examples/http_server).
+  # http_load starts a server, makes 4 keep-alive connections of 50 GET
+  # requests each, and stops it. Simulation counts the CPU work in user space
+  # (start-up, parsing requests, building responses), not the time in system
+  # calls, so these complement `ruby bench/http.rb`, which measures throughput
+  # with wrk. node is not here: CodSpeed leaves the node binary out of its
+  # measurement. Go's asynchronous preemption signals crash valgrind, hence
+  # GODEBUG=asyncpreemptoff=1.
+  - name: "http egg /index.html"
+    exec: bench/build/codspeed/http_load /index.html 4 50 -- bench/build/codspeed/http-egg
+  - name: "http c /index.html"
+    exec: bench/build/codspeed/http_load /index.html 4 50 -- bench/build/codspeed/http-c
+  - name: "http rust /index.html"
+    exec: bench/build/codspeed/http_load /index.html 4 50 -- bench/build/codspeed/http-rust
+  - name: "http go-pool /index.html"
+    exec: bench/build/codspeed/http_load /index.html 4 50 -- env GODEBUG=asyncpreemptoff=1 bench/build/codspeed/http-go-pool
+  - name: "http go-net/http /index.html"
+    exec: bench/build/codspeed/http_load /index.html 4 50 -- env GODEBUG=asyncpreemptoff=1 bench/build/codspeed/http-go-nethttp
+  - name: "http python /index.html"
+    exec: bench/build/codspeed/http_load /index.html 4 50 -- python3 bench/http/server.py
+  - name: "http egg /10k.bin"
+    exec: bench/build/codspeed/http_load /10k.bin 4 50 -- bench/build/codspeed/http-egg
+  - name: "http c /10k.bin"
+    exec: bench/build/codspeed/http_load /10k.bin 4 50 -- bench/build/codspeed/http-c
+  - name: "http rust /10k.bin"
+    exec: bench/build/codspeed/http_load /10k.bin 4 50 -- bench/build/codspeed/http-rust
+  - name: "http go-pool /10k.bin"
+    exec: bench/build/codspeed/http_load /10k.bin 4 50 -- env GODEBUG=asyncpreemptoff=1 bench/build/codspeed/http-go-pool
+  - name: "http go-net/http /10k.bin"
+    exec: bench/build/codspeed/http_load /10k.bin 4 50 -- env GODEBUG=asyncpreemptoff=1 bench/build/codspeed/http-go-nethttp
+  - name: "http python /10k.bin"
+    exec: bench/build/codspeed/http_load /10k.bin 4 50 -- python3 bench/http/server.py
