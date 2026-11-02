@@ -634,7 +634,7 @@ module Egg
         #endif
         }
       C
-      # A fixed ring of values, shared by the receiver and its senders; the
+      # A fixed ring of values, shared by its receivers and senders; the
       # last of them to close frees it.
       "egg_chan" => <<~C,
         typedef struct {

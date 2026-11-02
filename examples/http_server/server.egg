@@ -1,7 +1,8 @@
 // A small static file server: eggc run server.egg -- ROOT PORT
 // A fixed pool of threads takes connections from a queue, and a logger thread
 // prints what they report. While every thread is busy and the queue is full,
-// the server stops accepting: load cannot make it start more threads.
+// the server accepts one more connection and waits with it: load cannot make
+// it start more threads.
 // An example, not for the open internet: symbolic links are followed out of
 // ROOT.
 uses alloc, args, fs, io, net, thread

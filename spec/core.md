@@ -1598,10 +1598,9 @@ second channel; threads share nothing else.
 
 Owned values cannot be lost: closing the last `Receiver` of a channel that
 still holds owned values panics (`a channel closed with values left in it`),
-and sending once they are all closed panics for any type (`send on a closed
-channel`). Plain values
-left in a closed channel are dropped. Receive until `recv` gives null. A
-channel cannot carry a `?T` or `!T` of an owned T (E133).
+and sending once all its `Receiver`s are closed panics for any type (`send on
+a closed channel`). Plain values left in a closed channel are dropped. Receive
+until `recv` gives null. A channel cannot carry a `?T` or `!T` of an owned T (E133).
 
 ```egg
 // expect: 3
