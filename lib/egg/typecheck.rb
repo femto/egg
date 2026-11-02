@@ -2327,7 +2327,7 @@ module Egg
       chan_type("Receiver", [t], line, col)
     end
 
-    CHAN_METHODS = { "Sender" => %w[send clone close], "Receiver" => %w[recv sender close] }.freeze
+    CHAN_METHODS = { "Sender" => %w[send clone close], "Receiver" => %w[recv sender clone close] }.freeze
 
     def check_chan_method(e, t, name, args, line, col)
       kind = t[0...t.index("(")]
@@ -2345,6 +2345,7 @@ module Egg
       case name
       when "send", "close" then "void"
       when "recv" then opt_type(elem)
+      when "clone" then t
       else chan_type("Sender", [elem], line, col)
       end
     end

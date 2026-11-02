@@ -125,7 +125,7 @@ module Egg
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
-                      egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_send egg_chan_recv
+                      egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_recv
                       egg_chan_tx_close egg_chan_rx_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
@@ -634,7 +634,7 @@ module Egg
         #endif
         }
       C
-      # A fixed ring of values, shared by the receiver and its senders; the
+      # A fixed ring of values, shared by its receivers and senders; the
       # last of them to close frees it.
       "egg_chan" => <<~C,
         typedef struct {
@@ -649,7 +649,7 @@ module Egg
             size_t size;
             /* cap 0 hands each value over: it waits in the one slot, and its
                sender waits until received has counted it. */
-            int64_t cap, slots, head, count, senders, sent, received;
+            int64_t cap, slots, head, count, senders, receivers, sent, received;
             bool open;
         } egg_chan;
         #ifdef _WIN32
@@ -689,6 +689,7 @@ module Egg
             c->head = 0;
             c->count = 0;
             c->senders = 0;
+            c->receivers = 1;
             c->open = true;
             return c;
         }
@@ -711,6 +712,15 @@ module Egg
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
             c->senders += 1;
+            EGG_CHAN_UNLOCK(c);
+            return c;
+        }
+      C
+      "egg_chan_receiver" => <<~C,
+        static void *egg_chan_receiver(void *v) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            c->receivers += 1;
             EGG_CHAN_UNLOCK(c);
             return c;
         }
@@ -777,10 +787,17 @@ module Egg
         static void egg_chan_rx_close(void *v, bool owned) {
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
+            /* Another receiver can still take what is left. */
+            if (c->receivers > 1) {
+                c->receivers -= 1;
+                EGG_CHAN_UNLOCK(c);
+                return;
+            }
             if (owned && c->count > 0) {
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("a channel closed with values left in it");
             }
+            c->receivers = 0;
             c->open = false;
             bool last = c->senders == 0;
             EGG_CHAN_WAKE_ALL(c, writable);
@@ -1264,7 +1281,7 @@ module Egg
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
-                    "egg_chan_sender" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan"],
+                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan"],
                     "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
@@ -1282,7 +1299,7 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
-                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_recv
+                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_recv
                   egg_chan_tx_close
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -2475,6 +2492,8 @@ module Egg
         "#{helper('egg_chan_send')}(#{c}, &#{v})"
       when "Sender.clone", "Receiver.sender"
         hoist("(#{c_type(ret)}){ #{helper('egg_chan_sender')}(#{c}) }", ret)
+      when "Receiver.clone"
+        hoist("(#{c_type(ret)}){ #{helper('egg_chan_receiver')}(#{c}) }", ret)
       when "Sender.close"
         "#{helper('egg_chan_tx_close')}(#{c})"
       when "Receiver.close"

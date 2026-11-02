@@ -1,0 +1,63 @@
+// Several threads take jobs from one channel, each with its own Receiver.
+// Each value goes to one of them, and the results go back on a second channel,
+// since threads share nothing else.
+// expect: 1000 jobs, total 1001000
+// expect: all done
+uses alloc, io, thread
+
+const Worker = owned struct {
+    t: Thread
+
+    fn deinit(sink self: Worker) void {
+        self.t.join()
+        @forget(self)
+    }
+}
+
+fn work(sink jobs: Receiver(Buf(i64)), sink out: Sender(i64), a: Allocator) void {
+    defer jobs.close()
+    defer out.close()
+    while (jobs.recv()) |job| {
+        defer a.free(job)
+        out.send(job[0] * 2)
+    }
+}
+
+// A receiver closed early leaves the values to the others.
+fn quit(sink jobs: Receiver(Buf(i64))) void {
+    jobs.close()
+}
+
+fn feed(sink queue: Sender(Buf(i64)), a: Allocator) void {
+    defer queue.close()
+    var n = 1
+    while (n <= 1000) {
+        queue.send(a.alloc(1, n))
+        n = n + 1
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const jobs = threads.channel(Buf(i64), 2)
+    const results = threads.channel(i64, 2)
+    defer results.close()
+    var pool: Buf(Worker) = .empty
+    defer a.free(pool)
+    const feeder = threads.spawn(feed, jobs.sender(), a)
+    defer feeder.join()
+    var i = 0
+    while (i < 4) {
+        a.push(&pool, Worker{ .t = threads.spawn(work, jobs.clone(), results.sender(), a) })
+        i = i + 1
+    }
+    a.push(&pool, Worker{ .t = threads.spawn(quit, jobs.clone()) })
+    jobs.close()
+    var count = 0
+    var total = 0
+    while (results.recv()) |r| {
+        count = count + 1
+        total = total + r
+    }
+    io.print(count, " jobs, total ", total)
+    io.print("all done")
+}

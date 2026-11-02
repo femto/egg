@@ -1582,7 +1582,7 @@ sender comes from it. Both ends are owned, and only `Threads` makes them.
 
 | Type | Methods |
 | --- | --- |
-| `Receiver(T)` | `rx.recv() ?T`: the next value, waiting for one; null when every sender has closed and nothing is left; `rx.sender() Sender(T)`; `rx.close()` |
+| `Receiver(T)` | `rx.recv() ?T`: the next value, waiting for one; null when every sender has closed and nothing is left; `rx.sender() Sender(T)`; `rx.clone() Receiver(T)`; `rx.close()` |
 | `Sender(T)` | `tx.send(v)`: takes v, waiting while the channel is full (and for the receiver, with n of 0); `tx.clone() Sender(T)`; `tx.close()` |
 
 A value sent moves, so an owned one still has one owner. Values from one
@@ -1590,11 +1590,17 @@ sender arrive in order. A channel with no sender yet gives null, so make
 the senders before receiving, and a thread that keeps a sender it never
 closes makes `recv` wait forever.
 
-Owned values cannot be lost: closing a `Receiver` that still holds owned
-values panics (`a channel closed with values left in it`), and sending once
-it is closed panics for any type (`send on a closed channel`). Plain values
-left in a closed channel are dropped. Receive until `recv` gives null. A
-channel cannot carry a `?T` or `!T` of an owned T (E133).
+A channel can have several receivers: each thread of a pool takes its own
+`rx.clone()`, and each value goes to one of them, whichever is free. Values
+from one sender still leave in order, but what the receivers then do with
+them may finish in any order. To add up results, send them to one thread on a
+second channel; threads share nothing else.
+
+Owned values cannot be lost: closing the last `Receiver` of a channel that
+still holds owned values panics (`a channel closed with values left in it`),
+and sending once all its `Receiver`s are closed panics for any type (`send on
+a closed channel`). Plain values left in a closed channel are dropped. Receive
+until `recv` gives null. A channel cannot carry a `?T` or `!T` of an owned T (E133).
 
 ```egg
 // expect: 3
@@ -1628,6 +1634,41 @@ fn main(io: Io, threads: Threads) void {
         io.print(v)
     }
     t.join()
+}
+```
+
+```egg
+// expect: 30
+uses io, thread
+
+fn double(sink jobs: Receiver(i64), sink out: Sender(i64)) void {
+    defer jobs.close()
+    defer out.close()
+    while (jobs.recv()) |n| {
+        out.send(n * 2)
+    }
+}
+
+fn main(io: Io, threads: Threads) void {
+    const jobs = threads.channel(i64, 4)
+    const queue = jobs.sender()
+    const results = threads.channel(i64, 4)
+    defer results.close()
+    const a = threads.spawn(double, jobs.clone(), results.sender())
+    const b = threads.spawn(double, jobs, results.sender())
+    var n = 1
+    while (n <= 5) {
+        queue.send(n)
+        n = n + 1
+    }
+    queue.close()
+    var total = 0
+    while (results.recv()) |r| {
+        total = total + r
+    }
+    a.join()
+    b.join()
+    io.print(total)
 }
 ```
 

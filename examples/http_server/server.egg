@@ -1,10 +1,22 @@
 // A small static file server: eggc run server.egg -- ROOT PORT
-// Each connection gets a thread; a logger thread prints what they report.
-// An example, not for the open internet: threads are not limited, and
-// symbolic links are followed out of ROOT.
+// A fixed pool of threads takes connections from a queue, and a logger thread
+// prints what they report. While every thread is busy and the queue is full,
+// the server accepts one more connection and waits with it: load cannot make
+// it start more threads.
+// An example, not for the open internet: symbolic links are followed out of
+// ROOT.
 uses alloc, args, fs, io, net, thread
 
 const text = @import("std/text")
+
+const Worker = owned struct {
+    t: Thread
+
+    fn deinit(sink self: Worker) void {
+        self.t.join()
+        @forget(self)
+    }
+}
 
 fn content_type(path: []u8) str {
     if (text.ends_with(path, ".html")) {
@@ -117,11 +129,14 @@ fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), m
     }
 }
 
-fn connection(sink c: TcpConn, files: Fs, a: Allocator, root: str, sink log: Sender(Buf(u8))) void {
-    defer c.close()
+fn work(sink jobs: Receiver(TcpConn), files: Fs, a: Allocator, root: str, sink log: Sender(Buf(u8))) void {
+    defer jobs.close()
     defer log.close()
-    handle(c, files, a, root, log) catch {
-        return
+    while (jobs.recv()) |c| {
+        defer c.close()
+        handle(c, files, a, root, log) catch {
+            continue
+        }
     }
 }
 
@@ -151,10 +166,20 @@ fn main(io: Io, args: Args, files: Fs, net: Net, a: Allocator, threads: Threads)
     const log = rx.sender()
     const printer = threads.spawn(logger, rx, io, a)
     defer printer.join()
-    defer log.close()        // first, or the logger would wait for it forever
+    defer log.close()        // before the join, or the logger would wait for it
+
+    const jobs = threads.channel(TcpConn, 16)
+    const queue = jobs.sender()
+    var pool: Buf(Worker) = .empty
+    defer a.free(pool)       // joins them
+    defer queue.close()      // first: they finish what is queued, and stop
+    var i = 0
+    while (i < 8) {
+        a.push(&pool, Worker{ .t = threads.spawn(work, jobs.clone(), files, a, args.get(1), log.clone()) })
+        i = i + 1
+    }
+    jobs.close()             // the workers have their own
     while (true) {
-        const c = try server.accept()
-        const t = threads.spawn(connection, c, files, a, args.get(1), log.clone())
-        t.detach()
+        queue.send(try server.accept())
     }
 }

@@ -1,0 +1,13 @@
+// Only the last receiver can lose the values left in a channel.
+// panic: a channel closed with values left in it
+uses alloc, thread
+
+fn main(a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 1)
+    const other = rx.clone()
+    const tx = rx.sender()
+    tx.send(a.alloc(1, 0))
+    tx.close()
+    rx.close()
+    other.close()
+}
