@@ -2613,7 +2613,7 @@ module Egg
 
     def viewable?(e)
       case e
-      in Var | Deref then true
+      in Var then true
       in Field | Index | SliceExpr then viewable?(e.obj)
       else false
       end

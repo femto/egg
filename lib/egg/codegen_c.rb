@@ -375,7 +375,9 @@ module Egg
         static void *egg_buf_resize(void *p, int64_t n, size_t size) {
             if (n < 0) egg_panic("negative buffer length");
             if ((uint64_t)n > SIZE_MAX / size) egg_panic("out of memory");
-            void *q = realloc(p, n > 0 ? (size_t)n * size : 1);
+            /* Never 0 bytes. No branch: GCC would warn about a write past the 1. */
+            size_t bytes = (size_t)n * size;
+            void *q = realloc(p, bytes | (size_t)(bytes == 0));
             if (q == NULL) egg_panic("out of memory");
             return q;
         }

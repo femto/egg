@@ -360,8 +360,9 @@ module Egg
       i = @rest.length - 1
       while i >= depth
         later = @rest[i]
-        return true if reads?(later.stmts, name)
-        case later.stmts.last || later.stmt
+        stop = later.stmts.index { |s| jump?(s) }
+        return true if reads?(stop.nil? ? later.stmts : later.stmts[..stop], name)
+        case stop.nil? ? later.stmt : later.stmts[stop]
         in Return then return false
         in Break
           i -= 1 until i < 0 || @rest[i].loop
@@ -372,6 +373,13 @@ module Egg
         end
       end
       false
+    end
+
+    def jump?(stmt)
+      case stmt
+      in Return | Break | Continue then true
+      else false
+      end
     end
 
     # Something changes path: no slice of it may be used afterwards.

@@ -29,6 +29,7 @@ fn jumps(io: Io, a: Allocator) void {
     if (@len(s) == 9) {
         a.free(b)
         return
+        io.print(s)             // never runs
     }
     var i = 0
     while (i < 3) {

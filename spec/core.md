@@ -138,7 +138,7 @@ fn main(io: Io) void {
 | enum `Name` | one of a fixed set of names | section 10 |
 | `union(enum)` `Name` | one member, maybe with a payload | section 10 |
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
-| `[]T` | a view of consecutive T, read-only unless `inout` | parameters only; section 11 |
+| `[]T` | a view of consecutive T, read-only unless `inout` | parameters and local `const`s; section 11 |
 | `!T` | a T or an error | section 13 |
 | `anyerror` | an error: `error.Name` | compared with `==`, switched on, named with `@errorName`; section 13 |
 | `?T` | a T or `null` | section 13 |
@@ -899,7 +899,7 @@ lifetime annotations. An array is not implicitly a slice: pass `a[0..]`
 (E103).
 
 `const s = x[lo..hi]` names a part of a variable, or of a part of one (E116
-for a temporary, or for a slice chosen by an `if`); `const t = s` names a
+for a temporary, a view through a pointer, or a slice chosen by an `if`); `const t = s` names a
 slice again. It is read-only, and it borrows `x` until its last use: while
 `s` is used later, on a path that can really get there, `x` cannot be moved,
 assigned, resized, passed as `inout` or have its elements written (E149).
