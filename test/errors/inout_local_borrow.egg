@@ -1,0 +1,129 @@
+// error: E149 @25
+// error: E149 @32
+// error: E149 @39
+// error: E149 @40
+// error: E149 @46
+// error: E149 @47
+// error: E149 @55
+// error: E149 @63
+// error: E149 @71
+// error: E149 @80
+// error: E149 @89
+// error: E149 @96
+// error: E149 @104
+// error: E149 @112
+// error: E149 @118
+// error: E149 @125
+uses alloc
+fn sum(xs: []i64) i64 { return @len(xs) }
+fn pair() [2]i64 { return [2]i64{ 1, 2 } }
+fn fill(inout xs: []i64) void { xs[0] = 1 }
+
+fn read_while_live() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    const v = x[0]
+    s[0] = v
+    return x[0]
+}
+fn pass_while_live() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    const v = sum(x[0..])
+    s[0] = v
+    return x[0]
+}
+fn const_view_taken_first() i64 {
+    var x = [2]i64{ 1, 2 }
+    const r = x[0..]
+    inout s = &x[0..]
+    s[0] = 1
+    return r[0]
+}
+fn two_writers() i64 {
+    var x = [4]i64{ 1, 2, 3, 4 }
+    inout s = &x[0..2]
+    inout t = &x[2..]
+    s[0] = 1
+    t[0] = 1
+    return x[0]
+}
+fn read_parent_of_reborrow() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    inout t = &s[1..]
+    const v = s[0]
+    t[0] = v
+    return x[0]
+}
+fn write_under_a_read_slice() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    const r = s[0..]
+    s[0] = 2
+    return r[0]
+}
+fn in_a_loop() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    var i = 0
+    while (i < 2) {
+        s[i] = x[0]
+        i = i + 1
+    }
+    return x[0]
+}
+fn in_a_defer() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    defer fill(&s[0..])
+    return x[0]
+}
+const Box = struct {
+    data: [2]i64,
+    fn first(self: Box) i64 { return self.data[0] }
+}
+fn method_on_owner() i64 {
+    var b = Box{ .data = [2]i64{ 1, 2 } }
+    inout s = &b.data[0..]
+    const v = b.first()
+    s[0] = v
+    return s[0]
+}
+fn for_over_owner() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    for (x) |e| {
+        s[0] = e
+    }
+    return s[0]
+}
+fn len_of_owner() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    const n = @len(x)
+    s[0] = n
+    return s[0]
+}
+fn same_call(inout xs: []i64, v: i64) void { xs[0] = v }
+fn write_and_read_owner() i64 {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    same_call(&s[0..], x[0])
+    return s[0]
+}
+fn resize_owner(a: Allocator) void {
+    var b: Buf(i64) = a.alloc(2, 0)
+    inout s = &b[0..]
+    a.push(&b, 1)
+    s[0] = 1
+    a.free(b)
+}
+fn free_owner(a: Allocator) void {
+    var b: Buf(i64) = a.alloc(2, 0)
+    inout s = &b[0..]
+    a.free(b)
+    s[0] = 1
+}
+fn main() void {
+}

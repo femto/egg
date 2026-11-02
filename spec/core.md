@@ -138,7 +138,7 @@ fn main(io: Io) void {
 | enum `Name` | one of a fixed set of names | section 10 |
 | `union(enum)` `Name` | one member, maybe with a payload | section 10 |
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
-| `[]T` | a view of consecutive T, read-only unless `inout` | parameters and local `const`s; section 11 |
+| `[]T` | a view of consecutive T, read-only unless `inout` | parameters and local slices; section 11 |
 | `!T` | a T or an error | section 13 |
 | `anyerror` | an error: `error.Name` | compared with `==`, switched on, named with `@errorName`; section 13 |
 | `?T` | a T or `null` | section 13 |
@@ -893,7 +893,7 @@ bounds-checked; `@len(a)` is N.
 `[]T` is a **slice**: a read-only view of consecutive elements of an array,
 written `a[lo..hi]` or `a[lo..]` (an `inout` slice is writable; section 12). Slices are **second-class** (E116): a
 slice can be a parameter type, an argument, the subject of `for`, or a local
-`const`, and nothing else. It cannot be stored in a `var` or a field, or
+`const` or `inout`, and nothing else. It cannot be stored in a `var` or a field, or
 returned. So a view can never outlive the array it looks into, without any
 lifetime annotations. An array is not implicitly a slice: pass `a[0..]`
 (E103).
@@ -955,6 +955,47 @@ fn main(io: Io, a: Allocator) void {
     const method = line[0..3]
     a.push(&line, '!')          // may move the bytes method looks at
     io.print(method)
+}
+```
+
+`inout s = &x[lo..hi]` is a writable local slice of a var array, a var Buf, or
+a part of one, or of another writable slice (E105 for anything read-only, E116
+for anything but `&x[lo..hi]`). `s[i] = v` writes through it, and `s` itself
+cannot be reassigned (E105); one that is never written should be a `const`
+(E111). It has `x` to itself: at any moment a place has either any number of
+read-only slices or one writable slice. While `s` is used later, everything in
+the rule above is refused, and so is reading `x` in any way, `@len(x)` too
+(E149). A slice taken from `s` goes through it: `s` waits while that slice is
+in use, and is usable again after its last use. Two parts of one array are
+one place, even when their ranges do not overlap; two fields of a struct are
+two places.
+
+```egg
+// expect: 9
+// expect: 5
+uses io
+
+fn main(io: Io) void {
+    var x = [3]i64{ 1, 2, 3 }
+    inout s = &x[1..]
+    s[0] = 4
+    s[1] = 5
+    inout t = &s[0..1]
+    t[0] = 9
+    io.print(s[0])
+    io.print(x[2])              // s is finished with
+}
+```
+
+```egg
+// error: E149
+uses io
+
+fn main(io: Io) void {
+    var x = [3]i64{ 1, 2, 3 }
+    inout s = &x[1..]
+    io.print(x[0])              // s is written below
+    s[0] = 4
 }
 ```
 

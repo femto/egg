@@ -349,9 +349,9 @@ From v1:
 Design choices worth knowing:
 
 - **Slices are second-class**: they exist only as parameters, arguments,
-  `for` subjects and local `const`s, so a view can never outlive its array,
+  `for` subjects and local `const` or `inout` names, so a view can never outlive its array,
   with no lifetime annotations (E116). A local slice borrows its owner until
-  its last use (E149).
+  its last use: many readers or one writer (E149).
 - **Left-to-right evaluation** on every C compiler: each call is evaluated
   into a temporary in source order.
 - **No undefined behaviour**: integer overflow, integer division by zero and
