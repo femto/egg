@@ -1,5 +1,7 @@
 # Egg
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/femto/egg?utm_source=badge)
+
 An AI-native systems language with a core that has no capabilities at all.
 Exceptions, IO and allocation are capability modules a program declares
 on demand, and there is no GC: heap memory is managed by ownership (text a program
@@ -79,6 +81,10 @@ eggc does not yet remove bounds checks from inner loops.
 ruby bench/run.rb          # Egg, C, Rust, Go, Zig
 ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
 ```
+
+[CodSpeed](https://app.codspeed.io/femto/egg) also tracks the compiler's
+speed and smaller versions of these programs on every pull request
+([bench/codspeed/](bench/codspeed/README.md)).
 
 ## Native eggc
 

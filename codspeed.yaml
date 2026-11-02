@@ -1,0 +1,31 @@
+$schema: https://raw.githubusercontent.com/CodSpeedHQ/codspeed/refs/heads/main/schemas/codspeed.schema.json
+
+# Benchmarks measured by CodSpeed (see bench/codspeed/README.md).
+# The `run` benchmarks need `ruby bench/codspeed/build.rb` first.
+
+benchmarks:
+  # The compiler, in one process: lexing, parsing, checking, C generation.
+  - name: "compile examples"
+    exec: ruby bench/codspeed/compile.rb examples
+  - name: "compile examples/complex"
+    exec: ruby bench/codspeed/compile.rb examples/complex
+  - name: "compile http_server"
+    exec: ruby bench/codspeed/compile.rb examples/http_server/server.egg
+  - name: "diagnose test/errors"
+    exec: ruby bench/codspeed/compile.rb test/errors
+
+  # The eggc command line, start-up included.
+  - name: "eggc emit-c complex/word_freq.egg"
+    exec: ruby bin/eggc emit-c examples/complex/word_freq.egg
+  - name: "eggc check complex/calc.egg"
+    exec: ruby bin/eggc check examples/complex/calc.egg
+
+  # The generated code: programs built by eggc (bench/codspeed/*.egg).
+  - name: "run fib"
+    exec: bench/build/codspeed/fib
+  - name: "run sieve"
+    exec: bench/build/codspeed/sieve
+  - name: "run collatz"
+    exec: bench/build/codspeed/collatz
+  - name: "run matmul"
+    exec: bench/build/codspeed/matmul

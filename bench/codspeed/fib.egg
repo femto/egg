@@ -1,0 +1,14 @@
+// Recursive calls and checked additions.
+// A smaller copy of bench/egg/fib.egg for CodSpeed (see bench/codspeed/README.md).
+uses io
+
+fn fib(n: i64) i64 {
+    if (n < 2) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main(io: Io) void {
+    io.print(fib(30))
+}
