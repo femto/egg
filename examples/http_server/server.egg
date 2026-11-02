@@ -158,7 +158,9 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
                 const value = header[@len("Connection:")..]
                 close = close or has_word(value, "close")
                 ask_keep = ask_keep or has_word(value, "keep-alive")
-            } else if (is_header(header, "Content-Length") or is_header(header, "Transfer-Encoding")) {
+            } else if (is_header(header, "Content-Length")) {
+                has_body = has_body or !has_word(header[@len("Content-Length:")..], "0")
+            } else if (is_header(header, "Transfer-Encoding")) {
                 has_body = true
             }
         }

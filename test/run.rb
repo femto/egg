@@ -772,6 +772,12 @@ def check_http_server(dir)
       sock.close
 
       sock = open.()
+      sock.write("GET /note.txt HTTP/1.1\r\nContent-Length: 0\r\n\r\n" + get11)
+      one = answer.(sock)
+      report(one && one[0].include?("Connection: keep-alive") && answer.(sock), "http keeps open after an empty body", one.inspect)
+      sock.close
+
+      sock = open.()
       sock.write("POST / HTTP/1.1\r\n\r\nGET /index.html HTTP/1.1\r\n\r\n")
       one = answer.(sock)
       report(one && one[0].include?(" 405 ") && closed.(sock), "http closes after a method it refuses", one.inspect)
