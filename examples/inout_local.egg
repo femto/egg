@@ -1,0 +1,80 @@
+// A local slice can be writable: `inout s = &x[lo..hi]`. It has x to itself
+// until its last use, and then x can be read and changed again.
+// expect: 16
+// expect: 2
+// expect: 9
+// expect: 7
+// expect: 2
+// expect: 0
+// expect: 33
+uses io, alloc
+
+fn fill(inout xs: []i64, v: i64) void {
+    var i = 0
+    while (i < @len(xs)) {
+        xs[i] = v
+        i = i + 1
+    }
+}
+
+fn sum(xs: []i64) i64 {
+    var total = 0
+    for (xs) |x| {
+        total = total + x
+    }
+    return total
+}
+
+const Pair = struct {
+    left: [2]i64
+    right: [2]i64
+}
+
+fn main(io: Io, a: Allocator) void {
+    var x = [4]i64{ 1, 2, 3, 4 }
+    inout s = &x[1..3]
+    s[0] = 7
+    s[1] = 8
+    s[0] = s[1]
+    s[0] = 7
+    fill(&s[1..], 9)
+    io.print(s[0] + s[1])
+
+    // a slice of a slice goes through it, and hands it back at its last use
+    inout t = &s[1..]
+    t[0] = 2
+    io.print(t[0])
+    s[1] = 9
+    const r = s[0..]
+    io.print(r[1])
+    io.print(x[1])
+
+    // declared in a loop, it ends with each round
+    var i = 0
+    while (i < 2) {
+        const before = x[0]
+        inout w = &x[0..]
+        w[0] = before
+        i = i + 1
+    }
+
+    // a read-only slice of w only reads, so x can be read beside it
+    inout w = &x[0..]
+    w[0] = 1
+    const seen = w[0..]
+    io.print(x[0] + seen[0])
+
+    // the other field is not borrowed
+    var p = Pair{ .left = [2]i64{ 0, 0 }, .right = [2]i64{ 0, 0 } }
+    inout l = &p.left[0..]
+    p.right[0] = 3
+    l[0] = p.right[1]
+    io.print(l[0])
+
+    var b: Buf(i64) = a.alloc(3, 11)
+    defer a.free(b)
+    inout v = &b[0..]
+    fill(&v[0..], 11)
+    a.push(&b, 0)
+    io.print(sum(b[0..3]))
+}

@@ -466,7 +466,7 @@ module Egg
         end
         r = resolve_type(f.ret, f.line, f.col)
         if r.start_with?("[]")
-          err("E116", "a function cannot return a slice; slices exist only as parameters and local constants", f.line, f.col)
+          err("E116", "a function cannot return a slice; slices exist only as parameters and local slices", f.line, f.col)
         elsif r == "type"
           err("E120", "only a type function (`fn Name(comptime T: type) type`) returns 'type'", f.line, f.col)
         end
@@ -651,7 +651,7 @@ module Egg
           err("E108", "a field cannot have type #{t}", f.line, f.col)
           t = "error"
         elsif t.start_with?("[]")
-          err("E116", "a struct cannot hold a slice; slices exist only as parameters and local constants", f.line, f.col)
+          err("E116", "a struct cannot hold a slice; slices exist only as parameters and local slices", f.line, f.col)
           t = "error"
         elsif owned_err?(t)
           err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
@@ -1020,7 +1020,7 @@ module Egg
 
     def value_type_error(t, what, line, col)
       if t.start_with?("[]")
-        err("E116", "#{what} cannot be a slice; slices exist only as parameters and local constants", line, col)
+        err("E116", "#{what} cannot be a slice; slices exist only as parameters and local slices", line, col)
       else
         err("E108", "#{what} cannot have type #{t}", line, col)
       end
@@ -1140,12 +1140,26 @@ module Egg
           err("E110", "local variable '#{name}' is never used", info.line, info.col)
         elsif info.mutable && !info.mutated
           err("E111", "local variable '#{name}' is never reassigned; declare it with 'const'", info.line, info.col)
+        elsif info.inout && !info.mutated
+          err("E111", "local slice '#{name}' is never written; declare it with 'const'", info.line, info.col)
         end
       end
     end
 
     def check_stmt(stmt)
       case stmt
+      in VarDecl[name:, type:, value: AddrOf[expr: SliceExpr => view], line:, col:, inout: true]
+        declared = type.nil? ? nil : resolve_type(type, line, col)
+        ty = check_mut_slice(view)
+        expect_type(declared, ty, view) unless declared.nil?
+        stmt.value = view
+        stmt.ty = ty
+        declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true))
+      in VarDecl[name:, value:, line:, col:, inout: true]
+        check_expr(value)
+        err("E116", "an inout local is a writable slice: `inout #{name} = &x[lo..hi]`, of a variable", line, col)
+        stmt.ty = "error"
+        declare(name, VarInfo.new("error", true, true, true, line, col, false, false))
       in VarDecl[name:, mutable:, type:, value:, line:, col:]
         declared = type.nil? ? nil : resolve_type(type, line, col)
         vt = value.is_a?(SliceExpr) ? check_slice_arg(value, declared) : check_expr(value, declared)
@@ -1175,7 +1189,7 @@ module Egg
           else
             vt = check_expr(value, info.type)
             if info.inout && info.type.start_with?("[]")
-              err("E105", "cannot assign to slice parameter '#{name}': only its elements can change (#{name}[i] = v)", line, col)
+              err("E105", "cannot assign to slice '#{name}': only its elements can change (#{name}[i] = v)", line, col)
             elsif !info.mutable
               what = info.param ? "parameter" : "constant"
               err("E105", "cannot assign to #{what} '#{name}'", line, col)
@@ -1413,8 +1427,8 @@ module Egg
           e.ty = "error"
           return "error"
         end
-        if mut_slice_param?(e)
-          err("E105", "cannot #{verb} slice parameter '#{name}': only its elements can change (#{name}[i] = v)", line, col)
+        if mut_slice?(e)
+          err("E105", "cannot #{verb} slice '#{name}': only its elements can change (#{name}[i] = v)", line, col)
         elsif !info.mutable
           what = info.param ? "parameter" : "constant"
           err("E105", "cannot #{verb} #{what} '#{name}'", line, col)
@@ -1431,13 +1445,15 @@ module Egg
         e.info = {}
         e.ty
       in Index[obj:, index:, line:, col:]
-        writable = mut_slice_param?(obj)
+        writable = mut_slice?(obj)
         t = slice_var?(obj) ? check_expr(obj) : check_lvalue(obj, verb)
         expect_type("i64", check_expr(index), index)
         if t == "str"
           err("E105", "cannot #{verb} an element of a str: it is read-only", line, col)
         elsif t.start_with?("[]") && !writable
-          err("E105", "cannot #{verb} an element of a read-only slice; declare the parameter `inout #{root_name(obj) || 'xs'}: #{t}` and pass &x[lo..hi]", line, col)
+          err("E105", "cannot #{verb} an element of a read-only slice; declare the parameter `inout #{root_name(obj) || 'xs'}: #{t}` and pass &x[lo..hi], or name it with `inout s = &x[lo..hi]`", line, col)
+        elsif writable
+          lookup(obj.name).mutated = true
         end
         e.ty = index_type(t, line, col)
         e.info = { len: @types[t]&.len }
@@ -1460,9 +1476,9 @@ module Egg
       end
     end
 
-    # An `inout xs: []T` parameter: its elements can be written, but xs
-    # itself is a view and cannot be reassigned.
-    def mut_slice_param?(e)
+    # An `inout xs: []T` parameter or `inout s = &x[lo..hi]` local: its
+    # elements can be written, but it is a view and cannot be reassigned.
+    def mut_slice?(e)
       slice_var?(e) && lookup(e.name).inout
     end
 
@@ -1472,8 +1488,8 @@ module Egg
       !info.nil? && info.type.start_with?("[]")
     end
 
-    # &x[lo..hi] lent to an `inout []T` parameter: a writable view of a
-    # var array, a var or inout Buf, or an inout slice.
+    # &x[lo..hi] lent to an `inout []T` parameter or named by an inout local:
+    # a writable view of a var array, a var or inout Buf, or an inout slice.
     def check_mut_slice(s)
       s.info = {}
       obj = s.obj
@@ -1489,10 +1505,11 @@ module Egg
       elsif info.nil? || !%i[array slice buf].include?(info.kind)
         err("E103", "cannot slice a #{t}", s.line, s.col)
         return(s.ty = "error")
-      elsif info.kind == :slice && !mut_slice_param?(obj)
+      elsif info.kind == :slice && !mut_slice?(obj)
         err("E105", "cannot lend a mutable slice of a read-only slice", s.line, s.col)
         return(s.ty = "error")
       end
+      lookup(obj.name).mutated = true if info.kind == :slice
       s.info[:len] = info.len
       canon = "[]#{info.elem}"
       register(canon, :slice, s.line, s.col).elem = info.elem
@@ -2598,7 +2615,7 @@ module Egg
         return "error"
       end
       unless @slice_ok
-        err("E116", "a slice can only be passed directly as an argument; slices exist only as parameters and local constants", line, col)
+        err("E116", "a slice can only be passed directly as an argument; slices exist only as parameters and local slices", line, col)
         return "error"
       end
       canon = "[]#{info.elem}"

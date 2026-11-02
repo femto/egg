@@ -1,0 +1,46 @@
+// error: E116 @39
+// error: E116 @13
+// error: E105 @14
+// error: E121 @21
+// error: E105 @21
+// error: E105 @24
+// error: E111 @30
+// error: E105 @35
+// error: E111 @40
+fn pair() [2]i64 { return [2]i64{ 1, 2 } }
+
+fn not_a_view() void {
+    inout a = 5
+    inout b = &pair()[0..]
+    a[0] = 1
+    b[0] = 1
+}
+fn no_rebind() void {
+    var x = [2]i64{ 1, 2 }
+    inout s = &x[0..]
+    s = &x[1..]
+    s[0] = 1
+    const y = [2]i64{ 1, 2 }
+    inout t = &y[0..]
+    t[0] = 1
+}
+fn never_written() i64 {
+    var x = [2]i64{ 1, 2 }
+    x[0] = 3
+    inout s = &x[0..]
+    return s[0]
+}
+fn read_only_source(xs: []i64) i64 {
+    const r = xs[0..]
+    inout s = &r[0..]
+    s[0] = 1
+    return xs[0]
+}
+fn no_return(inout xs: []i64) []i64 {
+    inout s = &xs[0..]
+    return s
+}
+fn main() void {
+    no_rebind()
+    not_a_view()
+}

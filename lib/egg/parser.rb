@@ -318,7 +318,7 @@ module Egg
 
     def parse_stmt
       t = cur
-      if kw?("var") || kw?("const")
+      if kw?("var") || kw?("const") || kw?("inout")
         parse_var_decl
       elsif kw?("return")
         advance
@@ -395,7 +395,7 @@ module Egg
       expect_op("=")
       skip_nl
       value = parse_expr
-      VarDecl.new(name.text, mutable, type, value, name.line, name.col, nil)
+      VarDecl.new(name.text, mutable, type, value, name.line, name.col, nil, t.text == "inout")
     end
 
     def parse_if

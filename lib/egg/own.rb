@@ -1,3 +1,5 @@
+require "set"
+
 # Ownership check (linear buffers).
 #
 # A Buf(T) has exactly one owner, and so does a struct or array holding
@@ -45,7 +47,8 @@
 # A local slice (`const s = b[lo..hi]`) borrows the place it views until its
 # last use, not to the end of its block: while s is used later, b cannot be
 # moved, assigned, resized or passed as inout, nor its elements written
-# (E149). Later means the rest of each enclosing block, a loop around the
+# (E149). A writable one (`inout s = &b[lo..hi]`) is exclusive: while s is used
+# later, b cannot be read either, except through s or a slice of s. Later means the rest of each enclosing block, a loop around the
 # slice, and the defers still to run, on the paths that really go there: code
 # ending in return, break or continue does not reach what it jumps past.
 #
@@ -100,6 +103,7 @@ module Egg
       @file = @checker.modules[sig.func.mod || ""].file
       @frames = [Frame.new([], [], [])]
       @slices = {}
+      @slice_errs = Set.new
       @rest = []
       @now = nil
       @stmt = nil
@@ -318,7 +322,8 @@ module Egg
     # ---- local slices ----------------------------------------------------
 
     # A local slice borrows what it views until its last use. @slices: its
-    # name -> [the path it views, how deep in @rest it was declared].
+    # name -> [the path it views, how deep in @rest it was declared, whether
+    # it is writable, the slice it was taken from].
 
     def place_path(e)
       case e
@@ -332,11 +337,29 @@ module Egg
       end
     end
 
-    def declare_slice(name, value)
+    def declare_slice(name, value, writable)
       path = place_path(value)
       return if path.nil?
-      @slices[name] = [path, @rest.length - 1]
+      @slices[name] = [path, @rest.length - 1, writable, place_root(value)]
       @frames.last.slices << name
+    end
+
+    def place_root(e)
+      case e
+      in Var[name:] then name
+      in Field | Index | SliceExpr then place_root(e.obj)
+      else nil
+      end
+    end
+
+    # The slices name goes through: itself, and those it was taken from.
+    def views_of(name)
+      out = []
+      while @slices.key?(name)
+        out << name
+        name = @slices[name][3]
+      end
+      out
     end
 
     # Does this node, or anything in it, read the variable name?
@@ -382,12 +405,34 @@ module Egg
       end
     end
 
-    # Something changes path: no slice of it may be used afterwards.
-    def check_slices(path, line, col, what)
+    # Something changes path: no slice of it may be used afterwards, except
+    # the ones the change goes through (by: the variable it starts from).
+    def check_slices(path, line, col, what, by = nil)
       return if path.nil?
+      through = views_of(by)
       @slices.each do |name, (viewed, depth)|
+        next if through.include?(name)
         next unless overlap?(viewed, path) && live?(name, depth)
-        err("E149", "'#{path}' cannot be #{what} here: the slice '#{name}' of it is used later", line, col)
+        slice_err("'#{path}' cannot be #{what} here: the slice '#{name}' of it is used later", line, col)
+      end
+    end
+
+    # One report for one place: a.free(b) both reads b and moves it.
+    def slice_err(msg, line, col)
+      return unless @slice_errs.add?([line, col])
+      err("E149", msg, line, col)
+    end
+
+    # A read of e: no other way in may write what it reads while it is used.
+    def check_read(e)
+      return unless @slices.any? { |_, s| s[2] }
+      path = place_path(e)
+      return if path.nil?
+      through = views_of(place_root(e))
+      @slices.each do |name, (viewed, depth, writable)|
+        next if !writable || through.include?(name)
+        next unless overlap?(viewed, path) && live?(name, depth)
+        slice_err("'#{path}' cannot be read here: the writable slice '#{name}' of it is used later", e.line, e.col)
       end
     end
 
@@ -407,12 +452,14 @@ module Egg
 
     def walk_stmt(stmt)
       case stmt
-      in VarDecl[name:, value:, line:, col:, ty:]
+      in VarDecl[name:, value:, line:, col:, ty:, inout:]
+        check_slices(place_path(value), line, col, "lent as a writable slice", place_root(value)) if inout
+        @read_whole = value.obj if inout # judged just above
         walk(value, value.is_a?(SliceExpr) || ty.start_with?("[]"))
         declare(name, :local, line, col, ty) if owned?(ty)
-        declare_slice(name, value) if ty.start_with?("[]")
+        declare_slice(name, value, inout == true) if ty.start_with?("[]")
       in Assign[name:, value:, line:, col:, target:]
-        check_slices(target.nil? ? name : place_path(target), line, col, "assigned")
+        check_slices(target.nil? ? name : place_path(target), line, col, "assigned", target.nil? ? nil : place_root(target))
         if target.nil?
           walk(value)
           assign_path(name, line, col) if @decl.key?(name) && !@st.nil?
@@ -679,6 +726,10 @@ module Egg
     # borrow: e is only looked at (b[i], @len(b), for (b)), not moved.
     def walk(e, borrow = false)
       return if @st.nil?
+      if e.is_a?(Var) || e.is_a?(Field)
+        check_read(e) unless @read_whole.equal?(e)
+        @read_whole = e.obj if e.is_a?(Field) # v.f does not read all of v
+      end
       case e
       in Var[name:, line:, col:]
         use(name, line, col, borrow) if @decl.key?(name) && owned?(e.ty)
@@ -705,7 +756,7 @@ module Egg
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
-            check_slices(place_path(obj), obj.line, obj.col, "changed")
+            check_slices(place_path(obj), obj.line, obj.col, "changed", place_root(obj))
             check_inout_arg(obj, info[:sig], 0, obj.line, obj.col)
             walk_place(obj)
           else
@@ -723,13 +774,13 @@ module Egg
         path.nil? ? walk(args[0]) : forget(path, line, col)
       in Builtin[name: "replace" | "take" => name, args:, line:, col:]
         place = args[0].expr
-        check_slices(place_path(place), line, col, "changed")
+        check_slices(place_path(place), line, col, "changed", place_root(place))
         check_elem_change(place, line, col, name == "take" ? "taken from" : "replaced")
         walk_place(place)
         walk(args[1]) if name == "replace"
       in Builtin[name: "swap", args:, line:, col:]
         args[0].info[:places].each do |p|
-          check_slices(place_path(p), line, col, "changed")
+          check_slices(place_path(p), line, col, "changed", place_root(p))
           check_elem_change(p, line, col, "swapped")
         end
         walk_place(args[0].expr)
@@ -813,7 +864,7 @@ module Egg
       shift = callee.nil? || callee.params.length == args.length ? 0 : 1
       args.each_with_index do |a, i|
         if a.is_a?(AddrOf)
-          check_slices(place_path(a.expr), a.line, a.col, "changed")
+          check_slices(place_path(a.expr), a.line, a.col, "changed", place_root(a.expr))
           # inout: the callee may replace or resize what its summary says
           check_inout_arg(a.expr, callee, i + shift, a.line, a.col) unless a.expr.is_a?(SliceExpr)
           walk_place(a.expr)

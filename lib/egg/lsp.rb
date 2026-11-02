@@ -254,9 +254,9 @@ module Egg
 
       def walk_stmt(stmt)
         case stmt
-        in VarDecl[name:, mutable:, value:, line:, col:, ty:]
+        in VarDecl[name:, mutable:, value:, line:, col:, ty:, inout:]
           walk_expr(value) # the value cannot see the name being declared
-          kw = mutable ? "var" : "const"
+          kw = inout ? "inout" : mutable ? "var" : "const"
           declare(Decl.new(:local, name, line, col, "#{kw} #{name}: #{ty}", nil, nil))
         in Assign[name:, value:, line:, col:, target:]
           if target.nil?

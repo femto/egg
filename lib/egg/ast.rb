@@ -51,7 +51,7 @@ module Egg
   StructTypeExpr = Struct.new(:members, :fns, :line, :col, :ty, :info)
 
   # ---- statements --------------------------------------------------------
-  VarDecl  = Struct.new(:name, :mutable, :type, :value, :line, :col, :ty) # :ty filled by the checker
+  VarDecl  = Struct.new(:name, :mutable, :type, :value, :line, :col, :ty, :inout) # :ty filled by the checker; inout: a writable local slice
   # name: the variable assigned, or the root variable of target
   # target: nil for `x = v`; a Field/Index expression for `p.x = v`, `a[i] = v`
   Assign   = Struct.new(:name, :value, :line, :col, :target)
