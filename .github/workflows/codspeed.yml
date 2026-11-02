@@ -23,9 +23,12 @@ jobs:
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
         with:
           ruby-version: "3.3"
+      # The HTTP servers also need cc, rustc and go, which ubuntu-latest has.
       - name: Build the benchmark programs
         run: ruby bench/codspeed/build.rb
       # Runs the benchmarks listed in codspeed.yaml.
       - uses: CodSpeedHQ/action@61efe07e57e55bedeab750c434504de272a56e8c # v5.6.1
         with:
           mode: simulation
+          # The HTTP benchmarks: http_load starts the server it measures.
+          simulation-track-subprocess: true

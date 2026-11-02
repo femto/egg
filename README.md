@@ -83,7 +83,8 @@ ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
 ```
 
 [CodSpeed](https://app.codspeed.io/femto/egg) also tracks the compiler's
-speed and smaller versions of these programs on every pull request
+speed, smaller versions of these programs and the CPU cost per request of
+the HTTP servers on every pull request
 ([bench/codspeed/](bench/codspeed/README.md)).
 
 ## Native eggc
