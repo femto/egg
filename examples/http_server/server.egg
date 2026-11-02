@@ -1,8 +1,10 @@
 // A small static file server: eggc run server.egg -- ROOT PORT
-// A fixed pool of threads takes connections from a queue, and a logger thread
+// HTTP/1.1 with keep-alive. A fixed pool of threads takes connections from a
+// queue, and a logger thread
 // prints what they report. While every thread is busy and the queue is full,
 // the server accepts one more connection and waits with it: load cannot make
-// it start more threads.
+// it start more threads. A connection holds its thread while it is open, so
+// it may idle for 2 seconds and make 100 requests.
 // An example, not for the open internet: symbolic links are followed out of
 // ROOT.
 uses alloc, args, fs, io, net, thread
@@ -55,69 +57,144 @@ fn plain(s: []u8) bool {
     return true
 }
 
-fn respond(c: TcpConn, a: Allocator, status: str, kind: str, body: []u8) !void {
+fn lower(c: u8) u8 {
+    if (c >= 'A' and c <= 'Z') {
+        return c + 32
+    }
+    return c
+}
+
+// Header names and the words of Connection have no case.
+fn same(s: []u8, word: str) bool {
+    if (@len(s) != @len(word)) {
+        return false
+    }
+    var i = 0
+    while (i < @len(s)) {
+        if (lower(s[i]) != lower(word[i])) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn is_header(line: []u8, name: str) bool {
+    const n = @len(name)
+    return @len(line) > n and line[n] == ':' and same(line[0..n], name)
+}
+
+// Is word one of the comma-separated words of list?
+fn has_word(list: []u8, word: str) bool {
+    var i = 0
+    while (i <= @len(list)) {
+        const end = text.find_from(list, ",", i) orelse @len(list)
+        var lo = i
+        var hi = end
+        while (lo < hi and (list[lo] == ' ' or list[lo] == '\t')) {
+            lo = lo + 1
+        }
+        while (hi > lo and (list[hi - 1] == ' ' or list[hi - 1] == '\t')) {
+            hi = hi - 1
+        }
+        if (same(list[lo..hi], word)) {
+            return true
+        }
+        i = end + 1
+    }
+    return false
+}
+
+fn respond(c: TcpConn, a: Allocator, status: str, kind: str, body: []u8, keep: bool) !void {
     const size = a.int_str(@len(body))
     defer a.free(size)
-    const head = a.concat("HTTP/1.0 ", status, "\r\nContent-Type: ", kind, "\r\nContent-Length: ", size, "\r\nConnection: close\r\n\r\n")
+    const connection = if (keep) "keep-alive" else "close"
+    const head = a.concat("HTTP/1.1 ", status, "\r\nContent-Type: ", kind, "\r\nContent-Length: ", size, "\r\nConnection: ", connection, "\r\n\r\n")
     defer a.free(head)
     try c.write(head)
     try c.write(body)
 }
 
-fn serve_file(c: TcpConn, files: Fs, a: Allocator, root: str, path: []u8) !i64 {
+fn serve_file(c: TcpConn, files: Fs, a: Allocator, root: str, path: []u8, keep: bool) !i64 {
     const full = a.concat(root, path)
     defer a.free(full)
     const body = files.read(a, full) catch |e| {
         if (e == error.NotFound or e == error.IsDirectory) {
-            try respond(c, a, "404 Not Found", "text/plain", "not found\n")
+            try respond(c, a, "404 Not Found", "text/plain", "not found\n", keep)
             return 404
         }
-        try respond(c, a, "500 Internal Server Error", "text/plain", "cannot read\n")
+        try respond(c, a, "500 Internal Server Error", "text/plain", "cannot read\n", keep)
         return 500
     }
     defer a.free(body)
-    try respond(c, a, "200 OK", content_type(path), body)
+    try respond(c, a, "200 OK", content_type(path), body, keep)
     return 200
 }
 
 fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) !void {
-    try c.set_timeout(5000)
     var line: Buf(u8) = .empty
     defer a.free(line)
-    if (!try c.read_line_max(a, &line, 8192)) {
-        return
-    }
     var header: Buf(u8) = .empty
     defer a.free(header)
-    while (try c.read_line_max(a, &header, 8192)) {
-        if (@len(header) == 0) {
-            break
+    var served = 0
+    while (served < 100) {
+        try c.set_timeout(2000)
+        if (!try c.read_line_max(a, &line, 8192)) {
+            return
+        }
+        try c.set_timeout(5000)
+        served = served + 1
+        var close = false
+        var ask_keep = false
+        var has_body = false
+        while (true) {
+            if (!try c.read_line_max(a, &header, 8192)) {
+                return
+            }
+            if (@len(header) == 0) {
+                break
+            }
+            if (is_header(header, "Connection")) {
+                const value = header[@len("Connection:")..]
+                close = close or has_word(value, "close")
+                ask_keep = ask_keep or has_word(value, "keep-alive")
+            } else if (is_header(header, "Content-Length") or is_header(header, "Transfer-Encoding")) {
+                has_body = true
+            }
+        }
+        const space = text.find(line, " ") orelse {
+            return respond(c, a, "400 Bad Request", "text/plain", "bad request\n", false)
+        }
+        const end = text.find_from(line, " ", space + 1) orelse {
+            return respond(c, a, "400 Bad Request", "text/plain", "bad request\n", false)
+        }
+        const stop = text.find_from(line[0..end], "?", space + 1) orelse end
+        const method = line[0..space]
+        const path = line[space + 1..stop]
+        const wanted = text.ends_with(line, " HTTP/1.1") or ask_keep
+        // A body nobody reads would be taken for the next request.
+        const keep = wanted and !close and !has_body and method == "GET" and served < 100
+        try route(c, files, a, root, log, method, path, keep)
+        if (!keep) {
+            return
         }
     }
-    const space = text.find(line, " ") orelse {
-        return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
-    }
-    const end = text.find_from(line, " ", space + 1) orelse {
-        return respond(c, a, "400 Bad Request", "text/plain", "bad request\n")
-    }
-    const stop = text.find_from(line[0..end], "?", space + 1) orelse end
-    try route(c, files, a, root, log, line[0..space], line[space + 1..stop])
 }
 
-fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), method: []u8, path: []u8) !void {
+fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), method: []u8, path: []u8, keep: bool) !void {
     var status = 400
     if (method != "GET") {
         status = 405
-        try respond(c, a, "405 Method Not Allowed", "text/plain", "only GET\n")
+        try respond(c, a, "405 Method Not Allowed", "text/plain", "only GET\n", keep)
     } else if (!safe(path)) {
         status = 403
-        try respond(c, a, "403 Forbidden", "text/plain", "forbidden\n")
+        try respond(c, a, "403 Forbidden", "text/plain", "forbidden\n", keep)
     } else if (text.ends_with(path, "/")) {
         const index = a.concat(path, "index.html")
         defer a.free(index)
-        status = try serve_file(c, files, a, root, index)
+        status = try serve_file(c, files, a, root, index, keep)
     } else {
-        status = try serve_file(c, files, a, root, path)
+        status = try serve_file(c, files, a, root, path, keep)
     }
     const code = a.int_str(status)
     defer a.free(code)
