@@ -30,6 +30,7 @@ take = lambda do |flag, default|
 end
 runs = take.("--runs", 3)
 seconds = take.("--seconds", 5)
+abort "--runs and --seconds must be at least 1" if runs < 1 || seconds < 1
 
 abort "bench/http.rb needs wrk" unless system("command -v wrk >/dev/null")
 FileUtils.mkdir_p(File.join(OUT, "www"))
@@ -89,7 +90,8 @@ end
 
 def wrk(port, conns, path, seconds)
   threads = conns > 8 ? 4 : 2
-  out, = Open3.capture2e("wrk", "-t#{threads}", "-c#{conns}", "-d#{seconds}s", "--latency", "http://127.0.0.1:#{port}#{path}")
+  out, status = Open3.capture2e("wrk", "-t#{threads}", "-c#{conns}", "-d#{seconds}s", "--latency", "http://127.0.0.1:#{port}#{path}")
+  abort "wrk failed:\n#{out}" unless status.success? && out.match?(%r{Requests/sec:})
   { rps: out[%r{Requests/sec:\s+([\d.]+)}, 1].to_f,
     p50: seconds_of(out[/^\s+50%\s+(\S+)/, 1].to_s),
     p99: seconds_of(out[/^\s+99%\s+(\S+)/, 1].to_s),
@@ -97,10 +99,9 @@ def wrk(port, conns, path, seconds)
     bad: out[/Non-2xx or 3xx responses: (\d+)/, 1].to_i }
 end
 
-def rss_kb(pid) = `ps -o rss= -p #{pid}`.to_i
-
-def wait_for(port)
+def wait_for(pid, port)
   100.times do
+    return false unless Process.wait(pid, Process::WNOHANG).nil?
     TCPSocket.new("127.0.0.1", port).close
     return true
   rescue SystemCallError
@@ -116,22 +117,27 @@ port = 19_000
   next warn("#{name}: skipped") if cmd.nil?
   port += 1
   pid = spawn(*cmd, File.join(OUT, "www"), port.to_s, out: File::NULL, err: File::NULL)
-  abort "#{name} did not start" unless wait_for(port)
-  peak = 0
-  TESTS.each do |conns, path|
-    samples = (1..runs).map do
-      r = wrk(port, conns, path, seconds)
-      peak = [peak, rss_kb(pid)].max
-      sleep 2
-      r
+  begin
+    unless wait_for(pid, port)
+      pid = nil
+      abort "#{name} did not start"
     end
-    mid = samples.sort_by { |s| s[:rps] }[samples.length / 2]
-    results[[name, conns, path]] = mid
-    warn format("%-12s c=%-3d %-12s %9.0f rps  p50 %8.2f ms  p99 %8.2f ms  errors %d  non-2xx %d", name, conns, path, mid[:rps], mid[:p50], mid[:p99], mid[:errors], mid[:bad])
+    TESTS.each do |conns, path|
+      samples = (1..runs).map do
+        r = wrk(port, conns, path, seconds)
+        sleep 2
+        r
+      end
+      mid = samples.sort_by { |s| s[:rps] }[samples.length / 2]
+      results[[name, conns, path]] = mid
+      warn format("%-12s c=%-3d %-12s %9.0f rps  p50 %8.2f ms  p99 %8.2f ms  errors %d  non-2xx %d", name, conns, path, mid[:rps], mid[:p50], mid[:p99], mid[:errors], mid[:bad])
+    end
+  ensure
+    unless pid.nil?
+      Process.kill("KILL", pid)
+      Process.wait(pid)
+    end
   end
-  warn "#{name}: peak rss #{peak / 1024} MB"
-  Process.kill("KILL", pid)
-  Process.wait(pid)
   sleep 3
 end
 

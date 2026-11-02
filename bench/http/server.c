@@ -139,7 +139,7 @@ static void handle(conn *c) {
         }
         char *space = strchr(line, ' ');
         char *end = space == NULL ? NULL : strchr(space + 1, ' ');
-        if (end == NULL) return;
+        if (end == NULL || end == space + 1) return;
         *space = 0;
         *end = 0;
         int keep = !close_it && strcmp(end + 1, "HTTP/1.1") == 0 && served < 100;

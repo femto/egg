@@ -89,11 +89,15 @@ each request. `go-net/http` and `node` are those languages' usual servers,
 without these limits. It needs `wrk`, which runs on the same machine, so the
 numbers compare servers and are not their ceilings.
 
+Everything in `bench/http/` is a load-test fixture for `wrk` on loopback, not
+an example to copy: only the Egg server checks methods, paths, queries and
+request framing. That work gives the others a small head start.
+
 2026-11-02, Intel i7-9700K, macOS 14, over loopback. Requests per second,
 median of 3 runs of 5 seconds, with that run's p99 latency. p99 varies a lot
 between runs for the pool servers.
 
-| server | 12 B, 8 conns | 12 B, 64 conns | 10 KB, 8 conns | 1 MB, 8 conns |
+| server | 12 B response, 8 conns | 12 B response, 64 conns | 10 KiB response, 8 conns | 1 MiB response, 8 conns |
 | --- | ---: | ---: | ---: | ---: |
 | egg | 66800 (48 ms) | 54169 (297 ms) | 54409 (281 ms) | 3040 (89 ms) |
 | c | 65999 (21 ms) | 59662 (181 ms) | 54978 (104 ms) | 3688 (97 ms) |
