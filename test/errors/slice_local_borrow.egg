@@ -1,0 +1,91 @@
+// error: E149 @16
+// error: E149 @23
+// error: E149 @31
+// error: E149 @42
+// error: E149 @52
+// error: E149 @60
+// error: E149 @68
+// error: E149 @81
+// error: E149 @87
+uses alloc, io
+
+fn pushed(io: Io, a: Allocator) void {
+    var b = a.concat("x", "y")
+    defer a.free(b)
+    const s = b[0..1]
+    a.push(&b, 'z')
+    io.print(s)
+}
+
+fn freed(io: Io, a: Allocator) void {
+    const b = a.concat("x", "y")
+    const s = b[0..1]
+    a.free(b)
+    io.print(s)
+}
+
+fn written(io: Io, a: Allocator) void {
+    var b = a.concat("x", "y")
+    defer a.free(b)
+    const s = b[0..]
+    b[0] = 'q'
+    io.print(s)
+}
+
+fn looped(io: Io, a: Allocator) void {
+    var b = a.concat("x", "y")
+    defer a.free(b)
+    const s = b[0..]
+    var i = 0
+    while (i < 2) {
+        io.print(s)
+        a.push(&b, 'z')
+        i = i + 1
+    }
+}
+
+fn nested(io: Io, a: Allocator) void {
+    var b = a.concat("x", "y")
+    defer a.free(b)
+    const s = b[0..]
+    const t = s[1..]
+    a.push(&b, 'z')
+    io.print(t)
+}
+
+fn deferred(io: Io, a: Allocator) void {
+    const b = a.concat("x", "y")
+    const s = b[0..]
+    defer io.print(s)
+    a.free(b)
+}
+
+fn jumped_around(io: Io, a: Allocator) void {
+    const b = a.concat("x", "y")
+    const s = b[0..]
+    if (@len(b) == 9) {
+        defer io.print(s)
+        a.free(b)
+        return
+    }
+    io.print(s)
+    a.free(b)
+}
+
+fn swapped(io: Io, a: Allocator) void {
+    var b: Buf(Buf(u8)) = .empty
+    defer a.free(b)
+    a.push(&b, a.concat("x", "y"))
+    a.push(&b, a.concat("p", "q"))
+    const s = b[0][0..]
+    @swap(&b, 0, 1)
+    io.print(s)
+}
+
+fn called(a: Allocator, inout b: Buf(u8)) void {
+    const s = b[0..]
+    a.push(&b, s[0])
+}
+
+fn main() void {
+}

@@ -1,0 +1,91 @@
+// A local slice names a part of something. It borrows it until its last use:
+// afterwards the owner can change again.
+// expect: GET
+// expect: /a
+// expect: 2
+// expect: GET!
+// expect: end
+// expect: 3
+// expect: 12
+// expect: 4
+// expect: 3
+// expect: 3
+uses alloc, io
+
+const Req = struct {
+    text: Buf(u8)
+    n: i64
+}
+
+fn first(xs: []i64) i64 {
+    const rest = xs[1..]
+    return rest[0] + rest[1]
+}
+
+// Paths that leave do not reach the uses after them.
+fn jumps(io: Io, a: Allocator) void {
+    var b = a.concat("x", "yz")
+    const s = b[0..]
+    if (@len(s) == 9) {
+        a.free(b)
+        return
+        io.print(s)             // never runs
+    }
+    var i = 0
+    while (i < 3) {
+        if (i == 1) {
+            a.push(&b, 'z')
+            break
+        }
+        io.print(@len(s))
+        i = i + 1
+    }
+    a.free(b)
+}
+
+// Defers run last to first: this one is done with s before b goes.
+fn deferred(io: Io, a: Allocator) void {
+    const b = a.concat("x", "yz")
+    const s = b[0..]
+    defer a.free(b)
+    defer io.print(@len(s))
+    if (@len(s) == 9) {
+        return
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    var line = a.concat("GET /a", "")
+    defer a.free(line)
+
+    const method = line[0..3]
+    const path = line[4..]
+    io.print(method)
+    io.print(path)
+    io.print(@len(path))
+    a.push(&line, 'b')          // both are finished with
+
+    var i = 0
+    while (i < 2) {
+        const part = line[0..3]
+        if (i == 1) {
+            io.print(part, "!")
+        }
+        a.push(&line, 'x')
+        i = i + 1
+    }
+
+    const nums = [3]i64{ 5, 7, 9 }
+    const whole = nums[0..]
+    const tail = whole[1..]    // still borrows nums
+    var r = Req{ .text = a.concat("x", "yz"), .n = 0 }
+    defer a.free(r.text)
+    const t = r.text[0..]
+    r.n = 1                     // another field
+    io.print("end")
+    io.print(@len(t))
+    io.print(tail[0] + nums[0])
+    io.print(first(whole) - 12)
+    jumps(io, a)
+    deferred(io, a)
+}

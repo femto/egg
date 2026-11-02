@@ -1,0 +1,17 @@
+// error: E116 @13
+// error: E116 @14
+// error: E116 @14
+// error: E116 @15
+// error: E116 @16
+// error: E110 @13
+// error: E110 @14
+// error: E110 @15
+// error: E110 @16
+fn pair() [2]i64 { return [2]i64{ 1, 2 } }
+fn main() void {
+    const v = [2]i64{ 1, 2 }
+    var s = v[0..]
+    const t = if (@len(v) > 0) v[0..] else v[1..]
+    const c = pair()[0..]
+    const d = [2]i64{ 3, 4 }[0..]
+}

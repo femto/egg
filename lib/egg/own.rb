@@ -42,6 +42,13 @@
 # is), and a callee without a body (a function value, an Allocator
 # method) may change all of its argument.
 #
+# A local slice (`const s = b[lo..hi]`) borrows the place it views until its
+# last use, not to the end of its block: while s is used later, b cannot be
+# moved, assigned, resized or passed as inout, nor its elements written
+# (E149). Later means the rest of each enclosing block, a loop around the
+# slice, and the defers still to run, on the paths that really go there: code
+# ending in return, break or continue does not reach what it jumps past.
+#
 # An `owned struct` (a resource) is owned for itself, not only for its
 # buffers: its `v.#` path is followed like a buffer, and `@forget(v)` (in its
 # own file) moves just that path, so its buffer fields must still be
@@ -53,7 +60,10 @@
 module Egg
   class OwnershipChecker
     # names: buffer variables declared in this block; defers: Defer nodes
-    Frame = Struct.new(:names, :defers)
+    Frame = Struct.new(:names, :defers, :slices)
+    # What runs after the current statement of a block: stmts, the statements
+    # after it; stmt, that statement; loop: the enclosing loop starts again.
+    Later = Struct.new(:stmts, :stmt, :loop)
     # depth: index of the loop body's frame; entry: the state at its start
     Loop = Struct.new(:depth, :entry)
 
@@ -88,7 +98,13 @@ module Egg
     def check_func(sig)
       @sig = sig
       @file = @checker.modules[sig.func.mod || ""].file
-      @frames = [Frame.new([], [])]
+      @frames = [Frame.new([], [], [])]
+      @slices = {}
+      @rest = []
+      @now = nil
+      @stmt = nil
+      @leaving = false
+      @ran = []
       @loops = []
       @st = {}     # path -> [:owned | :moved | :poison, line of the move]
       @decl = {}   # name -> [:local | :param | :bparam | :inout | :borrowed, line, col]
@@ -191,7 +207,13 @@ module Egg
       i = @frames.length - 1
       while i >= down
         f = @frames[i]
-        f.defers.reverse_each { |d| run_defer(d, line, col) if !d.err || error }
+        ran = @ran
+        @ran = ran.dup
+        f.defers.reverse_each do |d|
+          @ran << d
+          run_defer(d, line, col) if !d.err || error
+        end
+        @ran = ran
         f.names.each { |n| check_released(n, line, col, where) }
         i -= 1
       end
@@ -236,6 +258,16 @@ module Egg
       err("E135", "#{what} still owns #{its} #{where}; #{fix}", l, c)
     end
 
+    # Code run on the way out of the function: only its defers still use a
+    # slice.
+    def leaving
+      saved = @leaving
+      @leaving = true
+      yield
+    ensure
+      @leaving = saved
+    end
+
     # Run the block on a copy of the state, then go back to the original:
     # for a way out that the code after it does not take.
     def simulate
@@ -258,15 +290,110 @@ module Egg
     # ---- statements -----------------------------------------------------
 
     def walk_stmts(stmts)
-      stmts.each do |s|
+      saved = [@now, @stmt]
+      stmts.each_with_index do |s, i|
         break if @st.nil? # the rest cannot be reached
+        @rest << Later.new(stmts[(i + 1)..], s, false)
+        @stmt = s
+        @now = stmt_head(s)
         walk_stmt(s)
+        @rest.pop
+      end
+      @now, @stmt = saved
+    end
+
+    # The part of a statement that runs at once: for one with blocks, what
+    # decides which of them runs.
+    def stmt_head(s)
+      case s
+      in If[cond:] then cond
+      in While[cond:] then cond
+      in For[iter:] then iter
+      in Switch[subject:] then subject
+      in Defer then nil
+      else s
+      end
+    end
+
+    # ---- local slices ----------------------------------------------------
+
+    # A local slice borrows what it views until its last use. @slices: its
+    # name -> [the path it views, how deep in @rest it was declared].
+
+    def place_path(e)
+      case e
+      in Var[name:] then @slices.key?(name) ? @slices[name][0] : name
+      in Field[obj:, name:]
+        path = place_path(obj)
+        path.nil? ? nil : "#{path}.#{name}"
+      in Index[obj:] then place_path(obj)
+      in SliceExpr[obj:] then place_path(obj)
+      else nil
+      end
+    end
+
+    def declare_slice(name, value)
+      path = place_path(value)
+      return if path.nil?
+      @slices[name] = [path, @rest.length - 1]
+      @frames.last.slices << name
+    end
+
+    # Does this node, or anything in it, read the variable name?
+    def reads?(node, name)
+      case node
+      when Var then node.name == name
+      when Array then node.any? { |n| reads?(n, name) }
+      when Struct then node.each_pair.any? { |k, v| !%i[info ty].include?(k) && reads?(v, name) }
+      else false
+      end
+    end
+
+    # Structured code makes this simple: what runs later is the rest of each
+    # enclosing block, out to the block that declared the slice, and all of a
+    # loop around it, unless a block ends by jumping past them.
+    def live?(name, depth)
+      waiting = @frames.flat_map(&:defers).reject { |d| @ran.any? { |r| r.equal?(d) } }
+      return true if reads?(waiting, name)
+      return false if @leaving
+      return true if !@now.nil? && reads?(@now, name)
+      i = @rest.length - 1
+      while i >= depth
+        later = @rest[i]
+        stop = later.stmts.index { |s| jump?(s) }
+        return true if reads?(stop.nil? ? later.stmts : later.stmts[..stop], name)
+        case stop.nil? ? later.stmt : later.stmts[stop]
+        in Return then return false
+        in Break
+          i -= 1 until i < 0 || @rest[i].loop
+          i -= 1
+        in Continue
+          i -= 1 until i < 0 || @rest[i].loop
+        else i -= 1
+        end
+      end
+      false
+    end
+
+    def jump?(stmt)
+      case stmt
+      in Return | Break | Continue then true
+      else false
+      end
+    end
+
+    # Something changes path: no slice of it may be used afterwards.
+    def check_slices(path, line, col, what)
+      return if path.nil?
+      @slices.each do |name, (viewed, depth)|
+        next unless overlap?(viewed, path) && live?(name, depth)
+        err("E149", "'#{path}' cannot be #{what} here: the slice '#{name}' of it is used later", line, col)
       end
     end
 
     # pre: declares loop variables in the block's frame.
     def walk_block(block, pre = nil)
-      @frames << Frame.new([], [])
+      @frames << Frame.new([], [], [])
       pre&.call
       walk_stmts(block.stmts)
       leave(@frames.length - 1, false, nil, nil, "at the end of its block") unless @st.nil?
@@ -274,15 +401,18 @@ module Egg
         under(n).each { |k| @st.delete(k) } unless @st.nil?
         @decl.delete(n)
       end
+      @frames.last.slices.each { |n| @slices.delete(n) }
       @frames.pop
     end
 
     def walk_stmt(stmt)
       case stmt
       in VarDecl[name:, value:, line:, col:, ty:]
-        walk(value)
+        walk(value, value.is_a?(SliceExpr) || ty.start_with?("[]"))
         declare(name, :local, line, col, ty) if owned?(ty)
+        declare_slice(name, value) if ty.start_with?("[]")
       in Assign[name:, value:, line:, col:, target:]
+        check_slices(target.nil? ? name : place_path(target), line, col, "assigned")
         if target.nil?
           walk(value)
           assign_path(name, line, col) if @decl.key?(name) && !@st.nil?
@@ -356,7 +486,7 @@ module Egg
       in Return[value:, line:, col:]
         walk(value) unless value.nil?
         return_paths(value).each do |error|
-          simulate { leave(0, error, line, col, "at this return") }
+          leaving { simulate { leave(0, error, line, col, "at this return") } }
         end
         @st = nil
       in Defer
@@ -473,7 +603,9 @@ module Egg
     def walk_loop(body, line, col, pre = nil)
       entry = dup(@st)
       @loops << Loop.new(@frames.length, entry)
+      @rest << Later.new([@stmt], nil, true)
       walk_block(body, pre)
+      @rest.pop
       unless @st.nil?
         loop_mismatch(entry, @st, line, col, "at the end of an iteration of this loop")
       end
@@ -573,6 +705,7 @@ module Egg
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
+            check_slices(place_path(obj), obj.line, obj.col, "changed")
             check_inout_arg(obj, info[:sig], 0, obj.line, obj.col)
             walk_place(obj)
           else
@@ -590,11 +723,15 @@ module Egg
         path.nil? ? walk(args[0]) : forget(path, line, col)
       in Builtin[name: "replace" | "take" => name, args:, line:, col:]
         place = args[0].expr
+        check_slices(place_path(place), line, col, "changed")
         check_elem_change(place, line, col, name == "take" ? "taken from" : "replaced")
         walk_place(place)
         walk(args[1]) if name == "replace"
       in Builtin[name: "swap", args:, line:, col:]
-        args[0].info[:places].each { |p| check_elem_change(p, line, col, "swapped") }
+        args[0].info[:places].each do |p|
+          check_slices(place_path(p), line, col, "changed")
+          check_elem_change(p, line, col, "swapped")
+        end
         walk_place(args[0].expr)
         walk(args[1])
         walk(args[2])
@@ -624,7 +761,7 @@ module Egg
       in Deref[expr: ptr] then walk(ptr)
       in Try[expr: inner, line:, col:]
         walk(inner)
-        simulate { leave(0, true, line, col, "if this try returns an error") } unless @st.nil?
+        leaving { simulate { leave(0, true, line, col, "if this try returns an error") } } unless @st.nil?
       in Catch[expr: inner, fallback:, line:, col:]
         walk(inner)
         start = @st
@@ -676,6 +813,7 @@ module Egg
       shift = callee.nil? || callee.params.length == args.length ? 0 : 1
       args.each_with_index do |a, i|
         if a.is_a?(AddrOf)
+          check_slices(place_path(a.expr), a.line, a.col, "changed")
           # inout: the callee may replace or resize what its summary says
           check_inout_arg(a.expr, callee, i + shift, a.line, a.col) unless a.expr.is_a?(SliceExpr)
           walk_place(a.expr)
@@ -725,6 +863,7 @@ module Egg
         return
       end
       return if borrow
+      check_slices(path, line, col, "moved")
       if @decl[root(path)][0] == :bparam
         borrowed_param_error(path, "moved", line, col)
         return
