@@ -1,0 +1,14 @@
+// A channel is closed once its last receiver is.
+// panic: send on a closed channel
+uses thread
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    const other = rx.clone()
+    const tx = rx.sender()
+    rx.close()
+    tx.send(1)
+    other.close()
+    tx.send(2)
+    tx.close()
+}
