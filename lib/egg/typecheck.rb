@@ -77,6 +77,7 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
+    IF_SLICE_HINT = "slices exist only as parameters and local slices; use an if statement, or call a function in each branch".freeze
     PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer TcpConn TcpListener UdpSocket Addr Threads Thread]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args" }.freeze
     CAPABILITIES = %w[alloc args fs io net thread].freeze
@@ -1771,12 +1772,18 @@ module Egg
         want = expected || t1
         t2 = check_expr(second, want)
         if expected.nil? && !fits?(want, t2)
-          err("E103", "the branches of an if with a value must have one type, found #{first.equal?(then_expr) ? "#{t1} and #{t2}" : "#{t2} and #{t1}"}; give the result a type (const x: ?i64 = ...) if one fits it", line, col)
+          found = first.equal?(then_expr) ? "#{t1} and #{t2}" : "#{t2} and #{t1}"
+          hint = [t1, t2].any? { |x| x.start_with?("[]") } ? IF_SLICE_HINT : "give the result a type (const x: ?i64 = ...) if one fits it"
+          err("E103", "the branches of an if with a value must have one type, found #{found}; #{hint}", line, col)
           return "error"
         end
         expect_type(want, t1, first)
         expect_type(want, t2, second)
         t = want == "error" ? t2 : want
+        if t.start_with?("[]")
+          err("E103", "an if with a value cannot yield a slice (#{t}); #{IF_SLICE_HINT}", line, col)
+          return "error"
+        end
         unless t == "error" || (storable?(t) && t != "module")
           err("E103", "an if with a value needs values, found #{t}; for actions use an if statement", line, col)
           return "error"
