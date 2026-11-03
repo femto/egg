@@ -45,8 +45,9 @@
 
 module Egg
   class CodegenC
-    # Before the first include: sockets, threads and fstat are not in ISO C, so
-    # -std=c99 hides them. Only for a program that uses them.
+    # Before the first include: sockets, threads, fstat and directories are not
+    # in ISO C, so -std=c99 hides them (glibc declares realpath only for XSI).
+    # Only for a program that uses them.
     SYSTEM_FEATURES = <<~C.freeze
       #ifdef _WIN32
       #ifndef _WIN32_WINNT
@@ -54,6 +55,7 @@ module Egg
       #endif
       #else
       #define _POSIX_C_SOURCE 200809L
+      #define _XOPEN_SOURCE 700
       #define _DARWIN_C_SOURCE
       #endif
     C
