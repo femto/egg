@@ -3237,11 +3237,13 @@ module Egg
         unless t == "error" || t == "str" || t == "[]u8" || t == "Buf(u8)"
           err("E103", "@strPtr needs text (a str, a []u8 or a Buf(u8)), found #{t}", a.line, a.col)
         end
+        check_borrowed(a, t)
         ptr_type("u8")
       when "bufPtr"
         # @bufPtr(b): a pointer to the elements of the buffer b, which C may
         # write.
         t = check_expr(a)
+        check_borrowed(a, t)
         return "error" if t == "error"
         unless @types[t]&.kind == :buf
           err("E103", "@bufPtr needs a buffer (Buf(T)), found #{t}", a.line, a.col)

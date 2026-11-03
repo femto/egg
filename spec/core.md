@@ -1372,7 +1372,7 @@ Builtins for pointers, which need `allow unsafe` (section 18):
 | `@ptrFromInt(*T, n)` | the address `n: usize` as a `*T` |
 | `@strPtr(t)` | a `*u8` to the bytes of the text t, a `str`, `[]u8` or `Buf(u8)` (not 0-terminated; do not write through it) |
 | `@bufPtr(b)` | a `*T` to the elements of the buffer `b: Buf(T)`, which may be written up to `@len(b)` |
-| `@sliceFromPtr(p, n)` | the n elements at `p: *T` as a `[]T`: an argument or a local slice only (E116); a negative n panics |
+| `@sliceFromPtr(p, n)` | the `n: i64` elements at `p: *T` as a `[]T`: an argument or a local slice only (E116); a negative n panics |
 
 v1's `@print` is gone: printing is io, so it is `io.print(x)` with the io
 capability (section 17). `@print` is E112.
@@ -2011,10 +2011,15 @@ a C string that is freed, end the text with a 0 yourself,
 `a.concat(s, "\0")`, and pass `@strPtr` of that `Buf(u8)`. Where C fills
 memory, give it `@bufPtr(b)` of a buffer made long enough first, as
 `a.alloc(n, 0)`. Where C hands back a pointer and a length,
-`@sliceFromPtr(p, n)` lets the rest of the function read them as a slice,
+`@sliceFromPtr(p, n)` (n an `i64`) lets the rest of the function read them as a slice,
 without copying: as an argument (`a.append_str(&out, @sliceFromPtr(p, n))`
 copies them into a buffer) or as a local slice `const s =
-@sliceFromPtr(p, n)`. Nothing checks how long C keeps the memory valid.
+@sliceFromPtr(p, n)`. Nothing checks how long C keeps the memory valid. `@strPtr` and `@bufPtr`
+borrow a buffer as `@len` does: it must be a variable or part of one, not a
+temporary (E133), and since C may write through `@bufPtr(b)`, no local slice
+of b may be used after it (E149). The pointer itself is not tracked: freeing
+or resizing the buffer while C still holds it is the unsafe file's
+responsibility.
 
 ```egg
 // expect: HELLO
