@@ -225,7 +225,7 @@ module Egg
             return ((int64_t)(((uint64_t)ft.hi << 32) | ft.lo) - INT64_C(116444736000000000)) * 100;
         #else
             struct timespec t;
-            clock_gettime(CLOCK_REALTIME, &t);
+            if (clock_gettime(CLOCK_REALTIME, &t) != 0) egg_panic("cannot read the clock");
             return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
         #endif
         }
@@ -247,12 +247,12 @@ module Egg
             return n / f * 1000000000 + n % f * 1000000000 / f;
         #else
             struct timespec t;
-            clock_gettime(CLOCK_MONOTONIC, &t);
+            if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) egg_panic("cannot read the clock");
             return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
         #endif
         }
       C
-      # Bytes from the system's cryptographic random source: /dev/urandom
+      # Bytes from the system's cryptographic random source: getentropy
       # on POSIX, BCryptGenRandom on Windows.
       "egg_random_fill" => <<~C,
         #ifdef _WIN32
@@ -260,6 +260,10 @@ module Egg
         #if defined(_MSC_VER) || defined(__clang__)
         #pragma comment(lib, "bcrypt")
         #endif
+        #else
+        /* glibc, musl and macOS have it; with only POSIX features asked for,
+           glibc's headers do not declare it. */
+        int getentropy(void *, size_t);
         #endif
         static void egg_random_fill(uint8_t *p, int64_t n) {
         #ifdef _WIN32
@@ -271,9 +275,13 @@ module Egg
                 n -= k;
             }
         #else
-            static FILE *f = NULL;
-            if (f == NULL && (f = fopen("/dev/urandom", "rb")) == NULL) egg_panic("cannot read random bytes");
-            if (n > 0 && fread(p, 1, (size_t)n, f) != (size_t)n) egg_panic("cannot read random bytes");
+            /* At most 256 bytes a call; no state, so threads cannot race. */
+            while (n > 0) {
+                size_t k = n > 256 ? 256 : (size_t)n;
+                if (getentropy(p, k) != 0) egg_panic("cannot read random bytes");
+                p += k;
+                n -= (int64_t)k;
+            }
         #endif
         }
       C
@@ -1780,7 +1788,7 @@ module Egg
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
                   egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take egg_chan_recv
                   egg_chan_tx_close

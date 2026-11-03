@@ -2478,7 +2478,7 @@ module Egg
           end
           elem = @types[at].elem
           if (name.start_with?("append_") || name.start_with?("read") || name == "recv_from" || name == "fill") && elem != "u8"
-            err("E103", "'#{name}' writes text to a Buf(u8), found #{at}", a.line, a.col)
+            err("E103", "'#{name}' writes #{name == "fill" ? "random bytes" : "text"} to a Buf(u8), found #{at}", a.line, a.col)
             return "error"
           end
           ret = opt_type(elem) if pop

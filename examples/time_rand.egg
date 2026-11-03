@@ -14,11 +14,10 @@ fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
     var b: Buf(u8) = a.alloc(32, 0)
     defer a.free(b)
     rng.fill(&b)
-    var zero = 0
+    // 32 zero bytes from the random source would be a 1 in 2^256 event.
+    var any = false
     for (b) |x| {
-        if (x == 0) {
-            zero = zero + 1
-        }
+        any = any or x != 0
     }
-    io.print(@len(b), " ", zero < 8)
+    io.print(@len(b), " ", any)
 }

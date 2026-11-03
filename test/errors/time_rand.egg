@@ -1,8 +1,12 @@
 // Clock and Random need `uses time` and `uses rand`.
-uses io
+uses alloc, io
 
-fn main(io: Io, clock: Clock) void {
+fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
     io.print(clock.now())
+    var b: Buf(u8) = a.alloc(4, 0)
+    defer a.free(b)
+    rng.fill(&b)
 }
 
 // error: E130 @5
+// error: E130 @8
