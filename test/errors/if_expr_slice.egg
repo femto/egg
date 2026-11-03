@@ -1,0 +1,18 @@
+// An if with a value cannot yield a slice, even when both branches are one.
+
+fn both(a: []u8, b: []u8, c: bool) i64 {
+    const s = if (c) a else b
+    return @len(s)
+}
+
+fn mixed(a: []u8, c: bool) i64 {
+    const s = if (c) a else 5
+    return s
+}
+
+fn main(io: Io) void {
+    io.print(both("ab", "c", true) + mixed("ab", true))
+}
+
+// error: E103 @4
+// error: E103 @9
