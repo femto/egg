@@ -141,9 +141,10 @@ module Egg
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
                       "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
-                      "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1 }.freeze
+                      "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
+                      "bufPtr" => 1, "sliceFromPtr" => 2 }.freeze
     # Builtins that need `allow unsafe`.
-    UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr].freeze
+    UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr bufPtr sliceFromPtr].freeze
     BUILTINS = BUILTIN_ARITY.keys.freeze
 
     # Names an extern fn may not take: C keywords, and the functions of the
@@ -1180,7 +1181,7 @@ module Egg
         declare(name, VarInfo.new("error", true, true, true, line, col, false, false))
       in VarDecl[name:, mutable:, type:, value:, line:, col:]
         declared = type.nil? ? nil : resolve_type(type, line, col)
-        vt = value.is_a?(SliceExpr) ? check_slice_arg(value, declared) : check_expr(value, declared)
+        vt = slice_expr?(value) ? check_slice_arg(value, declared) : check_expr(value, declared)
         ty = declared.nil? ? vt : declared
         expect_type(declared, vt, value) unless declared.nil?
         if ty == "void"
@@ -1256,7 +1257,7 @@ module Egg
         @loop_depth -= 1
       in For[iter:, var:, index_var:, body:, line:, col:]
         # A slice may be iterated directly: it lives only as long as the loop.
-        it = iter.is_a?(SliceExpr) ? check_slice_arg(iter, nil) : check_expr(iter)
+        it = slice_expr?(iter) ? check_slice_arg(iter, nil) : check_expr(iter)
         check_borrowed(iter, it)
         elem = elem_type(it)
         if elem.nil? && it != "error"
@@ -1912,7 +1913,7 @@ module Egg
       # as long as the comparison.
       operand = lambda do |x, want|
         op_eq = op == "==" || op == "!=" || ORDER_OPS.include?(op)
-        op_eq && x.is_a?(SliceExpr) ? check_slice_arg(x, nil) : check_expr(x, want)
+        op_eq && slice_expr?(x) ? check_slice_arg(x, nil) : check_expr(x, want)
       end
       if typed_by_other && untyped_lit?(lhs) && (!untyped_lit?(rhs) || (float_lit?(rhs) && !float_lit?(lhs)))
         rt = operand.(rhs, hint)
@@ -2486,7 +2487,7 @@ module Egg
             err("E117", "'#{path}' is passed as inout and also used by another argument of the same call", a.line, a.col)
           end
         elsif pt == "printable"
-          at = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
+          at = slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a)
           if at == "void"
             err("E103", "'#{name}' cannot print a void value", a.line, a.col)
           elsif at != "error" && !printable?(at)
@@ -2495,7 +2496,7 @@ module Egg
             check_borrowed(a, at)
           end
         elsif pt == "text"
-          at = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a, "str")
+          at = slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a, "str")
           if at != "error" && !text?(at)
             err("E103", "'#{name}' needs text: a str, a []u8 or a Buf(u8), found #{at}", a.line, a.col)
           else
@@ -2541,7 +2542,7 @@ module Egg
     def check_args(sig, args, name, line, col, receivers = [], self_inout: false)
       if sig.params.length != args.length
         err("E104", "'#{name}' takes #{sig.params.length} argument(s) but #{args.length} were given", line, col)
-        args.each { |a| a.is_a?(AddrOf) ? check_expr(a.expr) : (a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)) }
+        args.each { |a| a.is_a?(AddrOf) ? check_expr(a.expr) : (slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a)) }
         return
       end
       inout_roots = []
@@ -2551,7 +2552,7 @@ module Egg
           unless a.is_a?(AddrOf)
             how = pt.start_with?("[]") ? "a writable slice as &x[lo..hi]" : "a variable as &x"
             err("E121", "parameter #{i + 1} of '#{name}' is inout: pass #{how}", a.line, a.col)
-            a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
+            slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a)
             next
           end
           a.info = {}
@@ -2573,7 +2574,7 @@ module Egg
           expect_type(pt, t, a)
           path = inout_path(a.expr)
           inout_roots << [path, a] unless path.nil?
-        elsif a.is_a?(SliceExpr)
+        elsif slice_expr?(a)
           at = check_slice_arg(a, pt)
           expect_type(pt, at, a)
         elsif a.is_a?(AddrOf) && !pointee(pt).nil?
@@ -2649,8 +2650,18 @@ module Egg
     end
 
     # A local slice names a part of a place, or another slice.
+    # A slice expression: x[lo..hi], or @sliceFromPtr(p, n) in an unsafe file.
+    def slice_expr?(e)
+      e.is_a?(SliceExpr) || pointer_slice?(e)
+    end
+
+    def pointer_slice?(e)
+      e.is_a?(Builtin) && e.name == "sliceFromPtr"
+    end
+
     def local_view?(value, vt)
       return vt.start_with?("[]") if value.is_a?(Var)
+      return true if pointer_slice?(value)
       value.is_a?(SliceExpr) && viewable?(value.obj)
     end
 
@@ -3220,9 +3231,43 @@ module Egg
         end
         t
       when "strPtr"
-        # @strPtr(s): a pointer to the bytes of s, for C (not 0-terminated)
-        expect_type("str", check_expr(a, "str"), a)
+        # @strPtr(t): a pointer to the bytes of the text t, for C (not
+        # 0-terminated): a str, a []u8 or a Buf(u8).
+        t = slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a, "str")
+        unless t == "error" || t == "str" || t == "[]u8" || t == "Buf(u8)"
+          err("E103", "@strPtr needs text (a str, a []u8 or a Buf(u8)), found #{t}", a.line, a.col)
+        end
+        check_borrowed(a, t)
         ptr_type("u8")
+      when "bufPtr"
+        # @bufPtr(b): a pointer to the elements of the buffer b, which C may
+        # write.
+        t = check_expr(a)
+        check_borrowed(a, t)
+        return "error" if t == "error"
+        unless @types[t]&.kind == :buf
+          err("E103", "@bufPtr needs a buffer (Buf(T)), found #{t}", a.line, a.col)
+          return "error"
+        end
+        ptr_type(@types[t].elem)
+      when "sliceFromPtr"
+        # @sliceFromPtr(p, n): the n elements at p as a slice, where a slice
+        # may be: an argument, or a local slice.
+        t = check_expr(a)
+        expect_type("i64", check_expr(args[1], "i64"), args[1])
+        return "error" if t == "error"
+        elem = pointee(t)
+        if elem.nil?
+          err("E103", "@sliceFromPtr needs a pointer, found #{t}", a.line, a.col)
+          return "error"
+        end
+        unless @slice_ok
+          err("E116", "@sliceFromPtr can only be passed directly as an argument or make a local slice; slices exist only as parameters and local slices", line, col)
+          return "error"
+        end
+        canon = "[]#{elem}"
+        register(canon, :slice, line, col).elem = elem
+        canon
       when "intFromPtr"
         t = check_expr(a)
         err("E103", "@intFromPtr needs a pointer, found #{t}", a.line, a.col) unless t == "error" || !pointee(t).nil?
@@ -3258,7 +3303,7 @@ module Egg
         end
         t
       when "len"
-        t = a.is_a?(SliceExpr) ? check_slice_arg(a, nil) : check_expr(a)
+        t = slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a)
         check_borrowed(a, t)
         if t != "error" && t != "str" && !%i[array slice buf].include?(@types[t]&.kind)
           err("E103", "'@len' needs an array, a slice, a Buf or a str, found #{t}", line, col)
