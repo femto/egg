@@ -263,7 +263,8 @@ v3 (memory without GC, and what realistic programs needed):
   nothing is shared and no locks are needed. `threads.channel(T, n)` returns
   a `Receiver(T)` (with n of 0, `send` waits for the receiver), and
   `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and `rx.recv()` gives
-  null once every sender has closed and it is empty. `rx.clone()` gives a
+  null once every sender has closed and it is empty; `rx.recv_timeout(ms)`
+  also gives null when ms milliseconds pass first. `rx.clone()` gives a
   pool of threads one queue: each value goes to one receiver
 - Network: `uses net` gives a `Net` value; `net.tcp_connect(host, port)`,
   `net.tcp_listen(host, port)`, `net.udp_bind(host, port)` and

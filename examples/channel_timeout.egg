@@ -1,0 +1,33 @@
+// recv_timeout(ms) waits at most ms milliseconds: null when nothing came in
+// time, and null at once when every sender has closed. 0 does not wait.
+// expect: none yet
+// expect: timed out
+// expect: 7
+// expect: closed
+uses io, thread
+
+fn send_one(sink tx: Sender(i64)) void {
+    defer tx.close()
+    tx.send(7)
+}
+
+fn show(io: Io, got: ?i64, none: str) void {
+    if (got) |v| {
+        io.print(v)
+    } else {
+        io.print(none)
+    }
+}
+
+fn main(io: Io, threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    defer rx.close()
+    const mine = rx.sender()
+    show(io, rx.recv_timeout(0), "none yet")
+    show(io, rx.recv_timeout(20), "timed out")
+    const t = threads.spawn(send_one, rx.sender())
+    show(io, rx.recv_timeout(10000), "nothing")
+    t.join()
+    mine.close()
+    show(io, rx.recv_timeout(10000), "closed")
+}

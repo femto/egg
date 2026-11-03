@@ -2369,7 +2369,7 @@ module Egg
       chan_type("Receiver", [t], line, col)
     end
 
-    CHAN_METHODS = { "Sender" => %w[send clone close], "Receiver" => %w[recv sender clone close] }.freeze
+    CHAN_METHODS = { "Sender" => %w[send clone close], "Receiver" => %w[recv recv_timeout sender clone close] }.freeze
 
     def check_chan_method(e, t, name, args, line, col)
       kind = t[0...t.index("(")]
@@ -2379,14 +2379,14 @@ module Egg
         err("E122", "#{kind} has no method '#{name}' (methods: #{CHAN_METHODS[kind].join(', ')})", line, col)
         return check_all_error(args)
       end
-      params = name == "send" ? [[elem, "sink"]] : []
+      params = { "send" => [[elem, "sink"]], "recv_timeout" => [["i64", nil]] }.fetch(name, [])
       check_args(Sig.new(name, params, "void"), args, name, line, col)
       e.info[:cap_method] = "#{kind}.#{name}"
       e.info[:args] = args
       e.info[:params] = params
       case name
       when "send", "close" then "void"
-      when "recv" then opt_type(elem)
+      when "recv", "recv_timeout" then opt_type(elem)
       when "clone" then t
       else chan_type("Sender", [elem], line, col)
       end
