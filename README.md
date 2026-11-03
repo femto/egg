@@ -251,6 +251,8 @@ v3 (memory without GC, and what realistic programs needed):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
+- Constants: `const MAX = 8192`, `const OK: i32 = 0`, `const MB = KB * KB`:
+  values known when compiling, visible through an import like functions
 - Optionals: `if (x) |v| { ... } else { ... }` and `while (x) |v| { ... }`
 - Standard error: `io.eprint(x, ...)`. Standard input (needs `uses alloc`
   too; failures are `error.IoFailed`): `io.read_line(a, &line) !bool` returns

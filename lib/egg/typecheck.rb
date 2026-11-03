@@ -186,6 +186,8 @@ module Egg
       @types = {}          # canon -> TInfo
       @type_order = []     # canons in registration order
       @decls = {}          # name -> TypeDecl
+      @consts = {}         # name -> ConstDecl
+      @const_path = []     # consts being evaluated, to catch A = B, B = A
       @alias_types = {}    # alias name -> canon, once resolved
       @alias_path = []     # aliases being resolved, to catch A = B, B = A
       @type_fns = {}       # name -> Func returning `type`
@@ -246,11 +248,36 @@ module Egg
           @decls[d.name] = d
         end
       end
+      (@program.consts || []).each do |c|
+        in_module(c.mod) do
+          if @decls.key?(c.name) || @consts.key?(c.name) || RESERVED_TYPES.include?(base_name(c.name))
+            err("E106", "'#{base_name(c.name)}' is defined more than once", c.line, c.col)
+            next
+          end
+          @consts[c.name] = c
+        end
+      end
+      # const B = A, where A is a constant, parses as an alias of a type A.
+      # const X = f(1), with f an ordinary function, parses as a type
+      # function's instance; it is a value that is not a constant.
+      @decls.values.each do |d|
+        next unless d.kind == :alias
+        if d.members.is_a?(String)
+          target = in_module(d.mod) { qualify(d.members) }
+          next unless @consts.key?(target)
+          @decls.delete(d.name)
+          @consts[d.name] = ConstDecl.new(d.name, nil, Var.new(d.members, d.line, d.col), d.line, d.col, d.mod)
+        elsif d.members.is_a?(GenericType) && @program.funcs.any? { |f| f.name == in_module(d.mod) { qualify(d.members.name) } && f.ret != "type" }
+          @decls.delete(d.name)
+          in_module(d.mod) { err("E150", "a top-level constant must be known when compiling; '#{d.members.name}(...)' is a call", d.line, d.col) }
+          @consts[d.name] = ConstDecl.new(d.name, nil, nil, d.line, d.col, d.mod, "error")
+        end
+      end
       @program.funcs.each do |f|
         in_module(f.mod) do
           # Buf(...) always means the built-in type, so no function may take the name.
           builtin = base_name(f.name) == "Buf"
-          if @decls.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name) || builtin
+          if @decls.key?(f.name) || @consts.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name) || builtin
             err("E106", "function '#{f.name}' is defined more than once#{builtin ? ' (Buf is built in)' : ''}", f.line, f.col)
             next
           end
@@ -392,6 +419,151 @@ module Egg
     def base_name(name)
       i = name.rindex(".")
       i.nil? ? name : name[(i + 1)..]
+    end
+
+    # ---- top-level constants ------------------------------------------
+
+    INT_CONST_OPS = %w[+ - * / % << >> & | ^].freeze
+
+    # A use of the constant c, in a Var or a module's Field.
+    def const_use(e, c)
+      t = const_type(c)
+      e.info ||= {}
+      e.info[:const] = c
+      t
+    end
+
+    # The constant's type, evaluating it the first time: c.lit becomes one
+    # literal holding its value.
+    def const_type(c)
+      return c.ty unless c.ty.nil?
+      if @const_path.include?(c.name)
+        in_module(c.mod) { err("E150", "constant '#{base_name(c.name)}' is defined in terms of itself", c.line, c.col) }
+        return c.ty = "error"
+      end
+      @const_path << c.name
+      saved_scopes = @scopes
+      saved_tenv = @tenv
+      @scopes = [{}]
+      @tenv = {}
+      begin
+        in_module(c.mod) { c.ty = eval_const(c) }
+      ensure
+        @scopes = saved_scopes
+        @tenv = saved_tenv
+        @const_path.pop
+      end
+      c.ty
+    end
+
+    def eval_const(c)
+      declared = c.type.nil? ? nil : resolve_type(c.type, c.line, c.col)
+      return "error" if declared == "error"
+      v = c.value
+      other = const_ref(v)
+      unless other.nil?
+        t = const_type(other)
+        c.lit = other.lit
+        return t if declared.nil? || t == "error"
+        expect_type(declared, t, v)
+        return declared
+      end
+      if int_const?(v)
+        n = eval_int(v)
+        return "error" if n.nil?
+        lit = n < 0 ? Unary.new("-", IntLit.new(-n, c.line, c.col), c.line, c.col) : IntLit.new(n, c.line, c.col)
+        lit.info = {}
+        c.lit = lit
+        t = check_expr(lit, declared || "i64")
+        expect_type(declared, t, v) unless declared.nil? || t == "error"
+        return declared || t
+      end
+      plain = case v
+              in FloatLit | StrLit | BoolLit | EnumLit then true
+              in Unary[op: "-", operand: FloatLit] then true
+              else false
+              end
+      # Built from a constant that already failed: that error is enough.
+      return "error" if !plain && failed_const_inside?(v)
+      unless plain
+        err("E150", "a top-level constant must be known when compiling: a number, bool, text or enum literal, another constant, or integer arithmetic on those", v.line, v.col)
+        return "error"
+      end
+      v.info ||= {}
+      t = check_expr(v, declared)
+      expect_type(declared, t, v) unless declared.nil? || t == "error"
+      c.lit = v
+      declared || t
+    end
+
+    # The constant e names, if it names one.
+    def const_ref(e)
+      q = case e
+          in Var[name:] then qualify(name)
+          in Field[obj: Var[name: m], name:] then @mod.aliases.key?(m) ? qualify("#{m}.#{name}") : nil
+          else nil
+          end
+      q.nil? ? nil : @consts[q]
+    end
+
+    def failed_const_inside?(e)
+      case e
+      in Unary[operand:] then failed_const_inside?(operand)
+      in Binary[lhs:, rhs:] then failed_const_inside?(lhs) || failed_const_inside?(rhs)
+      else
+        other = const_ref(e)
+        !other.nil? && const_type(other) == "error"
+      end
+    end
+
+    def int_const?(e)
+      case e
+      in IntLit then true
+      in Unary[op: "-" | "~", operand:] then int_const?(operand)
+      in Binary[op:, lhs:, rhs:] then INT_CONST_OPS.include?(op) && int_const?(lhs) && int_const?(rhs)
+      else
+        other = const_ref(e)
+        return false if other.nil? || const_type(other) == "error" || !int?(other.ty)
+        other.lit.is_a?(IntLit) || (other.lit.is_a?(Unary) && other.lit.operand.is_a?(IntLit))
+      end
+    end
+
+    # The integer value of an int_const? expression, or nil after an error.
+    def eval_int(e)
+      case e
+      in IntLit[value:] then value
+      in Unary[op:, operand:]
+        x = eval_int(operand)
+        x.nil? ? nil : (op == "-" ? -x : ~x)
+      in Binary[op:, lhs:, rhs:, line:, col:]
+        x = eval_int(lhs)
+        y = eval_int(rhs)
+        return nil if x.nil? || y.nil?
+        if %w[/ %].include?(op) && y.zero?
+          err("E150", "division by zero in a constant", line, col)
+          return nil
+        end
+        if %w[<< >>].include?(op) && (y.negative? || y > 63)
+          err("E150", "a shift in a constant must be by 0 to 63", line, col)
+          return nil
+        end
+        # Integer division truncates toward zero, as in C.
+        case op
+        when "+" then x + y
+        when "-" then x - y
+        when "*" then x * y
+        when "/" then (x.abs / y.abs) * (x * y < 0 ? -1 : 1)
+        when "%" then x - y * ((x.abs / y.abs) * (x * y < 0 ? -1 : 1))
+        when "<<" then x << y
+        when ">>" then x >> y
+        when "&" then x & y
+        when "|" then x | y
+        else x ^ y
+        end
+      else
+        lit = const_ref(e).lit
+        lit.is_a?(IntLit) ? lit.value : -lit.operand.value
+      end
     end
 
     def in_module(prefix)
@@ -1203,7 +1375,7 @@ module Egg
           info = lookup(name)
           if info.nil?
             vt = check_expr(value)
-            err("E101", "undefined variable '#{name}'", line, col)
+            err(*undefined_place(name), line, col)
           else
             vt = check_expr(value, info.type)
             if info.inout && info.type.start_with?("[]")
@@ -1434,6 +1606,12 @@ module Egg
       nil
     end
 
+    # The error for assigning to or lending a name that is no variable.
+    def undefined_place(name)
+      return ["E105", "cannot change constant '#{name}'"] if @consts.key?(qualify(name))
+      ["E101", "undefined variable '#{name}'"]
+    end
+
     # Type of an assignable place (x, p.f, a[i]); requires a mutable root.
     def check_lvalue(e, verb)
       case e
@@ -1441,7 +1619,7 @@ module Egg
         info = lookup(name)
         e.info = { local: true, inout: info&.inout }
         if info.nil?
-          err("E101", "undefined variable '#{name}'", line, col)
+          err(*undefined_place(name), line, col)
           e.ty = "error"
           return "error"
         end
@@ -1579,12 +1757,13 @@ module Egg
           e.info[:inout] = info.inout
           return info.type
         end
+        q = qualify(name)
+        return const_use(e, @consts[q]) if @consts.key?(q)
         t = type_named(name)
         unless t.nil?
           e.info[:type] = t
           return "type"
         end
-        q = qualify(name)
         if @sigs.key?(q)
           return fn_value(e, @sigs[q], name, line, col)
         elsif @generic_fns.key?(q)
@@ -1652,6 +1831,8 @@ module Egg
           # m.Point / m.Color: a type of another module
           obj.info = {}
           obj.ty = "module"
+          q = qualify("#{obj.name}.#{name}")
+          return const_use(e, @consts[q]) if @consts.key?(q)
           t = type_named("#{obj.name}.#{name}")
           if t.nil?
             q = qualify("#{obj.name}.#{name}")

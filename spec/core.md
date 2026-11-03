@@ -285,6 +285,38 @@ fn main() i64 {
 }
 ```
 
+### Constants
+
+`const NAME = value` at the top level of a file names a value known when
+compiling: a number, `bool`, text or enum literal, another constant, or
+integer arithmetic on those (`+ - * / % << >> & | ^`, `-`, `~`), which the
+compiler does, with C's division (E150 for anything else, such as a call,
+and for dividing by zero or shifting by less than 0 or more than 63). A
+type may follow the name, `const OK: i32 = 0`; without one an integer is an
+`i64` and a float an `f64`, as for a local `const`, and an enum literal
+needs one. The value must fit the type (E003). Constants are visible
+everywhere in their file and through an import (`limits.KB`), like
+functions, and a constant may name one declared after it, but not itself
+(E150). `const B = A` makes B a constant when A is one, and an alias when
+A is a type. A constant cannot be assigned or passed as `inout` (E105).
+
+```egg
+// expect: 1048576 255 -2
+// expect: egg true
+uses io
+
+const KB = 1024
+const MB = KB * KB
+const MASK: u8 = 0xF0 | 0x0F
+const NAME = "egg"
+const ON = true
+
+fn main(io: Io) void {
+    io.print(MB, " ", MASK, " ", -5 / 2)
+    io.print(NAME, " ", ON)
+}
+```
+
 ## 5. Functions
 
 ```

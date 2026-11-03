@@ -126,9 +126,9 @@ def bad_line_marks(c_source, src, path)
     bare = prev.gsub(/"(?:\\.|[^"\\])*"/, '""')
     continued ||= (bare.match?(/\bif \(.*\)\z/) && !bare.include?(" else ")) || prev == "else" || text == "else" || text.start_with?("else if (")
     # `uses`, `allow`, `@import`, `extern fn` and type alias lines declare,
-    # and generate no code (an extern fn only a prototype). Only a const at
-    # the top level, not indented, can be an alias.
-    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst \w+ = (?!(owned )?struct\b|enum\b|union\b)/)
+    # and generate no code (an extern fn only a prototype). A const at
+    # the top level, not indented, is an alias or a constant.
+    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst \w+(: [^=]+)? = (?!(owned )?struct\b|enum\b|union\b)/)
     # An else-if comparing types (K == i64) is decided at compile time, and
     # @compileError stands only in a branch that is never generated.
     # The right side must name a type, so a runtime `x == y` is not taken

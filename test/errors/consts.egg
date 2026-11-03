@@ -1,0 +1,25 @@
+// A top-level constant must be known when compiling.
+const A = B
+const B = A + 1
+const C = 1 / 0
+const D: u8 = 300
+const E = f()
+const F = 2
+const F = 3
+
+fn f() i64 {
+    return 1
+}
+
+fn main() void {
+    _ = A
+    _ = C
+    _ = D
+    _ = E
+}
+
+// error: E150 @2
+// error: E150 @4
+// error: E003 @5
+// error: E150 @6
+// error: E106 @8

@@ -25,12 +25,15 @@ module Egg
       imports = []
       allows = []
       links = []
+      consts = []
       skip_nl
       until at?(:eof)
         if kw?("const")
           d = parse_type_decl
           if d.is_a?(ImportDecl)
             imports << d
+          elsif d.is_a?(ConstDecl)
+            consts << d
           else
             types << d
           end
@@ -52,7 +55,7 @@ module Egg
         end
         skip_nl
       end
-      Program.new(funcs, types, uses, imports, nil, allows, links)
+      Program.new(funcs, types, uses, imports, nil, allows, links, consts)
     end
 
     # uses alloc, io
@@ -203,10 +206,24 @@ module Egg
     # const Name = enum { a, b, c }
     # const name = @import("file.egg")
     # const Name = T, another name for the type T
+    # const NAME = 8192, const NAME: i32 = 0: a value (ConstDecl)
     def parse_type_decl
       expect_kw("const")
       name = expect(:ident, "type name")
+      if op?(":")
+        advance
+        type = parse_type
+        expect_op("=")
+        value = parse_expr
+        end_stmt
+        return ConstDecl.new(name.text, type, value, name.line, name.col)
+      end
       expect_op("=")
+      if at?(:int) || at?(:float) || at?(:string) || kw?("true") || kw?("false") || op?("-") || op?("(") || op?(".") || const_arithmetic?
+        value = parse_expr
+        end_stmt
+        return ConstDecl.new(name.text, nil, value, name.line, name.col)
+      end
       if at?(:builtin) && cur.text == "import"
         advance
         expect_op("(")
@@ -267,8 +284,21 @@ module Egg
         end_stmt
         TypeDecl.new(name.text, :alias, target, [], t.line, t.col)
       else
-        error_here("expected a type, 'struct', 'enum', 'union(enum)' or '@import' (a top-level const declares a type or a module)")
+        error_here("expected a type, 'struct', 'enum', 'union(enum)' or '@import' (a top-level const declares a type, a module or a value)")
       end
+    end
+
+    # `A * 2`, `m.KB << 10` after `const NAME =`: a name followed by an
+    # operator is arithmetic on constants, not a type.
+    def const_arithmetic?
+      i = @pos
+      return false unless @tokens[i].kind == :ident
+      i += 1
+      while @tokens[i].kind == :op && @tokens[i].text == "." && @tokens[i + 1]&.kind == :ident
+        i += 2
+      end
+      t = @tokens[i]
+      t.kind == :op && %w[+ - * / % << >> & | ^].include?(t.text)
     end
 
     # { field: T, ... fn m(...) R { } ... }  -> [fields, methods]
