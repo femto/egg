@@ -103,6 +103,8 @@ First capabilities:
 | `fs` | files, one implementation per OS | done: whole-file `read` and `write`, open files as owned `Reader` and `Writer` values, `seek` on a `Reader`, directories (`make_dir`, `open_dir` listing as an owned `DirReader`), `remove_file`, `remove_dir`, `rename`, `stat` and `real_path`; a file open for reading and writing at once not yet |
 | `net` | TCP, UDP and name resolution, one implementation per OS | done: blocking sockets; Unix sockets and TLS not yet |
 | `thread` | system threads; owned values move between them, so nothing is shared outside `allow unsafe` | done: `spawn`, `join`, `detach`, channels |
+| `time` | the wall clock and a monotonic clock | done: `now` and `monotonic`, in nanoseconds |
+| `rand` | the system's cryptographic random source | done: `fill` |
 | `raise` | raising and catching exceptions, implemented in core code | after v3 |
 
 Checking rules:

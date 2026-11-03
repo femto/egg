@@ -114,13 +114,15 @@ module Egg
       "UdpSocket" => "typedef struct { int64_t s; } egg_udp_socket;\n",
       "Addr" => "typedef struct { uint8_t b[28]; int32_t len; } egg_addr;\n",
       "Threads" => "typedef struct { char unused; } egg_threads;\n",
+"Clock" => "typedef struct { char unused; } egg_clock;\n",
+"Random" => "typedef struct { char unused; } egg_random;\n",
       "Thread" => "typedef struct { void *h; } egg_thread;\n"
     }.freeze
 
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize
@@ -206,6 +208,73 @@ module Egg
         static egg_str egg_args_get(int64_t i) {
             if (i < 0 || i >= egg_argc) egg_panic("index out of bounds");
             return (egg_str){ egg_argv[i], (int64_t)strlen(egg_argv[i]) };
+        }
+      C
+      # Unix time in nanoseconds. Windows counts 100 ns from 1601.
+      "egg_clock_now" => <<~C,
+        #ifdef _WIN32
+        typedef struct { unsigned long lo, hi; } egg_filetime;
+        __declspec(dllimport) void __stdcall GetSystemTimePreciseAsFileTime(egg_filetime *);
+        #else
+        #include <time.h>
+        #endif
+        static int64_t egg_clock_now(void) {
+        #ifdef _WIN32
+            egg_filetime ft;
+            GetSystemTimePreciseAsFileTime(&ft);
+            return ((int64_t)(((uint64_t)ft.hi << 32) | ft.lo) - INT64_C(116444736000000000)) * 100;
+        #else
+            struct timespec t;
+            clock_gettime(CLOCK_REALTIME, &t);
+            return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+        #endif
+        }
+      C
+      # Nanoseconds from an unspecified start, never going back.
+      "egg_clock_monotonic" => <<~C,
+        #ifdef _WIN32
+        __declspec(dllimport) int __stdcall QueryPerformanceCounter(int64_t *);
+        __declspec(dllimport) int __stdcall QueryPerformanceFrequency(int64_t *);
+        #else
+        #include <time.h>
+        #endif
+        static int64_t egg_clock_monotonic(void) {
+        #ifdef _WIN32
+            int64_t n, f;
+            QueryPerformanceCounter(&n);
+            QueryPerformanceFrequency(&f);
+            /* Whole seconds and the rest apart, so n * 1e9 cannot overflow. */
+            return n / f * 1000000000 + n % f * 1000000000 / f;
+        #else
+            struct timespec t;
+            clock_gettime(CLOCK_MONOTONIC, &t);
+            return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+        #endif
+        }
+      C
+      # Bytes from the system's cryptographic random source: /dev/urandom
+      # on POSIX, BCryptGenRandom on Windows.
+      "egg_random_fill" => <<~C,
+        #ifdef _WIN32
+        __declspec(dllimport) long __stdcall BCryptGenRandom(void *, unsigned char *, unsigned long, unsigned long);
+        #if defined(_MSC_VER) || defined(__clang__)
+        #pragma comment(lib, "bcrypt")
+        #endif
+        #endif
+        static void egg_random_fill(uint8_t *p, int64_t n) {
+        #ifdef _WIN32
+            /* BCRYPT_USE_SYSTEM_PREFERRED_RNG */
+            while (n > 0) {
+                unsigned long k = n > 0x40000000 ? 0x40000000 : (unsigned long)n;
+                if (BCryptGenRandom(NULL, p, k, 2) != 0) egg_panic("cannot read random bytes");
+                p += k;
+                n -= k;
+            }
+        #else
+            static FILE *f = NULL;
+            if (f == NULL && (f = fopen("/dev/urandom", "rb")) == NULL) egg_panic("cannot read random bytes");
+            if (n > 0 && fread(p, 1, (size_t)n, f) != (size_t)n) egg_panic("cannot read random bytes");
+        #endif
         }
       C
       "egg_add" => <<~C,
@@ -1711,7 +1780,7 @@ module Egg
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
                   egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take egg_chan_recv
                   egg_chan_tx_close
@@ -1764,6 +1833,10 @@ module Egg
       @used.key?("egg_thread_base")
     end
 
+    def uses_random?
+      @used.key?("egg_random_fill")
+    end
+
     def generate
       # Function bodies first, so we know which helpers and tables they use.
       @checker.concrete.each { |sig| gen_func(sig) }
@@ -1774,7 +1847,7 @@ module Egg
       emit_types
       types = @out
 
-      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") || @used.key?("egg_fs_sys") || @used.key?("egg_fs_seek") ? SYSTEM_FEATURES + HEADER : HEADER.dup
+      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") || @used.key?("egg_fs_sys") || @used.key?("egg_fs_seek") || @used.key?("egg_clock_now") || @used.key?("egg_clock_monotonic") ? SYSTEM_FEATURES + HEADER : HEADER.dup
       out << (uses_threads? ? LOCKS : NO_LOCKS)
       out << "\n"
       out << STR_TYPEDEF << "\n" if @need_str
@@ -2034,7 +2107,7 @@ module Egg
       when "Args"
         @need_cap[t] = true
         "egg_args"
-      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread"
+      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread", "Clock", "Random"
         @need_cap[t] = true
         "egg_#{t.downcase}"
       when "TcpConn", "TcpListener", "UdpSocket"
@@ -2972,6 +3045,14 @@ module Egg
                r
              when "Args.len"
                "#{helper('egg_args_len')}()"
+             when "Clock.now"
+               "#{helper('egg_clock_now')}()"
+             when "Clock.monotonic"
+               "#{helper('egg_clock_monotonic')}()"
+             when "Random.fill"
+               b = tmp
+               line("#{c_type(args[0].ty)} *#{b} = #{codes[0]};")
+               "#{helper('egg_random_fill')}(#{b}->ptr, #{b}->len)"
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
              when "Threads.spawn"

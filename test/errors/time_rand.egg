@@ -1,0 +1,8 @@
+// Clock and Random need `uses time` and `uses rand`.
+uses io
+
+fn main(io: Io, clock: Clock) void {
+    io.print(clock.now())
+}
+
+// error: E130 @5

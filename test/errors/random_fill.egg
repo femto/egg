@@ -1,0 +1,10 @@
+// rng.fill writes random bytes to a Buf(u8).
+uses alloc, rand
+
+fn main(a: Allocator, rng: Random) void {
+    var b: Buf(i64) = a.alloc(4, 0)
+    defer a.free(b)
+    rng.fill(&b)
+}
+
+// error: E103 @7

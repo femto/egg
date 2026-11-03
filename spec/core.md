@@ -1455,10 +1455,14 @@ with a value type that is the only way to use it:
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
 | `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values (with 0, a sender waits for the receiver); see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; `fs.open_dir(path) !DirReader`, `fs.make_dir(path) !void`, `fs.remove_file(path) !void`, `fs.remove_dir(path) !void`, `fs.rename(from, to) !void`, `fs.stat(path) !Stat`, `fs.real_path(a, path) !Buf(u8)`: directories and names; see below |
+| `time` | `Clock` | `clock.now() i64`: the time in nanoseconds since 1970-01-01 UTC, from the system's clock, which may be set back; `clock.monotonic() i64`: nanoseconds since an unspecified start, never decreasing, for measuring how long something took |
+| `rand` | `Random` | `rng.fill(&b)`: every byte of the `Buf(u8)` b replaced with bytes from the system's cryptographic random source (`/dev/urandom`, or `BCryptGenRandom` on Windows); a failure to read it panics `cannot read random bytes` |
 | `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 `fs` is separate from `io` so that a file's `uses` line says what it can
-reach: a program that only prints cannot touch a file.
+reach: a program that only prints cannot touch a file. `time` and `rand` are
+separate too: code that reads neither the clock nor random bytes gives the
+same result every time it runs on the same input.
 
 ```egg
 // expect: 5
@@ -2515,7 +2519,7 @@ pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but
 not a plain `UserId`), and capabilities other
-than `io`, `args`, `fs`, `net`, `thread` and `alloc`. See the design document's roadmap for when each
+than `io`, `args`, `fs`, `net`, `thread`, `time`, `rand` and `alloc`. See the design document's roadmap for when each
 arrives.
 
 ## 23. A complete program

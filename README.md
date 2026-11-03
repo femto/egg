@@ -257,6 +257,9 @@ v3 (memory without GC, and what realistic programs needed):
   false at the end, `io.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
   with the program's name at 0 and the first argument at 1
+- Time and random bytes: `uses time` gives a `Clock` (`clock.now()` and
+  `clock.monotonic()`, in nanoseconds); `uses rand` gives a `Random`
+  (`rng.fill(&b)` fills a `Buf(u8)` from the system's random source)
 - Threads: `uses thread` gives a `Threads` value; `threads.spawn(f, x, ...)`
   returns an owned `Thread` to `join` or `detach`. Owned arguments move to the
   thread and plain values are copied, so outside `allow unsafe` raw pointers
