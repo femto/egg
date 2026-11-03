@@ -1,0 +1,10 @@
+// Stat, FileKind and DirReader are names of the language.
+const Stat = struct { n: i64 }
+const FileKind = enum { a }
+const DirReader = struct { n: i64 }
+
+fn main() void {}
+
+// error: E106 @2
+// error: E106 @3
+// error: E106 @4

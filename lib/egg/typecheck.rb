@@ -78,15 +78,17 @@ module Egg
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
     IF_SLICE_HINT = "slices exist only as parameters and local slices; use an if statement, or call a function in each branch".freeze
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer TcpConn TcpListener UdpSocket Addr Threads Thread]).freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Addr Threads Thread]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args" }.freeze
     CAPABILITIES = %w[alloc args fs io net thread].freeze
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
-    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Thread" => "thread" }.freeze
+    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Thread" => "thread" }.freeze
     NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed LineTooLong].freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
-    FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed].freeze
+    FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed AlreadyExists NotEmpty NotDirectory].freeze
+    # What fs.stat returns: plain values, made into types when first named.
+    FS_VALUE_TYPES = %w[Stat FileKind].freeze
     # Methods of capability values: name -> [parameter types, result]
     # ("printable" accepts numbers, bool, text and enums; "text" a str, a
     # []u8 or a Buf(u8), borrowed; "integer" any
@@ -111,10 +113,14 @@ module Egg
       "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
       "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                     "read_all" => [["Allocator"], "!Buf(u8)"],
-                    "read" => [%w[Allocator inout_buffer i64], "!i64"], "close" => [[], "void"] },
+                    "read" => [%w[Allocator inout_buffer i64], "!i64"], "seek" => [["i64"], "!void"], "close" => [[], "void"] },
       "Writer" => { "print" => [["printable"], "!void"], "write" => [["text"], "!void"], "flush" => [[], "!void"], "close" => [[], "void"] },
+      "DirReader" => { "next" => [%w[Allocator inout_buffer], "!bool"], "close" => [[], "void"] },
       "Fs" => { "read" => [%w[Allocator text], "!Buf(u8)"], "write" => [%w[text text], "!void"],
-                "open" => [["text"], "!Reader"], "create" => [["text"], "!Writer"], "append" => [["text"], "!Writer"] },
+                "open" => [["text"], "!Reader"], "create" => [["text"], "!Writer"], "append" => [["text"], "!Writer"],
+                "remove_file" => [["text"], "!void"], "remove_dir" => [["text"], "!void"], "rename" => [%w[text text], "!void"],
+                "make_dir" => [["text"], "!void"], "open_dir" => [["text"], "!DirReader"], "stat" => [["text"], "!Stat"],
+                "real_path" => [%w[Allocator text], "!Buf(u8)"] },
       "Allocator" => { "concat" => [%w[text text], "Buf(u8)"], "leak" => [["text"], "str"], "int_str" => [["integer"], "Buf(u8)"],
                        "float_str" => [["float"], "Buf(u8)"],
                        "append_str" => [%w[inout_buffer text], "void"], "append_int" => [%w[inout_buffer integer], "void"],
@@ -126,7 +132,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + %w[Buf Sender Receiver]).freeze
+    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + %w[Buf Sender Receiver]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -666,12 +672,23 @@ module Egg
       fields
     end
 
+    # Stat and FileKind, registered the first time either is named, so a
+    # program that does not use them does not carry them.
+    def fs_value_type(name)
+      unless @types.key?("Stat")
+        register("FileKind", :enum, nil, nil).members = %w[file dir other]
+        register("Stat", :struct, nil, nil).fields = [%w[kind FileKind], %w[size i64]]
+      end
+      name
+    end
+
     # Source type -> canonical type string (registering composite types).
     def resolve_type(t, line, col)
       case t
       when String
         return @tenv[t] if @tenv.key?(t)
         return t if PRIMS.include?(t) || t == "type" || t == "anyerror"
+        return fs_value_type(t) if FS_VALUE_TYPES.include?(t)
         if t == "Buf"
           err("E108", "Buf needs its element type: Buf(T), such as Buf(u8)", line, col)
           return "error"
@@ -1840,6 +1857,7 @@ module Egg
     def type_named(name)
       return @tenv[name] if @tenv.key?(name)
       return name if PRIMS.include?(name)
+      return fs_value_type(name) if FS_VALUE_TYPES.include?(name)
       d = @decls[qualify(name)]
       d.nil? ? nil : decl_type(d)
     end
@@ -2395,12 +2413,12 @@ module Egg
       if t == "Fs"
         FS_ERRORS.each { |n| error_id(n) }
         # fs.read(a, path) allocates what it returns.
-        @current.direct["alloc"] ||= [line, col, "Fs.read"] if name == "read"
+        @current.direct["alloc"] ||= [line, col, "Fs.#{name}"] if %w[read real_path].include?(name)
       end
       # Reading standard input can fail, and fills a buffer.
       if (t == "Io" && name.start_with?("read_")) || (FILE_TYPES.key?(t) && name != "close")
         error_id("IoFailed")
-        @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read") || name == "recv_from"
+        @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read") || name == "recv_from" || name == "next"
       end
       error_id("LineTooLong") if name == "read_line_max"
       NET_ERRORS.each { |n| error_id(n) } if ret.start_with?("!") && (FILE_TYPES[t] == "net" || t == "Net")

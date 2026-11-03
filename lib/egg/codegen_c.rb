@@ -45,8 +45,9 @@
 
 module Egg
   class CodegenC
-    # Before the first include: sockets, threads and fstat are not in ISO C, so
-    # -std=c99 hides them. Only for a program that uses them.
+    # Before the first include: sockets, threads, fstat and directories are not
+    # in ISO C, so -std=c99 hides them (glibc declares realpath only for XSI).
+    # Only for a program that uses them.
     SYSTEM_FEATURES = <<~C.freeze
       #ifdef _WIN32
       #ifndef _WIN32_WINNT
@@ -54,6 +55,7 @@ module Egg
       #endif
       #else
       #define _POSIX_C_SOURCE 200809L
+      #define _XOPEN_SOURCE 700
       #define _DARWIN_C_SOURCE
       #endif
     C
@@ -105,6 +107,7 @@ module Egg
       "Args" => "typedef struct { char unused; } egg_args;\n",
       "Reader" => "typedef struct { FILE *f; } egg_reader;\n",
       "Writer" => "typedef struct { FILE *f; } egg_writer;\n",
+      "DirReader" => "typedef struct { void *d; } egg_dirreader;\n",
       "Net" => "typedef struct { char unused; } egg_net;\n",
       "TcpConn" => "typedef struct { void *c; } egg_tcp_conn;\n",
       "TcpListener" => "typedef struct { int64_t s; } egg_tcp_listener;\n",
@@ -123,7 +126,7 @@ module Egg
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize
                       egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
-                      egg_fs_handle egg_line_max egg_read_line egg_read_all egg_read_bytes
+                      egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
                       egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_recv
                       egg_chan_tx_close egg_chan_rx_close
@@ -408,6 +411,12 @@ module Egg
         #ifdef EINVAL
             if (e == EINVAL) return 4;
         #endif
+        #ifdef EEXIST
+            if (e == EEXIST) return 6;
+        #endif
+        #ifdef ENOTEMPTY
+            if (e == ENOTEMPTY) return 7;
+        #endif
             (void)e;
             return 5;
         }
@@ -597,6 +606,329 @@ module Egg
                 e = errno;
             }
             return bad ? egg_fs_class(e) : 0;
+        }
+      C
+      # The system calls behind the rest of Fs. On Windows, paths go to the
+      # wide-character calls as UTF-16, and their errors are mapped here.
+      "egg_fs_sys" => <<~C,
+        #ifdef _WIN32
+        #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+        #endif
+        #include <windows.h>
+        /* path as UTF-16, or NULL if it is not UTF-8. */
+        static wchar_t *egg_fs_wide(const char *path) {
+            int n = MultiByteToWideChar(65001, 8, path, -1, NULL, 0);
+            if (n == 0) return NULL;
+            wchar_t *w = (wchar_t *)egg_buf_resize(NULL, n, sizeof(wchar_t));
+            MultiByteToWideChar(65001, 8, path, -1, w, n);
+            return w;
+        }
+        static int egg_fs_win_class(DWORD e) {
+            switch (e) {
+            case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: return 1;
+            case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION: return 2;
+            case ERROR_INVALID_NAME: case ERROR_BAD_PATHNAME: case ERROR_FILENAME_EXCED_RANGE: return 4;
+            case ERROR_ALREADY_EXISTS: case ERROR_FILE_EXISTS: return 6;
+            case ERROR_DIR_NOT_EMPTY: return 7;
+            case ERROR_DIRECTORY: return 8;
+            default: return 5;
+            }
+        }
+        /* What a path names, a link itself: 0 nothing, 1 not a directory, 2 a directory. */
+        static int egg_fs_kind(const char *path) {
+            wchar_t *w = egg_fs_wide(path);
+            if (w == NULL) return 0;
+            DWORD a = GetFileAttributesW(w);
+            free(w);
+            return a == INVALID_FILE_ATTRIBUTES ? 0 : (a & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
+        }
+        /* A handle for asking about what path names, following links. */
+        static HANDLE egg_fs_win_open(const wchar_t *w) {
+            return CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        }
+        #else
+        #include <sys/stat.h>
+        #include <unistd.h>
+        static int egg_fs_kind(const char *path) {
+            struct stat st;
+            return lstat(path, &st) != 0 ? 0 : S_ISDIR(st.st_mode) ? 2 : 1;
+        }
+        #endif
+      C
+      # Removing a file or an empty directory. The systems disagree on what
+      # removing the wrong kind fails with, so it is looked at.
+      "egg_fs_remove" => <<~C,
+        static int egg_fs_remove(egg_str path, int dir) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            int r = 0;
+        #ifdef _WIN32
+            wchar_t *w = egg_fs_wide(p);
+            if (w == NULL) {
+                r = 4;
+            } else {
+                if (!(dir ? RemoveDirectoryW(w) : DeleteFileW(w))) r = egg_fs_win_class(GetLastError());
+                free(w);
+            }
+        #else
+            if ((dir ? rmdir(p) : unlink(p)) != 0) r = egg_fs_class(errno);
+            /* Some systems say EEXIST for a directory that is not empty. */
+            if (dir && r == 6) r = 7;
+        #endif
+            if (r != 0 && r != 4) {
+                int k = egg_fs_kind(p);
+                if (!dir && k == 2) r = 3;
+                if (dir && k == 1) r = 8;
+            }
+            free(p);
+            return r;
+        }
+      C
+      # A file that `to` names is replaced; Windows needs to be told so.
+      "egg_fs_rename" => <<~C,
+        static int egg_fs_rename(egg_str from, egg_str to) {
+            char *a = egg_fs_path(from), *b = egg_fs_path(to);
+            int r = 0;
+            if (a == NULL || b == NULL) {
+                r = 4;
+            } else {
+        #ifdef _WIN32
+                wchar_t *wa = egg_fs_wide(a), *wb = egg_fs_wide(b);
+                if (wa == NULL || wb == NULL) r = 4;
+                else if (!MoveFileExW(wa, wb, MOVEFILE_REPLACE_EXISTING)) r = egg_fs_win_class(GetLastError());
+                free(wa);
+                free(wb);
+        #else
+                if (rename(a, b) != 0) r = egg_fs_class(errno);
+        #endif
+            }
+            free(a);
+            free(b);
+            return r;
+        }
+      C
+      "egg_fs_mkdir" => <<~C,
+        static int egg_fs_mkdir(egg_str path) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            int r = 0;
+        #ifdef _WIN32
+            wchar_t *w = egg_fs_wide(p);
+            if (w == NULL) {
+                r = 4;
+            } else {
+                if (!CreateDirectoryW(w, NULL)) r = egg_fs_win_class(GetLastError());
+                free(w);
+            }
+        #else
+            if (mkdir(p, 0777) != 0) r = egg_fs_class(errno);
+        #endif
+            free(p);
+            return r;
+        }
+      C
+      # kind is FileKind's index: file, dir, other. The size of a file only.
+      "egg_fs_stat" => <<~C,
+        static int egg_fs_stat(egg_str path, int32_t *kind, int64_t *size) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            int r = 0;
+        #ifdef _WIN32
+            wchar_t *w = egg_fs_wide(p);
+            HANDLE h = w == NULL ? INVALID_HANDLE_VALUE : egg_fs_win_open(w);
+            BY_HANDLE_FILE_INFORMATION info;
+            if (w == NULL) {
+                r = 4;
+            } else if (h == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(h, &info)) {
+                r = egg_fs_win_class(GetLastError());
+            } else {
+                DWORD t = GetFileType(h);
+                *kind = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : t == FILE_TYPE_DISK ? 0 : 2;
+                *size = *kind == 0 ? (int64_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow) : 0;
+            }
+            if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+            free(w);
+        #else
+            struct stat st;
+            if (stat(p, &st) != 0) {
+                r = egg_fs_class(errno);
+            } else {
+                *kind = S_ISREG(st.st_mode) ? 0 : S_ISDIR(st.st_mode) ? 1 : 2;
+                *size = *kind == 0 ? (int64_t)st.st_size : 0;
+            }
+        #endif
+            free(p);
+            return r;
+        }
+      C
+      # The absolute path with every link and . and .. resolved.
+      "egg_fs_real" => <<~C,
+        static int egg_fs_real(egg_str path, uint8_t **ptr, int64_t *len, int64_t *cap) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            int r = 0;
+        #ifdef _WIN32
+            wchar_t *w = egg_fs_wide(p), *full = NULL;
+            HANDLE h = w == NULL ? INVALID_HANDLE_VALUE : egg_fs_win_open(w);
+            DWORD n = 0;
+            if (w == NULL) {
+                r = 4;
+            } else if (h == INVALID_HANDLE_VALUE || (n = GetFinalPathNameByHandleW(h, NULL, 0, 0)) == 0) {
+                r = egg_fs_win_class(GetLastError());
+            } else {
+                full = (wchar_t *)egg_buf_resize(NULL, n, sizeof(wchar_t));
+                if (GetFinalPathNameByHandleW(h, full, n, 0) == 0) r = egg_fs_win_class(GetLastError());
+            }
+            if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+            free(w);
+            if (r == 0) {
+                /* \\\\?\\C:\\x is C:\\x, and \\\\?\\UNC\\host\\x is \\\\host\\x. */
+                wchar_t *s = full;
+                if (wcsncmp(s, L"\\\\\\\\?\\\\UNC\\\\", 8) == 0) {
+                    s += 6;
+                    s[0] = L'\\\\';
+                } else if (wcsncmp(s, L"\\\\\\\\?\\\\", 4) == 0) {
+                    s += 4;
+                }
+                int k = WideCharToMultiByte(65001, 0, s, -1, NULL, 0, NULL, NULL);
+                if (k == 0) {
+                    r = 5;
+                } else {
+                    *ptr = (uint8_t *)egg_buf_resize(NULL, k, 1);
+                    WideCharToMultiByte(65001, 0, s, -1, (char *)*ptr, k, NULL, NULL);
+                    *len = k - 1;
+                    *cap = k;
+                }
+            }
+            free(full);
+        #else
+            char *full = realpath(p, NULL);
+            if (full == NULL) {
+                r = egg_fs_class(errno);
+            } else {
+                int64_t n = (int64_t)strlen(full);
+                *ptr = (uint8_t *)egg_buf_resize(NULL, n + 1, 1);
+                memcpy(*ptr, full, (size_t)n);
+                *len = n;
+                *cap = n + 1;
+                free(full);
+            }
+        #endif
+            free(p);
+            return r;
+        }
+      C
+      # A directory's entries, one at a time, without . and .., in no
+      # particular order.
+      "egg_dir" => <<~C,
+        #ifdef _WIN32
+        /* Windows hands over the first entry when the directory opens:
+           more is 1 while fd holds one not yet returned, 0 at the end, and
+           -1 after a failure. */
+        typedef struct { HANDLE h; WIN32_FIND_DATAW fd; int more; } egg_dir_state;
+        #else
+        #include <dirent.h>
+        #endif
+        static int egg_dir_open(egg_str path, void **out) {
+            char *p = egg_fs_path(path);
+            if (p == NULL) return 4;
+            int r = 0;
+        #ifdef _WIN32
+            /* path\\* lists path; an empty path is no directory. */
+            wchar_t *w = path.len == 0 ? NULL : egg_fs_wide(p);
+            if (path.len == 0) {
+                r = 1;
+            } else if (w == NULL) {
+                r = 4;
+            } else {
+                size_t n = wcslen(w);
+                wchar_t *pat = (wchar_t *)egg_buf_resize(NULL, (int64_t)n + 3, sizeof(wchar_t));
+                memcpy(pat, w, n * sizeof(wchar_t));
+                pat[n] = L'\\\\';
+                pat[n + 1] = L'*';
+                pat[n + 2] = 0;
+                egg_dir_state *d = (egg_dir_state *)egg_buf_resize(NULL, 1, sizeof(egg_dir_state));
+                d->h = FindFirstFileW(pat, &d->fd);
+                if (d->h == INVALID_HANDLE_VALUE) {
+                    DWORD e = GetLastError();
+                    /* Only a drive's root can have no entries at all. */
+                    if (e == ERROR_FILE_NOT_FOUND) {
+                        d->more = 0;
+                        *out = d;
+                    } else {
+                        r = egg_fs_win_class(e);
+                        free(d);
+                    }
+                } else {
+                    d->more = 1;
+                    *out = d;
+                }
+                free(pat);
+            }
+            free(w);
+        #else
+            DIR *d = opendir(p);
+            if (d == NULL) r = egg_fs_class(errno);
+            else *out = d;
+        #endif
+            if (r != 0 && r != 4 && egg_fs_kind(p) == 1) r = 8;
+            free(p);
+            return r;
+        }
+        /* 1 with the next name in place of what the buffer held, 0 at the end, -1 on failure. */
+        static int egg_dir_next(void *dir, uint8_t **ptr, int64_t *len, int64_t *cap) {
+        #ifdef _WIN32
+            egg_dir_state *d = (egg_dir_state *)dir;
+            while (d->more == 1) {
+                const wchar_t *n = d->fd.cFileName;
+                bool skip = wcscmp(n, L".") == 0 || wcscmp(n, L"..") == 0;
+                int k = skip ? 1 : WideCharToMultiByte(65001, 0, n, -1, NULL, 0, NULL, NULL);
+                if (!skip && k > 0) {
+                    if (k > *cap) {
+                        *ptr = (uint8_t *)egg_buf_resize(*ptr, k, 1);
+                        *cap = k;
+                    }
+                    WideCharToMultiByte(65001, 0, n, -1, (char *)*ptr, k, NULL, NULL);
+                    *len = k - 1;
+                }
+                if (!FindNextFileW(d->h, &d->fd)) d->more = GetLastError() == ERROR_NO_MORE_FILES ? 0 : -1;
+                if (k == 0) return -1;
+                if (!skip) return 1;
+            }
+            return d->more;
+        #else
+            for (;;) {
+                errno = 0;
+                struct dirent *e = readdir((DIR *)dir);
+                if (e == NULL) return errno != 0 ? -1 : 0;
+                const char *n = e->d_name;
+                if (strcmp(n, ".") == 0 || strcmp(n, "..") == 0) continue;
+                *len = 0;
+                egg_append(ptr, len, cap, (const uint8_t *)n, (int64_t)strlen(n));
+                return 1;
+            }
+        #endif
+        }
+        static void egg_dir_close(void *dir) {
+        #ifdef _WIN32
+            egg_dir_state *d = (egg_dir_state *)dir;
+            if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h);
+            free(d);
+        #else
+            (void)closedir((DIR *)dir);
+        #endif
+        }
+      C
+      # Moves a Reader to byte pos of its file: 0 or -1.
+      "egg_fs_seek" => <<~C,
+        static int egg_fs_seek(FILE *f, int64_t pos) {
+            if (pos < 0) egg_panic("negative file position");
+        #ifdef _WIN32
+            return _fseeki64(f, pos, SEEK_SET) == 0 ? 0 : -1;
+        #else
+            return fseeko(f, (off_t)pos, SEEK_SET) == 0 ? 0 : -1;
+        #endif
         }
       C
       "egg_thread_base" => <<~C,
@@ -1290,6 +1622,13 @@ module Egg
                     "egg_fs_write" => %w[egg_fs_class egg_fs_path egg_fs_open],
                     "egg_read_line" => ["egg_append"], "egg_read_all" => ["egg_buf_resize"], "egg_read_bytes" => ["egg_buf_resize"],
                     "egg_fs_handle" => %w[egg_fs_class egg_fs_path egg_fs_open],
+                    "egg_fs_sys" => ["egg_buf_resize"],
+                    "egg_fs_remove" => %w[egg_fs_class egg_fs_path egg_fs_sys],
+                    "egg_fs_rename" => %w[egg_fs_class egg_fs_path egg_fs_sys],
+                    "egg_fs_mkdir" => %w[egg_fs_class egg_fs_path egg_fs_sys],
+                    "egg_fs_stat" => %w[egg_fs_class egg_fs_path egg_fs_sys],
+                    "egg_fs_real" => %w[egg_fs_class egg_fs_path egg_fs_sys],
+                    "egg_dir" => %w[egg_fs_class egg_fs_path egg_fs_sys egg_append],
                     "egg_net_last" => ["egg_net_base"], "egg_net_close" => ["egg_net_base"], "egg_net_prep" => ["egg_net_base"],
                     "egg_net_addrinfo" => %w[egg_net_base egg_net_start egg_fs_path],
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
@@ -1374,7 +1713,7 @@ module Egg
       emit_types
       types = @out
 
-      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") ? SYSTEM_FEATURES + HEADER : HEADER.dup
+      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") || @used.key?("egg_fs_sys") || @used.key?("egg_fs_seek") ? SYSTEM_FEATURES + HEADER : HEADER.dup
       out << (uses_threads? ? LOCKS : NO_LOCKS)
       out << "\n"
       out << STR_TYPEDEF << "\n" if @need_str
@@ -1599,7 +1938,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_tcp_write egg_udp_send egg_args_get].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_tcp_write egg_udp_send egg_args_get].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -1634,7 +1973,7 @@ module Egg
       when "Args"
         @need_cap[t] = true
         "egg_args"
-      when "Reader", "Writer", "Net", "Addr", "Threads", "Thread"
+      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread"
         @need_cap[t] = true
         "egg_#{t.downcase}"
       when "TcpConn", "TcpListener", "UdpSocket"
@@ -2742,6 +3081,45 @@ module Egg
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("#{r}.err = #{fs_error("#{helper('egg_fs_write')}(#{coerce(codes[0], args[0].ty, 'str')}, #{coerce(codes[1], args[1].ty, 'str')})")};")
+               r
+             when "Fs.remove_file", "Fs.remove_dir", "Fs.make_dir", "Fs.rename", "Fs.stat", "Fs.open_dir"
+               path = coerce(codes[0], args[0].ty, "str")
+               call = case m
+                      when "Fs.remove_file", "Fs.remove_dir" then "#{helper('egg_fs_remove')}(#{path}, #{m == 'Fs.remove_dir' ? 1 : 0})"
+                      when "Fs.make_dir" then "#{helper('egg_fs_mkdir')}(#{path})"
+                      when "Fs.rename" then "#{helper('egg_fs_rename')}(#{path}, #{coerce(codes[1], args[1].ty, 'str')})"
+                      when "Fs.stat" then "#{helper('egg_fs_stat')}(#{path}, &R.value.f_kind, &R.value.f_size)"
+                      else "#{helper('egg_dir')}_open(#{path}, &R.value.d)"
+                      end
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{fs_error(call.gsub('&R.', "&#{r}."))};")
+               r
+             when "Fs.real_path"
+               line("(void)#{codes[0]};")
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{fs_error("#{helper('egg_fs_real')}(#{coerce(codes[1], args[1].ty, 'str')}, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)")};")
+               r
+             when "DirReader.next"
+               line("(void)#{codes[0]};")
+               d = "#{hoist(recv, obj.ty)}.d"
+               b = tmp
+               line("#{c_type(args[1].ty)} *#{b} = #{codes[1]};")
+               r = tmp
+               s = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("int #{s} = #{helper('egg_dir')}_next(#{d}, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
+               line("#{r}.value = #{s} > 0;")
+               line("if (#{s} < 0) #{r}.err = #{io_failed};")
+               r
+             when "DirReader.close"
+               "#{helper('egg_dir')}_close(#{hoist(recv, obj.ty)}.d)"
+             when "Reader.seek"
+               f = file_of_value(recv, obj)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("if (#{helper('egg_fs_seek')}(#{f}, #{codes[0]}) != 0) #{r}.err = #{io_failed};")
                r
              when "Allocator.create"
                # A copy of the value in the arena.

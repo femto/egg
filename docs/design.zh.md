@@ -89,7 +89,7 @@ fn read_config(files: Fs, a: Allocator, path: str) !Config {
 | `alloc` | 堆分配，分配器显式传递 | v2（可释放的独占缓冲区 `Buf(T)`，带所有权检查）；v3（程序构造的文本是 `Buf(u8)`；`a.leak` 和 `a.cstr` 让文本留到程序结束） |
 | `io` | 标准输入输出，按操作系统各有实现 | v2（先做标准输出）；已加标准错误和标准输入 |
 | `args` | 命令行参数 | 已完成（`len` 和 `get`） |
-| `fs` | 文件，按操作系统各有实现 | 已完成：整文件 `read` 和 `write`，打开的文件是 owned 的 `Reader` 和 `Writer`；seek、读写同时打开、删除和重命名还没有 |
+| `fs` | 文件，按操作系统各有实现 | 已完成：整文件 `read` 和 `write`，打开的文件是 owned 的 `Reader` 和 `Writer`，`Reader` 可以 `seek`；目录（`make_dir`，`open_dir` 得到 owned 的 `DirReader` 逐个列出）、`remove_file`、`remove_dir`、`rename`、`stat` 和 `real_path`；同时读写打开一个文件还没有 |
 | `net` | TCP、UDP 和域名解析，按操作系统各有实现 | 已完成：阻塞式 socket；Unix socket 和 TLS 还没有 |
 | `thread` | 系统线程；owned 值在线程间移动，`allow unsafe` 之外不共享内存 | 已完成：`spawn`、`join`、`detach`、channel |
 | `raise` | 异常抛出与捕获，用核心代码实现 | v3 之后 |

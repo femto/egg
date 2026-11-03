@@ -1,0 +1,20 @@
+// A DirReader is owned: one left open is E135.
+uses alloc, fs
+
+fn count(files: Fs, a: Allocator) !i64 {
+    const d = try files.open_dir(".")
+    var name: Buf(u8) = .empty
+    defer a.free(name)
+    var n: i64 = 0
+    while (try d.next(a, &name)) {
+        n = n + 1
+    }
+    return n
+}
+
+fn main(files: Fs, a: Allocator) !void {
+    _ = try count(files, a)
+}
+
+// error: E135 @9
+// error: E135 @12
