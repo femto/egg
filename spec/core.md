@@ -1370,7 +1370,9 @@ Builtins for pointers, which need `allow unsafe` (section 18):
 | `@ptrCast(*U, p)` | the same address as a `*U` |
 | `@intFromPtr(p)` | the address as a `usize` |
 | `@ptrFromInt(*T, n)` | the address `n: usize` as a `*T` |
-| `@strPtr(s)` | a `*u8` to the bytes of the `str` s (not 0-terminated; do not write through it) |
+| `@strPtr(t)` | a `*u8` to the bytes of the text t, a `str`, `[]u8` or `Buf(u8)` (not 0-terminated; do not write through it) |
+| `@bufPtr(b)` | a `*T` to the elements of the buffer `b: Buf(T)`, which may be written up to `@len(b)` |
+| `@sliceFromPtr(p, n)` | the n elements at `p: *T` as a `[]T`: an argument or a local slice only (E116); a negative n panics |
 
 v1's `@print` is gone: printing is io, so it is `io.print(x)` with the io
 capability (section 17). `@print` is E112.
@@ -1847,7 +1849,7 @@ in the file (anything else after `allow` is E131). Then:
 | --- | --- |
 | `&place` | the address of a `var`, or of its field or element (a `const` is E105) |
 | `p.*` | the `T` that p points to; also a place: `p.* = v`, `p.*.x = v` |
-| `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr` | section 15 |
+| `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`, `@bufPtr`, `@sliceFromPtr` | section 15 |
 | `extern fn` | section 20 |
 
 Without `allow unsafe` these are E131 (and `&x` outside an inout argument
@@ -2003,8 +2005,16 @@ memory that is never freed,
 and `a.str_from_c(p) Buf(u8)` is the bytes at p up to the first 0. Making a
 pointer is safe, but `a.str_from_c` reads through one, so it needs
 `allow unsafe` (E131); on `null` it panics `null pointer dereference`.
-Where a C function takes a pointer and a length, `@strPtr(s)` and
-`@len(s)` pass a `str` without copying.
+Where a C function takes a pointer and a length, `@strPtr(t)` and
+`@len(t)` pass text without copying: a `str`, a `[]u8` or a `Buf(u8)`. For
+a C string that is freed, end the text with a 0 yourself,
+`a.concat(s, "\0")`, and pass `@strPtr` of that `Buf(u8)`. Where C fills
+memory, give it `@bufPtr(b)` of a buffer made long enough first, as
+`a.alloc(n, 0)`. Where C hands back a pointer and a length,
+`@sliceFromPtr(p, n)` lets the rest of the function read them as a slice,
+without copying: as an argument (`a.append_str(&out, @sliceFromPtr(p, n))`
+copies them into a buffer) or as a local slice `const s =
+@sliceFromPtr(p, n)`. Nothing checks how long C keeps the memory valid.
 
 ```egg
 // expect: HELLO

@@ -787,7 +787,8 @@ module Egg
         walk(args[1])
         walk(args[2])
       in Builtin[name:, args:]
-        args.each { |a| walk(a, name == "len") }
+        # @len, @strPtr and @bufPtr look at a buffer without taking it.
+        args.each { |a| walk(a, %w[len strPtr bufPtr].include?(name)) }
       in Field[obj:, line:, col:]
         path = path_of(e)
         if path.nil?

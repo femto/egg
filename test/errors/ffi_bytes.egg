@@ -1,0 +1,20 @@
+// @strPtr takes text, @bufPtr a buffer, and @sliceFromPtr makes a slice
+// only where a slice may be.
+uses alloc
+allow unsafe
+
+fn main(a: Allocator) void {
+    const n: i64 = 5
+    _ = @strPtr(n)
+    _ = @bufPtr("text")
+    const b: Buf(u8) = a.alloc(4, 0)
+    defer a.free(b)
+    var s = @sliceFromPtr(@bufPtr(b), 2)
+    _ = @sliceFromPtr(n, 2)
+}
+
+// error: E103 @8
+// error: E103 @9
+// error: E116 @12
+// error: E110 @12
+// error: E103 @13
