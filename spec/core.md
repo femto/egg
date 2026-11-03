@@ -300,7 +300,7 @@ everywhere in their file and through an import (`limits.KB`), like
 functions, and a constant may name one declared after it, but not itself
 (E150). `const B = A` makes B a constant when A is one, and an alias when
 A is a type. Every constant is checked, used or not. A constant cannot be
-assigned or passed as `inout` (E105), and no local may take its name
+assigned or passed as `inout` (E105), and no local or parameter may take its name
 (E106).
 
 ```egg
