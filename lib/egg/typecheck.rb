@@ -98,7 +98,7 @@ module Egg
       "Io" => { "print" => [["printable"], "void"], "eprint" => [["printable"], "void"],
                 "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                 "read_all" => [["Allocator"], "!Buf(u8)"] },
-      "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"] },
+      "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"], "env" => [["text"], "?str"] },
       "Net" => { "tcp_connect" => [%w[text i64], "!TcpConn"], "tcp_listen" => [%w[text i64], "!TcpListener"],
                  "udp_bind" => [%w[text i64], "!UdpSocket"], "resolve" => [%w[text i64], "!Addr"] },
       "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
@@ -2410,6 +2410,7 @@ module Egg
         ret = resolve_type(ErrType.new(ret[1..]), line, col)
       end
       ret = resolve_type(GenericType.new("Buf", ["u8"]), line, col) if ret == "Buf(u8)"
+      ret = opt_type(ret[1..]) if ret.start_with?("?") && ret != "?T"
       pop = ret == "?T"
       if t == "Fs"
         FS_ERRORS.each { |n| error_id(n) }
