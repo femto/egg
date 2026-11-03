@@ -858,11 +858,12 @@ def check_args(dir)
         io.print(args.env("EGG_TEST_MISSING") orelse "unset")
         io.print(args.env("EGG_TEST=VALUE") orelse "no name")
         io.print(args.env("") orelse "no name")
+        io.print(args.env("EGG\\0X") orelse "no name")
     }
   EGG
   out, err, status = Open3.capture3({ "EGG_TEST_VALUE" => "héllo, world", "EGG_TEST_EMPTY" => "", "EGG_TEST_MISSING" => nil }, *eggc_command, "run", env)
   got = out.lines.map(&:chomp)
-  report(status.success? && got == ["[héllo, world]", "[]", "unset", "no name", "no name"], "args.env reads the environment", "#{got.inspect} #{err}")
+  report(status.success? && got == ["[héllo, world]", "[]", "unset", "no name", "no name", "no name"], "args.env reads the environment", "#{got.inspect} #{err}")
   order = File.join(dir, "args_order.egg")
   File.write(order, <<~EGG)
     uses io
