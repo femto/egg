@@ -983,6 +983,9 @@ module Egg
       # A fixed ring of values, shared by its receivers and senders; the
       # last of them to close frees it.
       "egg_chan" => <<~C,
+        #ifndef _WIN32
+        #include <time.h>
+        #endif
         typedef struct {
         #ifdef _WIN32
             CRITICAL_SECTION lock;
@@ -1021,10 +1024,19 @@ module Egg
             InitializeConditionVariable(&c->readable);
             InitializeConditionVariable(&c->writable);
         #else
-            if (pthread_mutex_init(&c->lock, NULL) != 0 || pthread_cond_init(&c->readable, NULL) != 0 ||
+            /* recv_timeout counts on the monotonic clock, so setting the
+               system clock does not move its deadline. macOS cannot set
+               the clock of a condition: there it waits for a relative time. */
+            pthread_condattr_t attr;
+            if (pthread_condattr_init(&attr) != 0) egg_panic("cannot make a channel");
+        #ifndef __APPLE__
+            if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) egg_panic("cannot make a channel");
+        #endif
+            if (pthread_mutex_init(&c->lock, NULL) != 0 || pthread_cond_init(&c->readable, &attr) != 0 ||
                 pthread_cond_init(&c->writable, NULL) != 0) {
                 egg_panic("cannot make a channel");
             }
+            pthread_condattr_destroy(&attr);
         #endif
             c->slots = cap > 0 ? cap : 1;
             c->items = (uint8_t *)egg_buf_resize(NULL, c->slots, size > 0 ? size : 1);
@@ -1106,10 +1118,6 @@ module Egg
       C
       # Waits up to ms milliseconds; 0 takes a value only if one is there.
       "egg_chan_recv_for" => <<~C,
-        #ifndef _WIN32
-        #include <errno.h>
-        #include <time.h>
-        #endif
         static bool egg_chan_recv_for(void *v, void *out, int64_t ms) {
             if (ms < 0) egg_panic("negative timeout");
             egg_chan *c = (egg_chan *)v;
@@ -1117,7 +1125,7 @@ module Egg
             ULONGLONG end = GetTickCount64() + (ULONGLONG)ms;
         #else
             struct timespec end;
-            clock_gettime(CLOCK_REALTIME, &end);
+            clock_gettime(CLOCK_MONOTONIC, &end);
             end.tv_sec += (time_t)(ms / 1000);
             end.tv_nsec += (long)(ms % 1000) * 1000000L;
             if (end.tv_nsec >= 1000000000L) {
@@ -1132,8 +1140,20 @@ module Egg
                 if (now >= end) break;
                 ULONGLONG left = end - now;
                 SleepConditionVariableCS(&c->readable, &c->lock, left > 0xFFFFFFFEu ? 0xFFFFFFFEu : (DWORD)left);
+        #elif defined(__APPLE__)
+                struct timespec now, left;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                left.tv_sec = end.tv_sec - now.tv_sec;
+                left.tv_nsec = end.tv_nsec - now.tv_nsec;
+                if (left.tv_nsec < 0) {
+                    left.tv_sec -= 1;
+                    left.tv_nsec += 1000000000L;
+                }
+                if (left.tv_sec < 0) break;
+                /* ETIMEDOUT, or a failure: either way, stop waiting. */
+                if (pthread_cond_timedwait_relative_np(&c->readable, &c->lock, &left) != 0) break;
         #else
-                if (pthread_cond_timedwait(&c->readable, &c->lock, &end) == ETIMEDOUT) break;
+                if (pthread_cond_timedwait(&c->readable, &c->lock, &end) != 0) break;
         #endif
             }
             return egg_chan_take(c, out);
