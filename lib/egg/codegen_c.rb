@@ -2685,6 +2685,10 @@ module Egg
         "((egg_str){ #{c_string(value)}, #{value.bytesize} })"
       in Var[info: { fn_ref: String => c_name }]
         c_name
+      in Var[info: { const: c }]
+        expr(c.lit)
+      in Field[info: { const: c }]
+        expr(c.lit)
       in Var[name:]
         var_ref(name)
       in Unary[op:, operand:, info: { neg_lit: true }]

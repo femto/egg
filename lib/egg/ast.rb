@@ -17,7 +17,12 @@ module Egg
   # allows: UsesItem list from `allow unsafe`
   # links: UsesItem list from `link "name"` (name: the C library)
   # modules: filled by the Loader for the merged program (prefix -> ModuleInfo)
-  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules, :allows, :links)
+  # consts: ConstDecl for `const NAME = 8192`
+  Program  = Struct.new(:funcs, :types, :uses, :imports, :modules, :allows, :links, :consts)
+  # const NAME = value / const NAME: T = value at the top level: a value
+  # known when compiling. type: the written type or nil; ty: the checked
+  # type; lit: the value as one literal, for codegen.
+  ConstDecl = Struct.new(:name, :type, :value, :line, :col, :mod, :ty, :lit)
   # owner: the struct a method belongs to (nil for free functions)
   # mod: prefix of the module it is declared in ("" for the root file)
   # ext: for `extern fn` (no body), the UsesItem list after `uses`; else nil

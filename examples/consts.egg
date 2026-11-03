@@ -1,0 +1,40 @@
+// Top-level constants: values known when compiling, with an optional type.
+// Integer arithmetic on constants is done by the compiler.
+// expect: 8192 1048576 -349525 255
+// expect: hello 3.25 true green 8192
+// expect: true 8193
+// expect: 8192 -1
+// expect: 8192 limits 16384
+uses io
+
+const limits = @import("lib/limits.egg")
+const BIG = limits.LIMIT * 2
+
+const MAX = 8192
+const OK: i32 = 0
+const KB = 1024
+const MB = KB * KB
+const NEG = -(MB / 3)
+const MASK: u8 = 0xF0 | 0x0F
+const GREETING = "hello"
+const PI = 3.25
+const ON = true
+const COLOR: Color = .green
+const SAME = MAX
+const LAST = LATER
+const LATER = SAME
+const ALL_ONES = ~0
+
+const Color = enum { red, green }
+
+fn small(x: i32) bool {
+    return x == OK
+}
+
+fn main(io: Io) void {
+    io.print(MAX, " ", MB, " ", NEG, " ", MASK)
+    io.print(GREETING, " ", PI, " ", ON, " ", COLOR, " ", SAME)
+    io.print(small(0), " ", MAX + 1)
+    io.print(LAST, " ", ALL_ONES)
+    io.print(limits.LIMIT, " ", limits.NAME, " ", BIG)
+}

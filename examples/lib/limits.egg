@@ -1,0 +1,4 @@
+// Constants another file uses as limits.KB.
+const KB = 1024
+const LIMIT = KB * 8
+const NAME = "limits"
