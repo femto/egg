@@ -1,0 +1,16 @@
+// The byte builtins read and write through pointers: allow unsafe only.
+uses alloc
+
+fn count(s: []u8) i64 {
+    return @len(s)
+}
+
+fn main(a: Allocator) void {
+    const b: Buf(u8) = a.alloc(4, 0)
+    defer a.free(b)
+    const p = @bufPtr(b)
+    _ = count(@sliceFromPtr(p, 2))
+}
+
+// error: E131 @11
+// error: E131 @12

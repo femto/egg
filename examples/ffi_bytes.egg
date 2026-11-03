@@ -1,0 +1,35 @@
+// Bytes to and from C without copying: @strPtr of any text, @bufPtr of a
+// buffer C may write, and @sliceFromPtr to read what C points at.
+// expect: HELLO
+// expect: 76 true
+// expect: ELL 2
+// expect: HELL
+uses io, alloc
+allow unsafe
+
+extern fn toupper(c: i32) i32
+
+fn count(s: []u8) i64 {
+    return @len(s)
+}
+
+fn main(io: Io, a: Allocator) void {
+    const b: Buf(u8) = a.alloc(5, 0)
+    defer a.free(b)
+    const msg = "hello"
+    var i = 0
+    const p = @bufPtr(b)
+    while (i < 5) {
+        @ptrAdd(p, i).* = @as(u8, toupper(@as(i32, @ptrAdd(@strPtr(msg), i).*)))
+        i = i + 1
+    }
+    io.print(b)
+    const s = b[1..3]
+    io.print(@ptrAdd(@strPtr(s), 1).*, " ", @strPtr(b) == p)
+    const v = @sliceFromPtr(@ptrAdd(p, 1), 3)
+    io.print(v, " ", count(@sliceFromPtr(p, 2)))
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    a.append_str(&out, @sliceFromPtr(p, 4))
+    io.print(out)
+}

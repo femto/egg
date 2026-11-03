@@ -3416,6 +3416,12 @@ module Egg
       when "ptrAdd" then "(#{expr(a)} + #{expr(args[1])})"
       when "ptrCast" then "((#{c_type(e.ty)})(void *)#{expr(args[1])})"
       when "strPtr" then "((uint8_t *)#{expr(a)}.ptr)"
+      when "bufPtr" then "(#{expr(a)}.ptr)"
+      when "sliceFromPtr"
+        p = hoist(expr(a), a.ty)
+        n = hoist(expr(args[1]), "i64")
+        line("#{helper('egg_slice_check')}(0, #{n}, #{n});")
+        "((#{c_type(e.ty)}){ #{p}, #{n} })"
       when "intFromPtr" then "((size_t)(uintptr_t)#{expr(a)})"
       when "ptrFromInt" then "((#{c_type(e.ty)})(uintptr_t)#{expr(args[1])})"
       when "as"

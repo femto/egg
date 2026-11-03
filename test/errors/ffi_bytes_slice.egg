@@ -1,0 +1,19 @@
+// C may write a buffer through @bufPtr, so a slice of it cannot be in use
+// across that.
+uses alloc
+allow unsafe
+
+fn count(s: []u8) i64 {
+    return @len(s)
+}
+
+fn main(a: Allocator) void {
+    const b: Buf(u8) = a.alloc(4, 0)
+    defer a.free(b)
+    const s = b[0..2]
+    const p = @bufPtr(b)
+    p.* = 1
+    _ = count(s)
+}
+
+// error: E149 @14
