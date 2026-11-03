@@ -128,7 +128,7 @@ def bad_line_marks(c_source, src, path)
     # `uses`, `allow`, `@import`, `extern fn` and type alias lines declare,
     # and generate no code (an extern fn only a prototype). A const at
     # the top level, not indented, is an alias or a constant.
-    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst \w+(: [^=]+)? = (?!(owned )?struct\b|enum\b|union\b)/)
+    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst[ \t]+\w+[ \t]*(:[^=]*)?=[ \t]*+(?!(owned[ \t]+)?struct\b|enum\b|union\b)/)
     # An else-if comparing types (K == i64) is decided at compile time, and
     # @compileError stands only in a branch that is never generated.
     # The right side must name a type, so a runtime `x == y` is not taken

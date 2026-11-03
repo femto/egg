@@ -260,18 +260,24 @@ module Egg
       # const B = A, where A is a constant, parses as an alias of a type A.
       # const X = f(1), with f an ordinary function, parses as a type
       # function's instance; it is a value that is not a constant.
-      @decls.values.each do |d|
-        next unless d.kind == :alias
-        if d.members.is_a?(String)
+      changed = true
+      while changed
+        changed = false
+        @decls.values.each do |d|
+          next unless d.kind == :alias && d.members.is_a?(String)
           target = in_module(d.mod) { qualify(d.members) }
           next unless @consts.key?(target)
           @decls.delete(d.name)
           @consts[d.name] = ConstDecl.new(d.name, nil, Var.new(d.members, d.line, d.col), d.line, d.col, d.mod)
-        elsif d.members.is_a?(GenericType) && @program.funcs.any? { |f| f.name == in_module(d.mod) { qualify(d.members.name) } && f.ret != "type" }
-          @decls.delete(d.name)
-          in_module(d.mod) { err("E150", "a top-level constant must be known when compiling; '#{d.members.name}(...)' is a call", d.line, d.col) }
-          @consts[d.name] = ConstDecl.new(d.name, nil, nil, d.line, d.col, d.mod, "error")
+          changed = true
         end
+      end
+      @decls.values.each do |d|
+        next unless d.kind == :alias && d.members.is_a?(GenericType)
+        next unless @program.funcs.any? { |f| f.name == in_module(d.mod) { qualify(d.members.name) } && f.ret != "type" }
+        @decls.delete(d.name)
+        in_module(d.mod) { err("E150", "a top-level constant must be known when compiling; '#{d.members.name}(...)' is a call", d.line, d.col) }
+        @consts[d.name] = ConstDecl.new(d.name, nil, nil, d.line, d.col, d.mod, "error")
       end
       @program.funcs.each do |f|
         in_module(f.mod) do
@@ -296,6 +302,8 @@ module Egg
       end
       # Types first (so signatures can refer to them), then signatures.
       @decls.each_value { |d| decl_type(d) }
+      # Every constant is checked, whether anything uses it or not.
+      @consts.each_value { |c| const_type(c) }
       @program.funcs.each do |f|
         sig = @sigs[f.name]
         next if sig.nil? || sig.func != f
@@ -459,6 +467,10 @@ module Egg
     def eval_const(c)
       declared = c.type.nil? ? nil : resolve_type(c.type, c.line, c.col)
       return "error" if declared == "error"
+      unless declared.nil? || num?(declared) || %w[bool str].include?(declared) || @types[declared]&.kind == :enum
+        err("E150", "a constant is a number, bool, str or enum, not a #{declared}", c.line, c.col)
+        return "error"
+      end
       v = c.value
       other = const_ref(v)
       unless other.nil?
@@ -540,7 +552,7 @@ module Egg
         y = eval_int(rhs)
         return nil if x.nil? || y.nil?
         if %w[/ %].include?(op) && y.zero?
-          err("E150", "division by zero in a constant", line, col)
+          err("E150", "a zero divisor in a constant", line, col)
           return nil
         end
         if %w[<< >>].include?(op) && (y.negative? || y > 63)
@@ -3620,7 +3632,7 @@ module Egg
       # root module's names are unqualified, but other modules do not see
       # them).
       q = qualify(name)
-      own = @mod.names.include?(name) && (@sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q))
+      own = @mod.names.include?(name) && (@sigs.key?(q) || @generic_fns.key?(q) || @type_fns.key?(q) || @decls.key?(q) || @consts.key?(q))
       if lookup(name) || own || @mod.aliases.key?(name)
         err("E106", "'#{name}' shadows an existing declaration", info.line, info.col)
       end

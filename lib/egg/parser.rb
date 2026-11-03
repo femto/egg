@@ -219,7 +219,7 @@ module Egg
         return ConstDecl.new(name.text, type, value, name.line, name.col)
       end
       expect_op("=")
-      if at?(:int) || at?(:float) || at?(:string) || kw?("true") || kw?("false") || op?("-") || op?("(") || op?(".") || const_arithmetic?
+      if at?(:int) || at?(:float) || at?(:string) || kw?("true") || kw?("false") || op?("-") || op?("~") || op?("(") || op?(".") || const_arithmetic? || const_call?
         value = parse_expr
         end_stmt
         return ConstDecl.new(name.text, nil, value, name.line, name.col)
@@ -299,6 +299,14 @@ module Egg
       end
       t = @tokens[i]
       t.kind == :op && %w[+ - * / % << >> & | ^].include?(t.text)
+    end
+
+    # `f(1)` after `const NAME =`: a call with a value, which no type
+    # function takes, so the checker can call it no constant (E150).
+    def const_call?
+      t = @tokens[@pos + 2]
+      @tokens[@pos].kind == :ident && @tokens[@pos + 1].kind == :op && @tokens[@pos + 1].text == "(" &&
+        (%i[int float string].include?(t.kind) || (t.kind == :kw && %w[true false].include?(t.text)))
     end
 
     # { field: T, ... fn m(...) R { } ... }  -> [fields, methods]

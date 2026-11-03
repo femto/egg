@@ -291,14 +291,17 @@ fn main() i64 {
 compiling: a number, `bool`, text or enum literal, another constant, or
 integer arithmetic on those (`+ - * / % << >> & | ^`, `-`, `~`), which the
 compiler does, with C's division (E150 for anything else, such as a call,
-and for dividing by zero or shifting by less than 0 or more than 63). A
-type may follow the name, `const OK: i32 = 0`; without one an integer is an
+and for a zero divisor of `/` or `%` or shifting by less than 0 or more than 63). A
+type may follow the name, `const OK: i32 = 0`: a number type, `bool`, `str`
+or an enum (E150 for any other); without one an integer is an
 `i64` and a float an `f64`, as for a local `const`, and an enum literal
 needs one. The value must fit the type (E003). Constants are visible
 everywhere in their file and through an import (`limits.KB`), like
 functions, and a constant may name one declared after it, but not itself
 (E150). `const B = A` makes B a constant when A is one, and an alias when
-A is a type. A constant cannot be assigned or passed as `inout` (E105).
+A is a type. Every constant is checked, used or not. A constant cannot be
+assigned or passed as `inout` (E105), and no local may take its name
+(E106).
 
 ```egg
 // expect: 1048576 255 -2

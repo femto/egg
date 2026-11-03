@@ -1,4 +1,5 @@
-// A top-level constant must be known when compiling.
+// A top-level constant must be known when compiling, and be a number,
+// bool, str or enum.
 const A = B
 const B = A + 1
 const C = 1 / 0
@@ -6,20 +7,31 @@ const D: u8 = 300
 const E = f()
 const F = 2
 const F = 3
+const G = 1 % 0
+const H = f(1)
+const I: ?i64 = 1
+const UNUSED = 1 << 64
 
 fn f() i64 {
     return 1
 }
 
 fn main() void {
+    const F = 4
     _ = A
     _ = C
     _ = D
     _ = E
+    _ = F
 }
 
-// error: E150 @2
 // error: E150 @4
-// error: E003 @5
-// error: E150 @6
-// error: E106 @8
+// error: E150 @5
+// error: E003 @6
+// error: E150 @7
+// error: E106 @9
+// error: E150 @10
+// error: E150 @11
+// error: E150 @12
+// error: E150 @13
+// error: E106 @20
