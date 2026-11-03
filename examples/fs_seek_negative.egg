@@ -1,0 +1,12 @@
+// A negative position is a mistake in the program, like a negative index.
+// expect: open
+// panic: negative file position
+uses fs, io
+
+fn main(io: Io, files: Fs) !void {
+    try files.write("seek.txt", "abc")
+    const r = try files.open("seek.txt")
+    defer r.close()
+    io.print("open")
+    try r.seek(-1)
+}

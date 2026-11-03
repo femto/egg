@@ -1,0 +1,102 @@
+// Directories, removing and renaming, stat, real_path and seek. Removing
+// takes the kind of thing it removes: remove_file a file, remove_dir an
+// empty directory. A directory lists its entries one at a time, in no
+// particular order, so this counts them and adds up their sizes.
+// expect: dir 0
+// expect: file 10
+// expect: 2 entries, 15 bytes
+// expect: 4567
+// expect: true
+// expect: NotEmpty
+// expect: IsDirectory
+// expect: NotDirectory
+// expect: NotDirectory
+// expect: AlreadyExists
+// expect: NotFound
+// expect: NotFound
+// expect: gone
+uses alloc, fs, io
+
+fn show(io: Io, files: Fs, path: str) !void {
+    const st = try files.stat(path)
+    switch (st.kind) {
+        .file => {
+            io.print("file ", st.size)
+        }
+        .dir => {
+            io.print("dir ", st.size)
+        }
+        .other => {
+            io.print("other")
+        }
+    }
+}
+
+fn list(io: Io, files: Fs, a: Allocator, dir: str) !void {
+    const d = try files.open_dir(dir)
+    defer d.close()
+    var name: Buf(u8) = .empty
+    defer a.free(name)
+    var n: i64 = 0
+    var bytes: i64 = 0
+    while (try d.next(a, &name)) {
+        const path = a.concat(dir, "/", name)
+        defer a.free(path)
+        const st = try files.stat(path)
+        n = n + 1
+        bytes = bytes + st.size
+    }
+    io.print(n, " entries, ", bytes, " bytes")
+}
+
+fn middle(io: Io, files: Fs, a: Allocator, path: str) !void {
+    const r = try files.open(path)
+    defer r.close()
+    try r.seek(4)
+    var buf: Buf(u8) = .empty
+    defer a.free(buf)
+    _ = try r.read(a, &buf, 4)
+    io.print(buf)
+}
+
+fn same_place(files: Fs, a: Allocator, p: str, q: str) !bool {
+    const x = try files.real_path(a, p)
+    defer a.free(x)
+    const y = try files.real_path(a, q)
+    defer a.free(y)
+    return x == y
+}
+
+fn open_dir(files: Fs, path: str) !void {
+    const d = try files.open_dir(path)
+    d.close()
+}
+
+fn stat(files: Fs, path: str) !void {
+    _ = try files.stat(path)
+}
+
+fn main(io: Io, files: Fs, a: Allocator) !void {
+    try files.make_dir("d")
+    try files.write("d/a.txt", "hello")
+    try files.write("d/b.txt", "0123456789")
+    try files.rename("d/b.txt", "d/c.txt")
+    try show(io, files, "d")
+    try show(io, files, "d/c.txt")
+    try list(io, files, a, "d")
+    try middle(io, files, a, "d/c.txt")
+    io.print(try same_place(files, a, "d/../d/a.txt", "d/a.txt"))
+
+    files.remove_dir("d") catch |e| { io.print(@errorName(e)) }
+    files.remove_file("d") catch |e| { io.print(@errorName(e)) }
+    files.remove_dir("d/a.txt") catch |e| { io.print(@errorName(e)) }
+    open_dir(files, "d/a.txt") catch |e| { io.print(@errorName(e)) }
+    files.make_dir("d") catch |e| { io.print(@errorName(e)) }
+    stat(files, "d/b.txt") catch |e| { io.print(@errorName(e)) }
+    files.rename("d/b.txt", "d/x.txt") catch |e| { io.print(@errorName(e)) }
+
+    try files.remove_file("d/a.txt")
+    try files.remove_file("d/c.txt")
+    try files.remove_dir("d")
+    stat(files, "d") catch |_| { io.print("gone") }
+}

@@ -280,6 +280,11 @@ v3 (memory without GC, and what realistic programs needed):
   replaces it, and failures are
   `error.NotFound`, `error.PermissionDenied`, `error.IsDirectory`,
   `error.InvalidPath` or `error.IoFailed`
+- Directories and names: `fs.make_dir(path)`, `fs.open_dir(path)` (an owned
+  `DirReader`; `d.next(a, &name)` gives one entry at a time),
+  `fs.remove_file(path)`, `fs.remove_dir(path)` (empty only),
+  `fs.rename(from, to)`, `fs.stat(path)` (a `Stat` with `kind` and `size`)
+  and `fs.real_path(a, path)`; `r.seek(pos)` on a `Reader`
 
 From v2:
 
