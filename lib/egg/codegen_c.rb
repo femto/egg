@@ -128,7 +128,7 @@ module Egg
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
-                      egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_recv
+                      egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_take egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
@@ -1101,6 +1101,47 @@ module Egg
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
             while (c->count == 0 && c->senders > 0) EGG_CHAN_WAIT(c, readable);
+            return egg_chan_take(c, out);
+        }
+      C
+      # Waits up to ms milliseconds; 0 takes a value only if one is there.
+      "egg_chan_recv_for" => <<~C,
+        #ifndef _WIN32
+        #include <errno.h>
+        #include <time.h>
+        #endif
+        static bool egg_chan_recv_for(void *v, void *out, int64_t ms) {
+            if (ms < 0) egg_panic("negative timeout");
+            egg_chan *c = (egg_chan *)v;
+        #ifdef _WIN32
+            ULONGLONG end = GetTickCount64() + (ULONGLONG)ms;
+        #else
+            struct timespec end;
+            clock_gettime(CLOCK_REALTIME, &end);
+            end.tv_sec += (time_t)(ms / 1000);
+            end.tv_nsec += (long)(ms % 1000) * 1000000L;
+            if (end.tv_nsec >= 1000000000L) {
+                end.tv_sec += 1;
+                end.tv_nsec -= 1000000000L;
+            }
+        #endif
+            EGG_CHAN_LOCK(c);
+            while (c->count == 0 && c->senders > 0) {
+        #ifdef _WIN32
+                ULONGLONG now = GetTickCount64();
+                if (now >= end) break;
+                ULONGLONG left = end - now;
+                SleepConditionVariableCS(&c->readable, &c->lock, left > 0xFFFFFFFEu ? 0xFFFFFFFEu : (DWORD)left);
+        #else
+                if (pthread_cond_timedwait(&c->readable, &c->lock, &end) == ETIMEDOUT) break;
+        #endif
+            }
+            return egg_chan_take(c, out);
+        }
+      C
+      # The next value into out, if there is one, and unlocks the channel.
+      "egg_chan_take" => <<~C,
+        static bool egg_chan_take(egg_chan *c, void *out) {
             bool got = c->count > 0;
             if (got) {
                 memcpy(out, c->items + (size_t)c->head * c->size, c->size);
@@ -1634,7 +1675,7 @@ module Egg
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
-                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan"],
+                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan_take"], "egg_chan_recv_for" => ["egg_chan_take"], "egg_chan_take" => ["egg_chan"],
                     "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
@@ -1652,7 +1693,7 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
-                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_recv
+                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take egg_chan_recv
                   egg_chan_tx_close
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -2855,6 +2896,11 @@ module Egg
         r = tmp
         line("#{c_type(ret)} #{r} = { .has = false };")
         line("#{r}.has = #{helper('egg_chan_recv')}(#{c}, &#{r}.value);")
+        r
+      when "Receiver.recv_timeout"
+        r = tmp
+        line("#{c_type(ret)} #{r} = { .has = false };")
+        line("#{r}.has = #{helper('egg_chan_recv_for')}(#{c}, &#{r}.value, #{expr(args[0])});")
         r
       end
     end

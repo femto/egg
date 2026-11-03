@@ -1687,7 +1687,7 @@ sender comes from it. Both ends are owned, and only `Threads` makes them.
 
 | Type | Methods |
 | --- | --- |
-| `Receiver(T)` | `rx.recv() ?T`: the next value, waiting for one; null when every sender has closed and nothing is left; `rx.sender() Sender(T)`; `rx.clone() Receiver(T)`; `rx.close()` |
+| `Receiver(T)` | `rx.recv() ?T`: the next value, waiting for one; null when every sender has closed and nothing is left; `rx.recv_timeout(ms) ?T`: the same, but waiting at most ms milliseconds, and null when none came in time (0 does not wait; a negative ms panics); `rx.sender() Sender(T)`; `rx.clone() Receiver(T)`; `rx.close()` |
 | `Sender(T)` | `tx.send(v)`: takes v, waiting while the channel is full (and for the receiver, with n of 0); `tx.clone() Sender(T)`; `tx.close()` |
 
 A value sent moves, so an owned one still has one owner. Values from one

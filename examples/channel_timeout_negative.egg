@@ -1,0 +1,9 @@
+// A negative timeout is a mistake in the program.
+// panic: negative timeout
+uses thread
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    defer rx.close()
+    _ = rx.recv_timeout(-1)
+}
