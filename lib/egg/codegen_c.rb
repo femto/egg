@@ -210,7 +210,8 @@ module Egg
             return (egg_str){ egg_argv[i], (int64_t)strlen(egg_argv[i]) };
         }
       C
-      # Unix time in nanoseconds. Windows counts 100 ns from 1601.
+      # Unix time in nanoseconds. Windows counts 100 ns from 1601. A failure
+      # panics without egg_panic, which Windows' clocks would leave unused.
       "egg_clock_now" => <<~C,
         #ifdef _WIN32
         typedef struct { unsigned long lo, hi; } egg_filetime;
@@ -225,7 +226,7 @@ module Egg
             return ((int64_t)(((uint64_t)ft.hi << 32) | ft.lo) - INT64_C(116444736000000000)) * 100;
         #else
             struct timespec t;
-            if (clock_gettime(CLOCK_REALTIME, &t) != 0) egg_panic("cannot read the clock");
+            if (clock_gettime(CLOCK_REALTIME, &t) != 0) { fflush(stdout); fputs("egg panic: cannot read the clock\\n", stderr); abort(); }
             return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
         #endif
         }
@@ -247,7 +248,7 @@ module Egg
             return n / f * 1000000000 + n % f * 1000000000 / f;
         #else
             struct timespec t;
-            if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) egg_panic("cannot read the clock");
+            if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) { fflush(stdout); fputs("egg panic: cannot read the clock\\n", stderr); abort(); }
             return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
         #endif
         }
@@ -275,10 +276,17 @@ module Egg
                 n -= k;
             }
         #else
-            /* At most 256 bytes a call; no state, so threads cannot race. */
+            /* At most 256 bytes a call; no state, so threads cannot race.
+               Where the kernel lacks it (ENOSYS), /dev/urandom, opened for
+               this call. */
             while (n > 0) {
                 size_t k = n > 256 ? 256 : (size_t)n;
-                if (getentropy(p, k) != 0) egg_panic("cannot read random bytes");
+                if (getentropy(p, k) != 0) {
+                    FILE *f = fopen("/dev/urandom", "rb");
+                    size_t got = f == NULL ? 0 : fread(p, 1, k, f);
+                    if (f != NULL) fclose(f);
+                    if (got != k) egg_panic("cannot read random bytes");
+                }
                 p += k;
                 n -= (int64_t)k;
             }
@@ -1788,7 +1796,7 @@ module Egg
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
+    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
                   egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take egg_chan_recv
                   egg_chan_tx_close

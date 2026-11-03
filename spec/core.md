@@ -1440,8 +1440,8 @@ version of this section.
 ## 17. Capabilities
 
 A capability is something the core does not have: the standard streams,
-command-line arguments, files, the network, threads and heap allocation so
-far. A file declares the capabilities it needs on a `uses` line:
+command-line arguments, files, the network, threads, the clock, random
+bytes and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
 
 ```
 uses alloc, io
