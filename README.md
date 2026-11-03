@@ -256,7 +256,8 @@ v3 (memory without GC, and what realistic programs needed):
   too; failures are `error.IoFailed`): `io.read_line(a, &line) !bool` returns
   false at the end, `io.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
-  with the program's name at 0 and the first argument at 1
+  with the program's name at 0 and the first argument at 1;
+  `args.env(name)` is an environment variable, a `?str`
 - Threads: `uses thread` gives a `Threads` value; `threads.spawn(f, x, ...)`
   returns an owned `Thread` to `join` or `detach`. Owned arguments move to the
   thread and plain values are copied, so outside `allow unsafe` raw pointers

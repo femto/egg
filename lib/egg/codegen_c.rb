@@ -123,7 +123,7 @@ module Egg
     HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat
-                      egg_fmt_float egg_print_float egg_cstr egg_buf_resize
+                      egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
                       egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
@@ -206,6 +206,54 @@ module Egg
         static egg_str egg_args_get(int64_t i) {
             if (i < 0 || i >= egg_argc) egg_panic("index out of bounds");
             return (egg_str){ egg_argv[i], (int64_t)strlen(egg_argv[i]) };
+        }
+      C
+      # The environment variable called name. POSIX's getenv points into the
+      # environment, which Egg never changes. Windows gives it as UTF-16, so
+      # it is converted once per call, into memory the program keeps.
+      "egg_args_env" => <<~C,
+        #ifdef _WIN32
+        __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableW(const wchar_t *, wchar_t *, unsigned long);
+        __declspec(dllimport) int __stdcall MultiByteToWideChar(unsigned int, unsigned long, const char *, int, wchar_t *, int);
+        __declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned int, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+        #endif
+        static bool egg_args_env(egg_str name, egg_str *out) {
+            /* No name holds a 0 byte or an =. */
+            if (name.len == 0 || memchr(name.ptr, 0, (size_t)name.len) != NULL || memchr(name.ptr, '=', (size_t)name.len) != NULL) return false;
+            char *n = (char *)egg_buf_resize(NULL, name.len + 1, 1);
+            memcpy(n, name.ptr, (size_t)name.len);
+            n[name.len] = 0;
+        #ifdef _WIN32
+            bool found = false;
+            int wn = MultiByteToWideChar(65001, 8, n, -1, NULL, 0);
+            if (wn > 0) {
+                wchar_t *w = (wchar_t *)egg_buf_resize(NULL, wn, sizeof(wchar_t));
+                MultiByteToWideChar(65001, 8, n, -1, w, wn);
+                unsigned long size = GetEnvironmentVariableW(w, NULL, 0);
+                if (size > 0) {
+                    wchar_t *v = (wchar_t *)egg_buf_resize(NULL, (int64_t)size, sizeof(wchar_t));
+                    unsigned long got = GetEnvironmentVariableW(w, v, size);
+                    if (got < size) {
+                        int k = WideCharToMultiByte(65001, 0, v, -1, NULL, 0, NULL, NULL);
+                        char *u = (char *)egg_buf_resize(NULL, k > 0 ? k : 1, 1);
+                        if (k > 0) WideCharToMultiByte(65001, 0, v, -1, u, k, NULL, NULL);
+                        else u[0] = 0;
+                        *out = (egg_str){ u, (int64_t)strlen(u) };
+                        found = true;
+                    }
+                    free(v);
+                }
+                free(w);
+            }
+            free(n);
+            return found;
+        #else
+            const char *v = getenv(n);
+            free(n);
+            if (v == NULL) return false;
+            *out = (egg_str){ v, (int64_t)strlen(v) };
+            return true;
+        #endif
         }
       C
       "egg_add" => <<~C,
@@ -1709,7 +1757,7 @@ module Egg
                     "egg_tcp_write" => %w[egg_conn egg_net_last], "egg_tcp_timeout" => %w[egg_conn egg_net_timeout],
                     "egg_tcp_close" => %w[egg_conn egg_net_close], "egg_udp_recv" => %w[egg_net_base egg_net_last egg_buf_resize],
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
-                    "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"] }.freeze
+                    "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"], "egg_args_env" => ["egg_buf_resize"] }.freeze
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
@@ -1999,7 +2047,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_tcp_write egg_udp_send egg_args_get].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_tcp_write egg_udp_send egg_args_get egg_args_env].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -2974,6 +3022,11 @@ module Egg
                "#{helper('egg_args_len')}()"
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
+             when "Args.env"
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .has = false };")
+               line("#{r}.has = #{helper('egg_args_env')}(#{coerce(codes[0], args[0].ty, 'str')}, &#{r}.value);")
+               r
              when "Threads.spawn"
                ft = @types[args[0].ty]
                name = "egg_spawn_#{@spawns.length}"
