@@ -126,9 +126,9 @@ def bad_line_marks(c_source, src, path)
     bare = prev.gsub(/"(?:\\.|[^"\\])*"/, '""')
     continued ||= (bare.match?(/\bif \(.*\)\z/) && !bare.include?(" else ")) || prev == "else" || text == "else" || text.start_with?("else if (")
     # `uses`, `allow`, `@import`, `extern fn` and type alias lines declare,
-    # and generate no code (an extern fn only a prototype). Only a const at
-    # the top level, not indented, can be an alias.
-    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst \w+ = (?!(owned )?struct\b|enum\b|union\b)/)
+    # and generate no code (an extern fn only a prototype). A const at
+    # the top level, not indented, is an alias or a constant.
+    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst[ \t]+\w+[ \t]*(:[^=]*)?=[ \t]*+(?!(owned[ \t]+)?struct\b|enum\b|union\b)/)
     # An else-if comparing types (K == i64) is decided at compile time, and
     # @compileError stands only in a branch that is never generated.
     # The right side must name a type, so a runtime `x == y` is not taken
@@ -848,6 +848,22 @@ def check_args(dir)
   out, status = Open3.capture2e(*eggc_command, "run", path)
   got = out.lines.map(&:chomp)
   report(status.success? && got == ["to stderr 1", "after"], "eprint with no arguments", got.inspect)
+  env = File.join(dir, "args_env.egg")
+  File.write(env, <<~EGG)
+    uses args, io
+
+    fn main(io: Io, args: Args) void {
+        io.print("[", args.env("EGG_TEST_VALUE") orelse "unset", "]")
+        io.print("[", args.env("EGG_TEST_EMPTY") orelse "unset", "]")
+        io.print(args.env("EGG_TEST_MISSING") orelse "unset")
+        io.print(args.env("EGG_TEST=VALUE") orelse "no name")
+        io.print(args.env("") orelse "no name")
+        io.print(args.env("EGG\\0X") orelse "no name")
+    }
+  EGG
+  out, err, status = Open3.capture3({ "EGG_TEST_VALUE" => "héllo, world", "EGG_TEST_EMPTY" => "", "EGG_TEST_MISSING" => nil }, *eggc_command, "run", env)
+  got = out.lines.map(&:chomp)
+  report(status.success? && got == ["[héllo, world]", "[]", "unset", "no name", "no name", "no name"], "args.env reads the environment", "#{got.inspect} #{err}")
   order = File.join(dir, "args_order.egg")
   File.write(order, <<~EGG)
     uses io

@@ -251,12 +251,15 @@ v3 (memory without GC, and what realistic programs needed):
   range panics); `x & 1 == 0` is `(x & 1) == 0`, and `a | b & c` needs
   parentheses. Hex and binary literals: `0xff`, `0b1010`
 - Type aliases: `const Bytes = Buf(u8)` is a second name for the same type
+- Constants: `const MAX = 8192`, `const OK: i32 = 0`, `const MB = KB * KB`:
+  values known when compiling, visible through an import like functions
 - Optionals: `if (x) |v| { ... } else { ... }` and `while (x) |v| { ... }`
 - Standard error: `io.eprint(x, ...)`. Standard input (needs `uses alloc`
   too; failures are `error.IoFailed`): `io.read_line(a, &line) !bool` returns
   false at the end, `io.read_all(a) !Buf(u8)` returns the rest. Command-line arguments: `uses args`
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
-  with the program's name at 0 and the first argument at 1
+  with the program's name at 0 and the first argument at 1;
+  `args.env(name)` is an environment variable, a `?str`
 - Time and random bytes: `uses time` gives a `Clock` (`clock.now()` and
   `clock.monotonic()`, in nanoseconds); `uses rand` gives a `Random`
   (`rng.fill(&b)` fills a `Buf(u8)` from the system's random source)

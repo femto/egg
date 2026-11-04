@@ -47,6 +47,7 @@ module Egg
       @by_path = {}   # absolute path -> ModuleInfo
       @funcs = []
       @types = []
+      @consts = []
     end
 
     def load
@@ -63,7 +64,7 @@ module Egg
           mod.aliases[imp.name] = target.prefix
         end
       end
-      Program.new(@funcs, @types, root.uses, root.imports, @modules, root.allows, root.links)
+      Program.new(@funcs, @types, root.uses, root.imports, @modules, root.allows, root.links, @consts)
     end
 
     private
@@ -110,7 +111,7 @@ module Egg
     end
 
     def add_module(prefix, path, file, prog, root)
-      names = prog.funcs.map(&:name) + prog.types.map(&:name)
+      names = prog.funcs.map(&:name) + prog.types.map(&:name) + (prog.consts || []).map(&:name)
       mod = ModuleInfo.new(prefix, path, file, prog.uses, {}, names, prog.imports, prog.allows || [], prog.links || [], root)
       @modules[prefix] = mod
       @by_path[path] = mod unless path.nil?
@@ -119,6 +120,11 @@ module Egg
         d.mod = prefix
         d.fns.each { |m| m.mod = prefix }
         @types << d
+      end
+      (prog.consts || []).each do |c|
+        c.name = Egg.qualify(mod, c.name)
+        c.mod = prefix
+        @consts << c
       end
       prog.funcs.each do |f|
         f.name = Egg.qualify(mod, f.name)

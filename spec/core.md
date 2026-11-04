@@ -287,6 +287,41 @@ fn main() i64 {
 }
 ```
 
+### Constants
+
+`const NAME = value` at the top level of a file names a value known when
+compiling: a number, `bool`, text or enum literal, another constant, or
+integer arithmetic on those (`+ - * / % << >> & | ^`, `-`, `~`), which the
+compiler does, with C's division (E150 for anything else, such as a call,
+and for a zero divisor of `/` or `%` or shifting by less than 0 or more than 63). A
+type may follow the name, `const OK: i32 = 0`: a number type, `bool`, `str`
+or an enum (E150 for any other); without one an integer is an
+`i64` and a float an `f64`, as for a local `const`, and an enum literal
+needs one. The value must fit the type (E003). Constants are visible
+everywhere in their file and through an import (`limits.KB`), like
+functions, and a constant may name one declared after it, but not itself
+(E150). `const B = A` makes B a constant when A is one, and an alias when
+A is a type. Every constant is checked, used or not. A constant cannot be
+assigned or passed as `inout` (E105), and no local or parameter may take its name
+(E106).
+
+```egg
+// expect: 1048576 255 -2
+// expect: egg true
+uses io
+
+const KB = 1024
+const MB = KB * KB
+const MASK: u8 = 0xF0 | 0x0F
+const NAME = "egg"
+const ON = true
+
+fn main(io: Io) void {
+    io.print(MB, " ", MASK, " ", -5 / 2)
+    io.print(NAME, " ", ON)
+}
+```
+
 ## 5. Functions
 
 ```
@@ -1455,7 +1490,7 @@ with a value type that is the only way to use it:
 | Capability | Value | Methods |
 | --- | --- | --- |
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_line_max(a, &line, max) !bool`: the same, but a line of more than max bytes, not counting its line ending, fails with `error.LineTooLong`, and a negative max panics; `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. All three show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
-| `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics |
+| `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics; `args.env(name) ?str`: the environment variable called name (text), or null when it is not set or name is empty or holds `=` or a 0 byte, or, on Windows, is not UTF-8. The environment is, like the arguments, what the program was started with, so it is the same `args` capability. On Windows each call keeps a UTF-8 copy of the value for the rest of the program, so read a variable once rather than in a loop |
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
 | `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values (with 0, a sender waits for the receiver); see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; `fs.open_dir(path) !DirReader`, `fs.make_dir(path) !void`, `fs.remove_file(path) !void`, `fs.remove_dir(path) !void`, `fs.rename(from, to) !void`, `fs.stat(path) !Stat`, `fs.real_path(a, path) !Buf(u8)`: directories and names; see below |
