@@ -78,9 +78,9 @@ module Egg
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
     IF_SLICE_HINT = "slices exist only as parameters and local slices; use an if statement, or call a function in each branch".freeze
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Addr Threads Thread]).freeze
-    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args" }.freeze
-    CAPABILITIES = %w[alloc args fs io net thread].freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Addr Threads Thread Clock Random]).freeze
+    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args", "Clock" => "time", "Random" => "rand" }.freeze
+    CAPABILITIES = %w[alloc args fs io net rand thread time].freeze
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
     FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Thread" => "thread" }.freeze
@@ -110,6 +110,8 @@ module Egg
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
       "Addr" => { "port" => [[], "i64"] },
       "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"] },
+"Clock" => { "now" => [[], "i64"], "monotonic" => [[], "i64"] },
+"Random" => { "fill" => [["inout_buffer"], "void"] },
       "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
       "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                     "read_all" => [["Allocator"], "!Buf(u8)"],
@@ -2670,8 +2672,8 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
-          if (name.start_with?("append_") || name.start_with?("read") || name == "recv_from") && elem != "u8"
-            err("E103", "'#{name}' writes text to a Buf(u8), found #{at}", a.line, a.col)
+          if (name.start_with?("append_") || name.start_with?("read") || name == "recv_from" || name == "fill") && elem != "u8"
+            err("E103", "'#{name}' writes #{name == "fill" ? "random bytes" : "text"} to a Buf(u8), found #{at}", a.line, a.col)
             return "error"
           end
           ret = opt_type(elem) if pop

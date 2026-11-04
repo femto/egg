@@ -92,6 +92,8 @@ fn read_config(files: Fs, a: Allocator, path: str) !Config {
 | `fs` | 文件，按操作系统各有实现 | 已完成：整文件 `read` 和 `write`，打开的文件是 owned 的 `Reader` 和 `Writer`，`Reader` 可以 `seek`；目录（`make_dir`，`open_dir` 得到 owned 的 `DirReader` 逐个列出）、`remove_file`、`remove_dir`、`rename`、`stat` 和 `real_path`；同时读写打开一个文件还没有 |
 | `net` | TCP、UDP 和域名解析，按操作系统各有实现 | 已完成：阻塞式 socket；Unix socket 和 TLS 还没有 |
 | `thread` | 系统线程；owned 值在线程间移动，`allow unsafe` 之外不共享内存 | 已完成：`spawn`、`join`、`detach`、channel |
+| `time` | 墙上时钟和单调时钟 | 已完成：`now` 和 `monotonic`，单位纳秒 |
+| `rand` | 系统的密码学随机源 | 已完成：`fill` |
 | `raise` | 异常抛出与捕获，用核心代码实现 | v3 之后 |
 
 检查规则：

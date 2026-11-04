@@ -1,0 +1,23 @@
+// The clock and the system's random bytes are capabilities of their own,
+// so code that reads neither stays deterministic.
+// expect: true true
+// expect: true
+// expect: 32 true
+uses alloc, io, rand, time
+
+fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
+    const t = clock.now()
+    io.print(t > 1700000000000000000, " ", t < 4000000000000000000)
+    const m1 = clock.monotonic()
+    const m2 = clock.monotonic()
+    io.print(m2 >= m1)
+    var b: Buf(u8) = a.alloc(32, 0)
+    defer a.free(b)
+    rng.fill(&b)
+    // 32 zero bytes from the random source would be a 1 in 2^256 event.
+    var any = false
+    for (b) |x| {
+        any = any or x != 0
+    }
+    io.print(@len(b), " ", any)
+}

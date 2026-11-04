@@ -42,13 +42,13 @@ module Egg
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
     gen = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil)
     c = gen.generate
-    CompileResult.new(c, [], links(r.program, gen.uses_net?, gen.uses_threads?))
+    CompileResult.new(c, [], links(r.program, gen.uses_net?, gen.uses_threads?, gen.uses_random?))
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end
 
   # The libraries every loaded file links, in load order, each once.
-  def self.links(program, uses_net = false, uses_threads = false)
+  def self.links(program, uses_net = false, uses_threads = false, uses_random = false)
     names = []
     program.modules.each_value do |m|
       m.links.each { |l| names << l.name unless names.include?(l.name) }
@@ -56,6 +56,8 @@ module Egg
     # Sockets on Windows live in their own library.
     names << "ws2_32" if Gem.win_platform? && uses_net && !names.include?("ws2_32")
     names << "pthread" if !Gem.win_platform? && uses_threads && !names.include?("pthread")
+    # Random bytes on Windows come from BCryptGenRandom.
+    names << "bcrypt" if Gem.win_platform? && uses_random && !names.include?("bcrypt")
     names
   end
 end
