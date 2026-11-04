@@ -277,8 +277,7 @@ module Egg
             }
         #else
             /* At most 256 bytes a call; no state, so threads cannot race.
-               Where the kernel lacks it (ENOSYS), /dev/urandom, opened for
-               this call. */
+               If getentropy fails, /dev/urandom, opened for each chunk. */
             while (n > 0) {
                 size_t k = n > 256 ? 256 : (size_t)n;
                 if (getentropy(p, k) != 0) {
