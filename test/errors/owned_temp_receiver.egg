@@ -1,0 +1,9 @@
+// A socket made only to call a method on it would never be closed.
+uses net
+fn send(c: TcpConn) !void {
+    try (try c.clone()).write("x")
+}
+fn main(net: Net) void {
+    _ = net
+}
+// error: E133 @4

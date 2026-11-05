@@ -1725,9 +1725,10 @@ module Egg
         static int egg_tcp_clone(void *v, void **out) {
             egg_sock s;
         #ifdef _WIN32
+            /* socket() makes overlapped sockets; so must the copy. */
             WSAPROTOCOL_INFOW info;
             if (WSADuplicateSocketW(((egg_conn *)v)->s, GetCurrentProcessId(), &info) != 0) return egg_net_last();
-            s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, 0);
+            s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED);
         #else
             s = fcntl(((egg_conn *)v)->s, F_DUPFD_CLOEXEC, 0);
         #endif
