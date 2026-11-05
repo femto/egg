@@ -1356,6 +1356,8 @@ module Egg
         #endif
         typedef SOCKET egg_sock;
         #define EGG_NO_SOCK INVALID_SOCKET
+        #define EGG_SOCK_CLOEXEC 0
+        #define EGG_ACCEPT(l) accept((l), NULL, NULL)
         #else
         #include <errno.h>
         #include <fcntl.h>
@@ -1368,6 +1370,20 @@ module Egg
         #include <unistd.h>
         typedef int egg_sock;
         #define EGG_NO_SOCK (-1)
+        /* A socket is close-on-exec from the start where the system can say
+           so (SOCK_CLOEXEC; accept4 on Linux); elsewhere, as on macOS,
+           egg_net_prep makes it so just after. */
+        #ifdef SOCK_CLOEXEC
+        #define EGG_SOCK_CLOEXEC SOCK_CLOEXEC
+        #else
+        #define EGG_SOCK_CLOEXEC 0
+        #endif
+        #if defined(__linux__) && defined(SOCK_CLOEXEC)
+        int accept4(int, struct sockaddr *, socklen_t *, int);
+        #define EGG_ACCEPT(l) accept4((l), NULL, NULL, SOCK_CLOEXEC)
+        #else
+        #define EGG_ACCEPT(l) accept((l), NULL, NULL)
+        #endif
         #endif
         /* A write to a closed connection is an error, not a fatal signal. */
         #ifndef MSG_NOSIGNAL
@@ -1548,7 +1564,7 @@ module Egg
             if (code != 0) return code;
             code = 7;
             for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
-                egg_sock s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                egg_sock s = socket(ai->ai_family, ai->ai_socktype | EGG_SOCK_CLOEXEC, ai->ai_protocol);
                 if (s == EGG_NO_SOCK) {
                     code = egg_net_last();
                     continue;
@@ -1573,7 +1589,7 @@ module Egg
             if (code != 0) return code;
             code = 7;
             for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
-                egg_sock s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                egg_sock s = socket(ai->ai_family, ai->ai_socktype | EGG_SOCK_CLOEXEC, ai->ai_protocol);
                 if (s == EGG_NO_SOCK) {
                     code = egg_net_last();
                     continue;
@@ -1600,7 +1616,7 @@ module Egg
         static int egg_tcp_accept(int64_t l, void **out) {
             egg_sock s;
             do {
-                s = accept((egg_sock)l, NULL, NULL);
+                s = EGG_ACCEPT((egg_sock)l);
         #ifdef _WIN32
             } while (0);
         #else
@@ -1738,6 +1754,10 @@ module Egg
             WSAPROTOCOL_INFOW info;
             if (WSADuplicateSocketW(((egg_conn *)v)->s, GetCurrentProcessId(), &info) != 0) return egg_net_last();
             s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+            /* Before Windows 7 SP1 the flag is unknown: then egg_net_prep
+               clears the handle's inheritance just after. */
+            if (s == EGG_NO_SOCK && WSAGetLastError() == WSAEINVAL)
+                s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED);
         #else
             s = fcntl(((egg_conn *)v)->s, F_DUPFD_CLOEXEC, 0);
         #endif
