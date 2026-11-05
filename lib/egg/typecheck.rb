@@ -2598,8 +2598,8 @@ module Egg
       cap = CAP_TYPES[t] || FILE_TYPES[t]
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"] unless cap.nil?
       # A file or socket used without closing it, such as (try c.clone()).write(s),
-      # would never be closed; close itself ends a temporary.
-      check_borrowed(obj, t) if FILE_TYPES.key?(t) && name != "close"
+      # would never be closed; close (join, detach for a Thread) ends a temporary.
+      check_borrowed(obj, t) if FILE_TYPES.key?(t) && !%w[close join detach].include?(name)
       params, ret = m
       ret = ptr_type("u8") if ret == "*u8"
       if ret == "!Buf(u8)"
