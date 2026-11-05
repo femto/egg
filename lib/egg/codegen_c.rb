@@ -2852,6 +2852,9 @@ module Egg
         "((egg_str){ #{c_string(value)}, #{value.bytesize} })"
       in Var[info: { fn_ref: String => c_name }]
         c_name
+      # m.f as a value: a function of another module.
+      in Field[info: { fn_ref: String => c_name }]
+        c_name
       in Var[info: { const: c }]
         expr(c.lit)
       in Field[info: { const: c }]

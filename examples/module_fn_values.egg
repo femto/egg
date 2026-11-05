@@ -1,0 +1,14 @@
+// A function of another module as a value: called through a local, and
+// handed to a thread.
+// expect: 6
+// expect: number 10
+uses io, thread
+
+const steps = @import("lib/steps.egg")
+const shout = @import("lib/shout.egg")
+
+fn main(io: Io, threads: Threads) void {
+    const f = steps.twice
+    io.print(f(3))
+    threads.spawn(shout.number, io, 10).join()
+}
