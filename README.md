@@ -70,15 +70,16 @@ the HTTP servers on every pull request
 
 ## Quick start
 
-You need Ruby 3.0+ and a C compiler.
+You need Ruby 3.0+ and a C compiler. The compiler, `bin/eggc`, is a Ruby
+script in this repository: there is nothing to build or install.
 
 ```bash
 git clone https://github.com/femto/egg
 cd egg
-bin/eggc run examples/complex/word_freq.egg
+ruby bin/eggc run examples/complex/word_freq.egg
 ```
 
-Save this as `hello.egg` and run `bin/eggc run hello.egg`:
+Save this as `hello.egg` and run `ruby bin/eggc run hello.egg`:
 
 ```zig
 uses alloc, io
