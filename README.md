@@ -96,6 +96,20 @@ fn main(io: Io, a: Allocator) void {
 
 Code blocks here are highlighted as Zig, because GitHub does not know Egg yet.
 
+### Optional: a native eggc with Spinel
+
+`bin/eggc` is a Ruby script, so the above needs nothing built. It is written
+in the Ruby subset [Spinel](https://github.com/matz/spinel) compiles, which
+can make it a native binary that starts in ~5 ms instead of ~350 ms and
+needs no Ruby:
+
+```bash
+mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
+build/bin/eggc run examples/complex/word_freq.egg
+```
+
+For now this works for the v0 compiler only; see [Native eggc](#native-eggc).
+
 ## The compiler catches it
 
 Forget the `defer`, and the leak does not compile:
