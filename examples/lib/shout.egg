@@ -1,0 +1,6 @@
+// A function examples/module_fn_values.egg hands to a thread.
+uses io
+
+fn number(io: Io, n: i64) void {
+    io.print("number ", n)
+}
