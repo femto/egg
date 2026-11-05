@@ -1404,13 +1404,18 @@ module Egg
         #endif
         }
       C
+      # Every socket, as it is made: not inherited by a child process (what a
+      # C library may start), and no SIGPIPE where a flag can say so.
       "egg_net_prep" => <<~C,
         static void egg_net_prep(egg_sock s) {
+        #ifdef _WIN32
+            SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+        #else
+            fcntl(s, F_SETFD, fcntl(s, F_GETFD) | FD_CLOEXEC);
+        #endif
         #ifdef SO_NOSIGPIPE
             int on = 1;
             setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
-        #else
-            (void)s;
         #endif
         }
       C
@@ -1725,10 +1730,14 @@ module Egg
         static int egg_tcp_clone(void *v, void **out) {
             egg_sock s;
         #ifdef _WIN32
-            /* socket() makes overlapped sockets; so must the copy. */
+            /* socket() makes overlapped sockets; so must the copy. It is not
+               inherited from the start, as egg_net_prep makes the others. */
+        #ifndef WSA_FLAG_NO_HANDLE_INHERIT
+        #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
+        #endif
             WSAPROTOCOL_INFOW info;
             if (WSADuplicateSocketW(((egg_conn *)v)->s, GetCurrentProcessId(), &info) != 0) return egg_net_last();
-            s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED);
+            s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
         #else
             s = fcntl(((egg_conn *)v)->s, F_DUPFD_CLOEXEC, 0);
         #endif
