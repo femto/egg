@@ -44,7 +44,9 @@ ports Basecamp's ONCE Campfire chat to Egg, measured with Basecamp's
 [benchmark harness](https://github.com/basecamp/once-campfire-verification)
 against the Rust port, whose HTML it matches byte for byte. So far it serves
 the benchmark's routes, not the whole app. With both apps' caches on, on
-GitHub's ubuntu-latest (2 cores for the app), in requests per second:
+GitHub's ubuntu-latest (2 cores for the app), in requests per second
+([run 41987883777](https://github.com/femto/once-campfire-egg/actions/runs/41987883777),
+2026-11-05, Egg at `f9ae6bf`, Rust's published image at `6dae2fd`):
 
 | route | Rust | Egg |
 | --- | ---: | ---: |
@@ -99,16 +101,10 @@ Code blocks here are highlighted as Zig, because GitHub does not know Egg yet.
 ### Optional: a native eggc with Spinel
 
 `bin/eggc` is a Ruby script, so the above needs nothing built. It is written
-in the Ruby subset [Spinel](https://github.com/matz/spinel) compiles, which
-can make it a native binary that starts in ~5 ms instead of ~350 ms and
-needs no Ruby:
-
-```bash
-mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
-build/bin/eggc run examples/complex/word_freq.egg
-```
-
-For now this works for the v0 compiler only; see [Native eggc](#native-eggc).
+in the Ruby subset [Spinel](https://github.com/matz/spinel) compiles, to be
+made a native binary that starts in ~5 ms instead of ~350 ms and needs no
+Ruby. The current compiler does not build under Spinel yet; the v0 compiler
+did. See [Native eggc](#native-eggc).
 
 ## The compiler catches it
 
@@ -204,9 +200,12 @@ ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ## Native eggc
 
 Spinel compiled eggc v0 to a native binary (about 30 s; it then starts in
-~5 ms instead of ~350 ms and needs no Ruby). **The v1 compiler does not
-build under Spinel yet**: Spinel currently emits C that fails to compile for
-it, so use CRuby for v1. With v0 sources:
+~5 ms instead of ~350 ms and needs no Ruby). **The current compiler does not
+build under Spinel yet**: Spinel (`3d22a0507`) refuses two constructs in it
+([#11078](https://github.com/matz/spinel/issues/11078),
+[#11079](https://github.com/matz/spinel/issues/11079); and
+[#11080](https://github.com/matz/spinel/issues/11080) would follow), so use
+CRuby. With v0 sources:
 
 ```bash
 mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
