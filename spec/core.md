@@ -1656,13 +1656,19 @@ at a time, unless it hands each to a thread.
 
 | Type | Methods |
 | --- | --- |
-| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_line_max(a, &line, max) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.close()` |
+| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_line_max(a, &line, max) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.clone() !TcpConn`: another handle to the same connection; `c.close()` |
 | `TcpListener` | `l.accept() !TcpConn`: waits for the next connection; `l.port() i64`; `l.close()` |
 | `UdpSocket` | `u.recv_from(a, &buf, n) !Addr`: the next datagram, in place of what `buf` held, and who sent it; what does not fit in n bytes is lost; `u.send_to(addr, data) !void`; `u.set_timeout(ms) !void`; `u.port() i64`; `u.close()` |
 | `Addr` | `addr.port() i64`; `io.print` shows it, as `127.0.0.1:80` or `[::1]:80` |
 
 `TcpConn`, `TcpListener` and `UdpSocket` are owned, like a `Reader`, and
-only `Net` makes them. `Addr` is a plain value, copied freely. `read_line`,
+only `Net` makes them, or `c.clone()` another `TcpConn`. A clone lets one
+thread read a connection while another writes it: it starts with nothing
+buffered (what the original had read ahead stays with it), the timeout is
+the connection's and applies to both, and the connection closes when every
+handle is closed. Calling a method on a connection or file that is not in a
+variable, such as `(try c.clone()).write(s)`, is an error (E133), since
+nothing would close it; `close` is the exception. `Addr` is a plain value, copied freely. `read_line`,
 `read_line_max`, `read`, `read_all` and `recv_from` need `uses alloc` too.
 
 Nothing is buffered on the way out, so there is no flush, and `close` cannot

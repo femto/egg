@@ -104,7 +104,7 @@ module Egg
       "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                      "read_all" => [["Allocator"], "!Buf(u8)"],
                      "read" => [%w[Allocator inout_buffer i64], "!i64"], "write" => [["text"], "!void"],
-                     "set_timeout" => [["i64"], "!void"], "close" => [[], "void"] },
+                     "set_timeout" => [["i64"], "!void"], "clone" => [[], "!TcpConn"], "close" => [[], "void"] },
       "TcpListener" => { "accept" => [[], "!TcpConn"], "port" => [[], "i64"], "close" => [[], "void"] },
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
@@ -2597,6 +2597,9 @@ module Egg
       end
       cap = CAP_TYPES[t] || FILE_TYPES[t]
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"] unless cap.nil?
+      # A file or socket used without closing it, such as (try c.clone()).write(s),
+      # would never be closed; close (join, detach for a Thread) ends a temporary.
+      check_borrowed(obj, t) if FILE_TYPES.key?(t) && !%w[close join detach].include?(name)
       params, ret = m
       ret = ptr_type("u8") if ret == "*u8"
       if ret == "!Buf(u8)"

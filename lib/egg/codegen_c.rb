@@ -135,7 +135,7 @@ module Egg
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
-                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_close egg_udp_recv egg_udp_send].freeze
+                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -1356,8 +1356,11 @@ module Egg
         #endif
         typedef SOCKET egg_sock;
         #define EGG_NO_SOCK INVALID_SOCKET
+        #define EGG_SOCK_CLOEXEC 0
+        #define EGG_ACCEPT(l) accept((l), NULL, NULL)
         #else
         #include <errno.h>
+        #include <fcntl.h>
         #include <arpa/inet.h>
         #include <netdb.h>
         #include <netinet/in.h>
@@ -1367,6 +1370,20 @@ module Egg
         #include <unistd.h>
         typedef int egg_sock;
         #define EGG_NO_SOCK (-1)
+        /* A socket is close-on-exec from the start where the system can say
+           so (SOCK_CLOEXEC; accept4 on Linux); elsewhere, as on macOS,
+           egg_net_prep makes it so just after. */
+        #ifdef SOCK_CLOEXEC
+        #define EGG_SOCK_CLOEXEC SOCK_CLOEXEC
+        #else
+        #define EGG_SOCK_CLOEXEC 0
+        #endif
+        #if defined(__linux__) && defined(SOCK_CLOEXEC)
+        int accept4(int, struct sockaddr *, socklen_t *, int);
+        #define EGG_ACCEPT(l) accept4((l), NULL, NULL, SOCK_CLOEXEC)
+        #else
+        #define EGG_ACCEPT(l) accept((l), NULL, NULL)
+        #endif
         #endif
         /* A write to a closed connection is an error, not a fatal signal. */
         #ifndef MSG_NOSIGNAL
@@ -1403,13 +1420,18 @@ module Egg
         #endif
         }
       C
+      # Every socket, as it is made: not inherited by a child process (what a
+      # C library may start), and no SIGPIPE where a flag can say so.
       "egg_net_prep" => <<~C,
         static void egg_net_prep(egg_sock s) {
+        #ifdef _WIN32
+            SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+        #else
+            fcntl(s, F_SETFD, fcntl(s, F_GETFD) | FD_CLOEXEC);
+        #endif
         #ifdef SO_NOSIGPIPE
             int on = 1;
             setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
-        #else
-            (void)s;
         #endif
         }
       C
@@ -1542,7 +1564,7 @@ module Egg
             if (code != 0) return code;
             code = 7;
             for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
-                egg_sock s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                egg_sock s = socket(ai->ai_family, ai->ai_socktype | EGG_SOCK_CLOEXEC, ai->ai_protocol);
                 if (s == EGG_NO_SOCK) {
                     code = egg_net_last();
                     continue;
@@ -1567,7 +1589,7 @@ module Egg
             if (code != 0) return code;
             code = 7;
             for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
-                egg_sock s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+                egg_sock s = socket(ai->ai_family, ai->ai_socktype | EGG_SOCK_CLOEXEC, ai->ai_protocol);
                 if (s == EGG_NO_SOCK) {
                     code = egg_net_last();
                     continue;
@@ -1594,7 +1616,7 @@ module Egg
         static int egg_tcp_accept(int64_t l, void **out) {
             egg_sock s;
             do {
-                s = accept((egg_sock)l, NULL, NULL);
+                s = EGG_ACCEPT((egg_sock)l);
         #ifdef _WIN32
             } while (0);
         #else
@@ -1718,6 +1740,33 @@ module Egg
             return egg_net_timeout(((egg_conn *)v)->s, ms);
         }
       C
+      # Another handle to the connection's socket, with nothing buffered yet;
+      # the socket closes when both are closed.
+      "egg_tcp_clone" => <<~C,
+        static int egg_tcp_clone(void *v, void **out) {
+            egg_sock s;
+        #ifdef _WIN32
+            /* socket() makes overlapped sockets; so must the copy. It is not
+               inherited from the start, as egg_net_prep makes the others. */
+        #ifndef WSA_FLAG_NO_HANDLE_INHERIT
+        #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
+        #endif
+            WSAPROTOCOL_INFOW info;
+            if (WSADuplicateSocketW(((egg_conn *)v)->s, GetCurrentProcessId(), &info) != 0) return egg_net_last();
+            s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+            /* Before Windows 7 SP1 the flag is unknown: then egg_net_prep
+               clears the handle's inheritance just after. */
+            if (s == EGG_NO_SOCK && WSAGetLastError() == WSAEINVAL)
+                s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, WSA_FLAG_OVERLAPPED);
+        #else
+            s = fcntl(((egg_conn *)v)->s, F_DUPFD_CLOEXEC, 0);
+        #endif
+            if (s == EGG_NO_SOCK) return egg_net_last();
+            egg_net_prep(s);
+            *out = egg_conn_new(s);
+            return 0;
+        }
+      C
       "egg_tcp_close" => <<~C,
         static void egg_tcp_close(void *v) {
             egg_net_close(((egg_conn *)v)->s);
@@ -1839,6 +1888,7 @@ module Egg
                     "egg_tcp_read_line" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_read" => %w[egg_conn egg_net_recv egg_net_last], "egg_tcp_read_all" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_write" => %w[egg_conn egg_net_last], "egg_tcp_timeout" => %w[egg_conn egg_net_timeout],
+                    "egg_tcp_clone" => %w[egg_conn egg_net_last egg_net_prep],
                     "egg_tcp_close" => %w[egg_conn egg_net_close], "egg_udp_recv" => %w[egg_net_base egg_net_last egg_buf_resize],
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"], "egg_args_env" => ["egg_buf_resize"] }.freeze
@@ -3202,6 +3252,12 @@ module Egg
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                call = m == "TcpConn.set_timeout" ? "#{helper('egg_tcp_timeout')}(#{c}.c, #{codes[0]})" : "#{helper('egg_net_timeout')}((egg_sock)#{c}.s, #{codes[0]})"
                line("#{r}.err = #{net_error(call)};")
+               r
+             when "TcpConn.clone"
+               c = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_tcp_clone')}(#{c}.c, &#{r}.value.c)")};")
                r
              when "TcpConn.close"
                "#{helper('egg_tcp_close')}(#{hoist(recv, obj.ty)}.c)"

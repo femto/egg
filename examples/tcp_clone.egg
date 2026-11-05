@@ -1,0 +1,60 @@
+// conn.clone() gives another handle to the same connection, to hand to
+// another thread: here a thread reads what the peer sends back while this
+// one writes on the same connection. The clone starts with nothing
+// buffered, shares the socket's timeout, and the socket closes once both
+// handles are closed.
+// expect: peer got ping
+// expect: peer got pong
+// expect: reader got ping pong
+uses alloc, io, net, thread
+
+// The two lines the peer sends back, joined by a space.
+fn reader(sink c: TcpConn, sink done: Sender(Buf(u8)), a: Allocator) void {
+    defer c.close()
+    defer done.close()
+    var got: Buf(u8) = .empty
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    var n = 0
+    while (n < 2 and (c.read_line(a, &line) catch false)) {
+        if (n > 0) {
+            a.append_str(&got, " ")
+        }
+        a.append_str(&got, line)
+        n = n + 1
+    }
+    done.send(got)
+}
+
+fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
+    const server = try net.tcp_listen("127.0.0.1", 0)
+    defer server.close()
+    const client = try net.tcp_connect("127.0.0.1", server.port())
+    defer client.close()
+    const peer = try server.accept()
+    defer peer.close()
+    try client.set_timeout(5000)
+    try peer.set_timeout(5000)
+
+    const rx = threads.channel(Buf(u8), 1)
+    defer rx.close()
+    const t = threads.spawn(reader, try client.clone(), rx.sender(), a)
+    defer t.join()
+
+    // This handle writes; the clone, in the other thread, reads.
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    for ([_]str{ "ping", "pong" }) |word| {
+        try client.write(word)
+        try client.write("\n")
+        if (try peer.read_line(a, &line)) {
+            io.print("peer got ", line)
+            try peer.write(line)
+            try peer.write("\n")
+        }
+    }
+    if (rx.recv()) |got| {
+        io.print("reader got ", got)
+        a.free(got)
+    }
+}
