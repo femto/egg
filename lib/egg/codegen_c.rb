@@ -262,7 +262,9 @@ module Egg
         #pragma comment(lib, "bcrypt")
         #endif
         #else
+        #include <errno.h>
         #include <fcntl.h>
+        #include <unistd.h>
         /* glibc, musl and macOS have it; with only POSIX features asked for,
            glibc's headers do not declare it. */
         int getentropy(void *, size_t);
@@ -282,10 +284,16 @@ module Egg
             while (n > 0) {
                 size_t k = n > 256 ? 256 : (size_t)n;
                 if (getentropy(p, k) != 0) {
-                    FILE *f = fopen("/dev/urandom", "rb");
-                    if (f != NULL) fcntl(fileno(f), F_SETFD, FD_CLOEXEC);
-                    size_t got = f == NULL ? 0 : fread(p, 1, k, f);
-                    if (f != NULL) fclose(f);
+                    /* Close-on-exec from the start, as every file is. */
+                    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+                    size_t got = 0;
+                    while (fd >= 0 && got < k) {
+                        ssize_t r = read(fd, p + got, k - got);
+                        if (r < 0 && errno == EINTR) continue;
+                        if (r <= 0) break;
+                        got += (size_t)r;
+                    }
+                    if (fd >= 0) close(fd);
                     if (got != k) egg_panic("cannot read random bytes");
                 }
                 p += k;
@@ -571,7 +579,9 @@ module Egg
       # go through UTF-16. Declared here: windows.h defines too many names.
       "egg_fs_open" => <<~C,
         #ifndef _WIN32
+        #include <errno.h>
         #include <fcntl.h>
+        #include <unistd.h>
         #endif
         #ifdef _WIN32
         #include <sys/stat.h>
@@ -595,10 +605,13 @@ module Egg
             if (f == NULL && *e == EACCES && _wstat(w, &st) == 0 && (st.st_mode & _S_IFDIR)) *e = EISDIR;
             free(w);
         #else
-            FILE *f = fopen(path, mode);
+            /* fopen's modes, as open's flags with close-on-exec from the start,
+               so no exec in another thread can inherit the file. */
+            int flags = mode[0] == 'r' ? O_RDONLY : mode[0] == 'a' ? O_WRONLY | O_CREAT | O_APPEND : O_WRONLY | O_CREAT | O_TRUNC;
+            int fd = open(path, flags | O_CLOEXEC, 0666);
+            FILE *f = fd < 0 ? NULL : fdopen(fd, mode);
             *e = errno;
-            /* Not inherited by a process a C library starts. */
-            if (f != NULL) fcntl(fileno(f), F_SETFD, fcntl(fileno(f), F_GETFD) | FD_CLOEXEC);
+            if (fd >= 0 && f == NULL) close(fd);
         #endif
             return f;
         }
@@ -970,6 +983,7 @@ module Egg
         #else
         #include <dirent.h>
         #include <fcntl.h>
+        #include <unistd.h>
         #endif
         static int egg_dir_open(egg_str path, void **out) {
             char *p = egg_fs_path(path);
@@ -1009,11 +1023,13 @@ module Egg
             }
             free(w);
         #else
-            DIR *d = opendir(p);
-            if (d == NULL) r = egg_fs_class(errno);
-            else {
-                /* glibc and macOS already do; others may not. */
-                fcntl(dirfd(d), F_SETFD, FD_CLOEXEC);
+            /* opendir, with close-on-exec from the start on every system. */
+            int fd = open(p, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            DIR *d = fd < 0 ? NULL : fdopendir(fd);
+            if (d == NULL) {
+                r = egg_fs_class(errno);
+                if (fd >= 0) close(fd);
+            } else {
                 *out = d;
             }
         #endif
