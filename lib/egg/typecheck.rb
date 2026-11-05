@@ -104,7 +104,7 @@ module Egg
       "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                      "read_all" => [["Allocator"], "!Buf(u8)"],
                      "read" => [%w[Allocator inout_buffer i64], "!i64"], "write" => [["text"], "!void"],
-                     "set_timeout" => [["i64"], "!void"], "close" => [[], "void"] },
+                     "set_timeout" => [["i64"], "!void"], "clone" => [[], "!TcpConn"], "close" => [[], "void"] },
       "TcpListener" => { "accept" => [[], "!TcpConn"], "port" => [[], "i64"], "close" => [[], "void"] },
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },

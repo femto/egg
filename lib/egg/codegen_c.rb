@@ -135,7 +135,7 @@ module Egg
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
-                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_close egg_udp_recv egg_udp_send].freeze
+                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -1358,6 +1358,7 @@ module Egg
         #define EGG_NO_SOCK INVALID_SOCKET
         #else
         #include <errno.h>
+        #include <fcntl.h>
         #include <arpa/inet.h>
         #include <netdb.h>
         #include <netinet/in.h>
@@ -1718,6 +1719,24 @@ module Egg
             return egg_net_timeout(((egg_conn *)v)->s, ms);
         }
       C
+      # Another handle to the connection's socket, with nothing buffered yet;
+      # the socket closes when both are closed.
+      "egg_tcp_clone" => <<~C,
+        static int egg_tcp_clone(void *v, void **out) {
+            egg_sock s;
+        #ifdef _WIN32
+            WSAPROTOCOL_INFOW info;
+            if (WSADuplicateSocketW(((egg_conn *)v)->s, GetCurrentProcessId(), &info) != 0) return egg_net_last();
+            s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0, 0);
+        #else
+            s = fcntl(((egg_conn *)v)->s, F_DUPFD_CLOEXEC, 0);
+        #endif
+            if (s == EGG_NO_SOCK) return egg_net_last();
+            egg_net_prep(s);
+            *out = egg_conn_new(s);
+            return 0;
+        }
+      C
       "egg_tcp_close" => <<~C,
         static void egg_tcp_close(void *v) {
             egg_net_close(((egg_conn *)v)->s);
@@ -1839,6 +1858,7 @@ module Egg
                     "egg_tcp_read_line" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_read" => %w[egg_conn egg_net_recv egg_net_last], "egg_tcp_read_all" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_write" => %w[egg_conn egg_net_last], "egg_tcp_timeout" => %w[egg_conn egg_net_timeout],
+                    "egg_tcp_clone" => %w[egg_conn egg_net_last egg_net_prep],
                     "egg_tcp_close" => %w[egg_conn egg_net_close], "egg_udp_recv" => %w[egg_net_base egg_net_last egg_buf_resize],
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"], "egg_args_env" => ["egg_buf_resize"] }.freeze
@@ -3202,6 +3222,12 @@ module Egg
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                call = m == "TcpConn.set_timeout" ? "#{helper('egg_tcp_timeout')}(#{c}.c, #{codes[0]})" : "#{helper('egg_net_timeout')}((egg_sock)#{c}.s, #{codes[0]})"
                line("#{r}.err = #{net_error(call)};")
+               r
+             when "TcpConn.clone"
+               c = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_tcp_clone')}(#{c}.c, &#{r}.value.c)")};")
                r
              when "TcpConn.close"
                "#{helper('egg_tcp_close')}(#{hoist(recv, obj.ty)}.c)"
