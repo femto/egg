@@ -1556,6 +1556,12 @@ that is not closed on every path is E135, and one used after `close` is
 E136. It can be held by an `owned struct` that closes it in its deinit, but
 only `fs` makes one (E142), and its methods need `uses fs`.
 
+A file or directory a program opens is closed in a child process that C
+code it calls may start, once the child runs another program: it is
+close-on-exec on Unix from the moment it is opened, and not inheritable on
+Windows. A child made by `fork` alone, which runs no other program, still
+shares it. Standard input, output and error are inherited.
+
 `close` cannot fail, so it fits a `defer`. Writing is buffered, so a failure
 such as a full disk may appear only when the buffer is sent: finish with
 `try w.flush()`, or a failure in what is left is lost when `close` runs.

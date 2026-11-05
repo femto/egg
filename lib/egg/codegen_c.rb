@@ -262,6 +262,9 @@ module Egg
         #pragma comment(lib, "bcrypt")
         #endif
         #else
+        #include <errno.h>
+        #include <fcntl.h>
+        #include <unistd.h>
         /* glibc, musl and macOS have it; with only POSIX features asked for,
            glibc's headers do not declare it. */
         int getentropy(void *, size_t);
@@ -281,9 +284,16 @@ module Egg
             while (n > 0) {
                 size_t k = n > 256 ? 256 : (size_t)n;
                 if (getentropy(p, k) != 0) {
-                    FILE *f = fopen("/dev/urandom", "rb");
-                    size_t got = f == NULL ? 0 : fread(p, 1, k, f);
-                    if (f != NULL) fclose(f);
+                    /* Close-on-exec from the start, as every file is. */
+                    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+                    size_t got = 0;
+                    while (fd >= 0 && got < k) {
+                        ssize_t r = read(fd, p + got, k - got);
+                        if (r < 0 && errno == EINTR) continue;
+                        if (r <= 0) break;
+                        got += (size_t)r;
+                    }
+                    if (fd >= 0) close(fd);
                     if (got != k) egg_panic("cannot read random bytes");
                 }
                 p += k;
@@ -568,6 +578,11 @@ module Egg
       # Paths are UTF-8. Windows' fopen reads them in the ANSI code page, so
       # go through UTF-16. Declared here: windows.h defines too many names.
       "egg_fs_open" => <<~C,
+        #ifndef _WIN32
+        #include <errno.h>
+        #include <fcntl.h>
+        #include <unistd.h>
+        #endif
         #ifdef _WIN32
         #include <sys/stat.h>
         #include <wchar.h>
@@ -583,14 +598,20 @@ module Egg
             }
             wchar_t *w = (wchar_t *)egg_buf_resize(NULL, n, sizeof(wchar_t));
             MultiByteToWideChar(65001, 8, path, -1, w, n);
-            FILE *f = _wfopen(w, mode[0] == 'r' ? L"rb" : mode[0] == 'a' ? L"ab" : L"wb");
+            /* N: not inherited by a child process. */
+            FILE *f = _wfopen(w, mode[0] == 'r' ? L"rbN" : mode[0] == 'a' ? L"abN" : L"wbN");
             *e = errno;
             struct _stat st;
             if (f == NULL && *e == EACCES && _wstat(w, &st) == 0 && (st.st_mode & _S_IFDIR)) *e = EISDIR;
             free(w);
         #else
-            FILE *f = fopen(path, mode);
+            /* fopen's modes, as open's flags with close-on-exec from the start,
+               so no exec in another thread can inherit the file. */
+            int flags = mode[0] == 'r' ? O_RDONLY : mode[0] == 'a' ? O_WRONLY | O_CREAT | O_APPEND : O_WRONLY | O_CREAT | O_TRUNC;
+            int fd = open(path, flags | O_CLOEXEC, 0666);
+            FILE *f = fd < 0 ? NULL : fdopen(fd, mode);
             *e = errno;
+            if (fd >= 0 && f == NULL) close(fd);
         #endif
             return f;
         }
@@ -961,6 +982,8 @@ module Egg
         typedef struct { HANDLE h; WIN32_FIND_DATAW fd; int more; } egg_dir_state;
         #else
         #include <dirent.h>
+        #include <fcntl.h>
+        #include <unistd.h>
         #endif
         static int egg_dir_open(egg_str path, void **out) {
             char *p = egg_fs_path(path);
@@ -1000,9 +1023,15 @@ module Egg
             }
             free(w);
         #else
-            DIR *d = opendir(p);
-            if (d == NULL) r = egg_fs_class(errno);
-            else *out = d;
+            /* opendir, with close-on-exec from the start on every system. */
+            int fd = open(p, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            DIR *d = fd < 0 ? NULL : fdopendir(fd);
+            if (d == NULL) {
+                r = egg_fs_class(errno);
+                if (fd >= 0) close(fd);
+            } else {
+                *out = d;
+            }
         #endif
             if (r != 0 && r != 4 && egg_fs_kind(p) == 1) r = 8;
             free(p);
@@ -1960,7 +1989,7 @@ module Egg
       emit_types
       types = @out
 
-      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") || @used.key?("egg_fs_sys") || @used.key?("egg_fs_seek") || @used.key?("egg_clock_now") || @used.key?("egg_clock_monotonic") ? SYSTEM_FEATURES + HEADER : HEADER.dup
+      out = uses_net? || uses_threads? || @used.key?("egg_fs_read") || @used.key?("egg_fs_open") || @used.key?("egg_dir") || @used.key?("egg_random_fill") || @used.key?("egg_fs_sys") || @used.key?("egg_fs_seek") || @used.key?("egg_clock_now") || @used.key?("egg_clock_monotonic") ? SYSTEM_FEATURES + HEADER : HEADER.dup
       out << (uses_threads? ? LOCKS : NO_LOCKS)
       out << "\n"
       out << STR_TYPEDEF << "\n" if @need_str
