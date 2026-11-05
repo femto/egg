@@ -158,6 +158,24 @@ loopback, against about 21,000 for Node and 8,000 for Python
 ([details](bench/README.md#http-servers)). Go's `net/http` is ahead, with far
 better tail latency: Egg has blocking IO and no event loop yet.
 
+A larger program: [once-campfire-egg](https://github.com/femto/once-campfire-egg)
+ports Basecamp's ONCE Campfire chat to Egg, measured with Basecamp's
+[benchmark harness](https://github.com/basecamp/once-campfire-verification)
+against the Rust port, whose HTML it matches byte for byte. So far it serves
+the benchmark's routes, not the whole app. With both apps' caches on, on
+GitHub's ubuntu-latest (2 cores for the app), in requests per second:
+
+| route | Rust | Egg |
+| --- | ---: | ---: |
+| room page | 12,710 | 41,833 |
+| search | 14,138 | 50,540 |
+| static CSS | 48,060 | 108,761 |
+| post a message | 1,818 | 1,771 |
+
+Without its caches Egg renders and gzips every page and is far slower on
+them; the [benchmark notes](https://github.com/femto/once-campfire-egg/blob/main/docs/benchmark.md)
+have every route and both modes.
+
 ```bash
 ruby bench/run.rb          # Egg, C, Rust, Go, Zig
 ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
