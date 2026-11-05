@@ -16,6 +16,58 @@ Egg compiles to portable C99. It is designed to be written by AI and read by peo
 - **Fast enough to be a systems language.** Near C on most programs, with every check on ([numbers](#performance)).
 - **Threads without shared data.** Owned values move between threads over channels.
 
+## Performance
+
+Every integer operation and every index in Egg is checked: overflow and out
+of bounds panic, never wrap or corrupt memory. The checks cost little. On
+four small programs ([bench/](bench/README.md), i7-9700K), the time relative to C:
+
+| program | egg | rust (overflow checks on) | zig ReleaseSafe | CPython | Ruby 3.2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fib(40) | 1.53x | 1.62x | 1.51x | 95x | 44x |
+| sieve, 50M | 1.10x | 1.04x | 1.19x | 27x | 23x |
+| collatz, 3M | 1.07x | 1.37x | 1.34x | 55x | 26x |
+| matmul, 800×800 | 2.31x | 1.11x | 1.23x | 345x | 164x |
+
+So Egg is **25 to 149 times faster than CPython** and **21 to 71 times
+faster than Ruby** on the same loops. matmul is behind Rust and Zig because
+eggc does not yet remove bounds checks from inner loops.
+
+The [HTTP example](examples/http_server/server.egg) keeps up with the same
+design in C and Rust, about 54,000 to 67,000 small requests per second on
+loopback, against about 21,000 for Node and 8,000 for Python
+([details](bench/README.md#http-servers)). Go's `net/http` is ahead, with far
+better tail latency: Egg has blocking IO and no event loop yet.
+
+A larger program: [once-campfire-egg](https://github.com/femto/once-campfire-egg)
+ports Basecamp's ONCE Campfire chat to Egg, measured with Basecamp's
+[benchmark harness](https://github.com/basecamp/once-campfire-verification)
+against the Rust port, whose HTML it matches byte for byte. So far it serves
+the benchmark's routes, not the whole app. With both apps' caches on, on
+GitHub's ubuntu-latest (2 cores for the app), in requests per second:
+
+| route | Rust | Egg |
+| --- | ---: | ---: |
+| room page | 12,710 | 41,833 |
+| search | 14,138 | 50,540 |
+| static CSS | 48,060 | 108,761 |
+| post a message | 1,818 | 1,771 |
+
+Without its caches Egg renders and gzips every page and is far slower on
+them; the [benchmark notes](https://github.com/femto/once-campfire-egg/blob/main/docs/benchmark.md)
+have every route and both modes.
+
+```bash
+ruby bench/run.rb          # Egg, C, Rust, Go, Zig
+ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
+ruby bench/http.rb         # HTTP servers; needs wrk
+```
+
+[CodSpeed](https://app.codspeed.io/femto/egg) also tracks the compiler's
+speed, smaller versions of these programs and the CPU cost per request of
+the HTTP servers on every pull request
+([bench/codspeed/](bench/codspeed/README.md)).
+
 ## Quick start
 
 You need Ruby 3.0+ and a C compiler.
@@ -134,58 +186,6 @@ ruby test/run.rb                     # all tests (CC=clang to switch compilers)
 ## Status
 
 **eggc** is the first compiler. **v2** (modules, capabilities, integer types, pointers, `extern fn`, owned buffers) and **v3** (memory without a GC) are done. It is written in Ruby, aiming at the subset [Spinel](https://github.com/matz/spinel) compiles, and runs on CRuby 3.0+. Egg is young: expect breaking changes.
-
-## Performance
-
-Every integer operation and every index in Egg is checked: overflow and out
-of bounds panic, never wrap or corrupt memory. The checks cost little. On
-four small programs ([bench/](bench/README.md), i7-9700K), the time relative to C:
-
-| program | egg | rust (overflow checks on) | zig ReleaseSafe | CPython | Ruby 3.2 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| fib(40) | 1.53x | 1.62x | 1.51x | 95x | 44x |
-| sieve, 50M | 1.10x | 1.04x | 1.19x | 27x | 23x |
-| collatz, 3M | 1.07x | 1.37x | 1.34x | 55x | 26x |
-| matmul, 800×800 | 2.31x | 1.11x | 1.23x | 345x | 164x |
-
-So Egg is **25 to 149 times faster than CPython** and **21 to 71 times
-faster than Ruby** on the same loops. matmul is behind Rust and Zig because
-eggc does not yet remove bounds checks from inner loops.
-
-The [HTTP example](examples/http_server/server.egg) keeps up with the same
-design in C and Rust, about 54,000 to 67,000 small requests per second on
-loopback, against about 21,000 for Node and 8,000 for Python
-([details](bench/README.md#http-servers)). Go's `net/http` is ahead, with far
-better tail latency: Egg has blocking IO and no event loop yet.
-
-A larger program: [once-campfire-egg](https://github.com/femto/once-campfire-egg)
-ports Basecamp's ONCE Campfire chat to Egg, measured with Basecamp's
-[benchmark harness](https://github.com/basecamp/once-campfire-verification)
-against the Rust port, whose HTML it matches byte for byte. So far it serves
-the benchmark's routes, not the whole app. With both apps' caches on, on
-GitHub's ubuntu-latest (2 cores for the app), in requests per second:
-
-| route | Rust | Egg |
-| --- | ---: | ---: |
-| room page | 12,710 | 41,833 |
-| search | 14,138 | 50,540 |
-| static CSS | 48,060 | 108,761 |
-| post a message | 1,818 | 1,771 |
-
-Without its caches Egg renders and gzips every page and is far slower on
-them; the [benchmark notes](https://github.com/femto/once-campfire-egg/blob/main/docs/benchmark.md)
-have every route and both modes.
-
-```bash
-ruby bench/run.rb          # Egg, C, Rust, Go, Zig
-ruby bench/run.rb --slow   # also Python and Ruby (about 7 minutes)
-ruby bench/http.rb         # HTTP servers; needs wrk
-```
-
-[CodSpeed](https://app.codspeed.io/femto/egg) also tracks the compiler's
-speed, smaller versions of these programs and the CPU cost per request of
-the HTTP servers on every pull request
-([bench/codspeed/](bench/codspeed/README.md)).
 
 ## Native eggc
 
