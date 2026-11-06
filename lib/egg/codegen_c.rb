@@ -2085,22 +2085,21 @@ module Egg
             p->events[at].w |= w;
             p->events[at].h |= h;
         }
+        #ifndef _WIN32
         /* Milliseconds on a clock that only goes forward. */
         static int64_t egg_poll_now_ms(void) {
-        #ifdef _WIN32
-            return (int64_t)GetTickCount64();
-        #else
             struct timespec ts;
             clock_gettime(CLOCK_MONOTONIC, &ts);
             return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
-        #endif
         }
-        /* What is left of the wait, after a signal broke into it. */
+        /* What is left of the wait, after a signal broke into it (Windows
+           has no signals to break in). */
         static int egg_poll_left(int timeout, int64_t deadline) {
             if (timeout < 0) return -1;
             int64_t left = deadline - egg_poll_now_ms();
             return left < 0 ? 0 : (int)left;
         }
+        #endif
         static int egg_poll_wait(void *v, int64_t ms, int64_t *count) {
             egg_poller *p = (egg_poller *)v;
             if (ms < -1) egg_panic("negative timeout");
@@ -2117,7 +2116,9 @@ module Egg
             p->nready = 0;
             if (p->nevents > 0) ms = 0;
             int timeout = ms < 0 ? -1 : ms > 2147483647 ? 2147483647 : (int)ms;
+        #ifndef _WIN32
             int64_t deadline = egg_poll_now_ms() + (timeout < 0 ? 0 : timeout);
+        #endif
             int n;
         #if defined(EGG_POLL_EPOLL)
             struct epoll_event got[EGG_POLL_BATCH];

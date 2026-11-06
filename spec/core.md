@@ -1768,7 +1768,13 @@ fn main(io: Io, net: Net, a: Allocator) !void {
                     gone.close()
                 } else {
                     a.append_str(&line_in, buf)
-                    if (line_in[@len(line_in) - 1] == '\n') {
+                    if (@len(line_in) > 4096) {
+                        // No line is that long: a client could send
+                        // bytes forever. Let it go.
+                        const gone = try p.remove(e.token)
+                        gone.close()
+                        echoed = true
+                    } else if (line_in[@len(line_in) - 1] == '\n') {
                         // A write may send part: the rest goes out
                         // waiting, the connection taken back for it.
                         const sent = try p.write(e.token, line_in)
