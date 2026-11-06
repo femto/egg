@@ -1,0 +1,10 @@
+// wait fills a Buf(PollEvent).
+uses alloc, net
+fn main(net: Net, a: Allocator) !void {
+    const p = try net.poller()
+    defer p.close()
+    var events: Buf(i64) = .empty
+    defer a.free(events)
+    _ = try p.wait(a, &events, 0)
+}
+// error: E103 @8

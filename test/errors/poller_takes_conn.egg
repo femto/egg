@@ -1,0 +1,10 @@
+// add takes the connection: it is the poller's now, not the program's.
+uses net
+fn main(net: Net) !void {
+    const p = try net.poller()
+    defer p.close()
+    const c = try net.tcp_connect("127.0.0.1", 1)
+    _ = try p.add(c, .read)
+    c.close()
+}
+// error: E136 @8

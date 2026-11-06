@@ -308,7 +308,8 @@ v3 (memory without GC, and what realistic programs needed):
   `net.resolve(host, port)`. Sockets are owned and must be closed; everything
   blocks, so a server handles one connection at a time unless it hands each
   to a thread. `conn.clone()` gives another handle to a connection (nothing
-  buffered yet), so one thread can read it while another writes
+  buffered yet), so one thread can read it while another writes; `net.poller()`
+  serves many sockets from one thread (epoll, kqueue or WSAPoll underneath)
 - Open files, with `uses fs` and an `Fs` value `files`: `files.open(path)`
   gives a `Reader`, `files.create(path)` and `files.append(path)` a `Writer`;
   both are owned and must be closed, and a `Writer` ends with

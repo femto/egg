@@ -112,6 +112,8 @@ module Egg
       "TcpConn" => "typedef struct { void *c; } egg_tcp_conn;\n",
       "TcpListener" => "typedef struct { int64_t s; } egg_tcp_listener;\n",
       "UdpSocket" => "typedef struct { int64_t s; } egg_udp_socket;\n",
+      "Poller" => "typedef struct { void *p; } egg_poller_v;\n",
+      "Waker" => "typedef struct { void *w; } egg_waker_v;\n",
       "Addr" => "typedef struct { uint8_t b[28]; int32_t len; } egg_addr;\n",
       "Threads" => "typedef struct { char unused; } egg_threads;\n",
 "Clock" => "typedef struct { char unused; } egg_clock;\n",
@@ -135,7 +137,7 @@ module Egg
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
-                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send].freeze
+                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send egg_poll egg_poll_find egg_poll_ready egg_poll_add egg_poll_want egg_poll_remove egg_poll_wait egg_poll_accept egg_poll_read egg_poll_write egg_poll_waker egg_waker_wake].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -1802,6 +1804,499 @@ module Egg
             free(v);
         }
       C
+      # A Poller: the sockets it owns, by token (never reused), and the
+      # system's readiness API: epoll (Linux), kqueue (macOS, the BSDs),
+      # poll elsewhere (WSAPoll on Windows) and with EGG_PORTABLE. Level-triggered. A connection
+      # added with bytes already read ahead is reported readable at once.
+      # Wakers send a byte to a UDP socket of the poller's on loopback, so
+      # one that outlives the poller only sends to nothing.
+      "egg_poll" => <<~C,
+        /* EGG_PORTABLE (the test suite's debug build) takes poll everywhere,
+           so the path Windows and other systems take is tested too. */
+        #if defined(__linux__) && !defined(EGG_PORTABLE)
+        #include <sys/epoll.h>
+        #define EGG_POLL_EPOLL 1
+        #elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)) && !defined(EGG_PORTABLE)
+        #include <sys/event.h>
+        #define EGG_POLL_KQUEUE 1
+        #elif !defined(_WIN32)
+        #include <poll.h>
+        #endif
+        #ifdef _WIN32
+        #define EGG_POLL_WOULD_BLOCK (WSAGetLastError() == WSAEWOULDBLOCK)
+        #else
+        #define EGG_POLL_WOULD_BLOCK (errno == EAGAIN || errno == EWOULDBLOCK)
+        #endif
+        #define EGG_POLL_BATCH 256
+        typedef struct {
+            int64_t token; /* 0: empty; -2: removed */
+            int kind;      /* 0: a connection; 1: a listener */
+            int interest;  /* 0: read; 1: write; 2: both */
+            egg_sock s;
+            void *conn;    /* a connection's egg_conn */
+        } egg_poll_entry;
+        typedef struct { int64_t token; bool r, w, h; } egg_poll_event;
+        typedef struct {
+            egg_poll_entry *slots;
+            int64_t cap, used, next;
+            egg_poll_event *events;
+            int64_t nevents;
+            int64_t *ready;  /* tokens with bytes read ahead */
+            int64_t nready, ready_cap;
+            egg_sock wake_rx;
+            struct sockaddr_in wake_to;
+        #if defined(EGG_POLL_EPOLL) || defined(EGG_POLL_KQUEUE)
+            int fd;
+        #endif
+        } egg_poller;
+        typedef struct { egg_sock s; struct sockaddr_in to; } egg_waker;
+
+        static int egg_poll_nonblocking(egg_sock s, int on) {
+        #ifdef _WIN32
+            u_long v = (u_long)on;
+            return ioctlsocket(s, FIONBIO, &v) == 0 ? 0 : -1;
+        #else
+            int f = fcntl(s, F_GETFL);
+            if (f < 0) return -1;
+            return fcntl(s, F_SETFL, on ? (f | O_NONBLOCK) : (f & ~O_NONBLOCK));
+        #endif
+        }
+        /* Tell the system what token t waits for (op: 0 add, 1 change, 2 remove). */
+        static int egg_poll_os(egg_poller *p, egg_sock s, int64_t t, int interest, int op) {
+        #if defined(EGG_POLL_EPOLL)
+            struct epoll_event ev;
+            memset(&ev, 0, sizeof ev);
+            ev.events = (interest != 1 ? (EPOLLIN | EPOLLRDHUP) : 0) | (interest != 0 ? EPOLLOUT : 0);
+            ev.data.u64 = (uint64_t)t;
+            int how = op == 0 ? EPOLL_CTL_ADD : op == 1 ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+            return epoll_ctl(p->fd, how, s, &ev) == 0 ? 0 : egg_net_last();
+        #elif defined(EGG_POLL_KQUEUE)
+            struct kevent ch[2];
+            int read_on = op != 2 && interest != 1, write_on = op != 2 && interest != 0;
+            EV_SET(&ch[0], s, EVFILT_READ, read_on ? (EV_ADD | EV_ENABLE) : EV_DELETE, 0, 0, (void *)(intptr_t)t);
+            EV_SET(&ch[1], s, EVFILT_WRITE, write_on ? (EV_ADD | EV_ENABLE) : EV_DELETE, 0, 0, (void *)(intptr_t)t);
+            for (int i = 0; i < 2; i++) {
+                /* Deleting a filter never added is no failure. */
+                if (kevent(p->fd, &ch[i], 1, NULL, 0, NULL) != 0 && !((ch[i].flags & EV_DELETE) && errno == ENOENT))
+                    return egg_net_last();
+            }
+            return 0;
+        #else
+            (void)p; (void)s; (void)t; (void)interest; (void)op;
+            return 0;
+        #endif
+        }
+        static int egg_poll_new(void **out) {
+            egg_net_start();
+            egg_poller *p = (egg_poller *)calloc(1, sizeof(egg_poller));
+            if (p == NULL) egg_panic("out of memory");
+            p->next = 1;
+            p->events = (egg_poll_event *)egg_buf_resize(NULL, EGG_POLL_BATCH, sizeof(egg_poll_event));
+        #if defined(EGG_POLL_EPOLL)
+            p->fd = epoll_create1(EPOLL_CLOEXEC);
+        #elif defined(EGG_POLL_KQUEUE)
+            p->fd = kqueue();
+            if (p->fd >= 0) fcntl(p->fd, F_SETFD, FD_CLOEXEC);
+        #endif
+        #if defined(EGG_POLL_EPOLL) || defined(EGG_POLL_KQUEUE)
+            if (p->fd < 0) {
+                int code = egg_net_last();
+                free(p->events);
+                free(p);
+                return code;
+            }
+        #endif
+            /* The wake socket: UDP, on loopback, any port. */
+            struct sockaddr_in a;
+            memset(&a, 0, sizeof a);
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            a.sin_port = 0;
+            socklen_t len = sizeof a;
+            p->wake_rx = socket(AF_INET, SOCK_DGRAM | EGG_SOCK_CLOEXEC, 0);
+            int code = 0;
+            if (p->wake_rx == EGG_NO_SOCK) code = egg_net_last();
+            else {
+                egg_net_prep(p->wake_rx);
+                if (bind(p->wake_rx, (struct sockaddr *)&a, sizeof a) != 0 || getsockname(p->wake_rx, (struct sockaddr *)&a, &len) != 0
+                    || egg_poll_nonblocking(p->wake_rx, 1) != 0 || egg_poll_os(p, p->wake_rx, -1, 0, 0) != 0)
+                    code = egg_net_last();
+            }
+            if (code != 0) {
+                if (p->wake_rx != EGG_NO_SOCK) egg_net_close(p->wake_rx);
+        #if defined(EGG_POLL_EPOLL) || defined(EGG_POLL_KQUEUE)
+                close(p->fd);
+        #endif
+                free(p->events);
+                free(p);
+                return code;
+            }
+            p->wake_to = a;
+            *out = p;
+            return 0;
+        }
+        static void egg_poll_close(void *v) {
+            egg_poller *p = (egg_poller *)v;
+            for (int64_t i = 0; i < p->cap; i++) {
+                egg_poll_entry *e = &p->slots[i];
+                if (e->token <= 0) continue;
+                egg_net_close(e->s);
+                if (e->kind == 0) free(e->conn);
+            }
+            egg_net_close(p->wake_rx);
+        #if defined(EGG_POLL_EPOLL) || defined(EGG_POLL_KQUEUE)
+            close(p->fd);
+        #endif
+            free(p->slots);
+            free(p->events);
+            free(p->ready);
+            free(p);
+        }
+      C
+      "egg_poll_find" => <<~C,
+        static egg_poll_entry *egg_poll_find(egg_poller *p, int64_t t) {
+            if (t <= 0 || p->cap == 0) return NULL;
+            int64_t i = (int64_t)((uint64_t)t * 11400714819323198485ULL % (uint64_t)p->cap);
+            for (int64_t n = 0; n < p->cap; n++) {
+                egg_poll_entry *e = &p->slots[(i + n) % p->cap];
+                if (e->token == t) return e;
+                if (e->token == 0) return NULL;
+            }
+            return NULL;
+        }
+      C
+      "egg_poll_ready" => <<~C,
+        static void egg_poll_ready(egg_poller *p, int64_t t) {
+            if (p->nready == p->ready_cap) {
+                p->ready_cap = p->ready_cap == 0 ? 16 : p->ready_cap * 2;
+                p->ready = (int64_t *)egg_buf_resize(p->ready, p->ready_cap, sizeof(int64_t));
+            }
+            p->ready[p->nready++] = t;
+        }
+      C
+      "egg_poll_add" => <<~C,
+        static egg_poll_entry *egg_poll_slot(egg_poller *p, int64_t t);
+        static void egg_poll_grow(egg_poller *p) {
+            egg_poll_entry *old = p->slots;
+            int64_t old_cap = p->cap;
+            p->cap = old_cap == 0 ? 64 : old_cap * 2;
+            p->slots = (egg_poll_entry *)calloc((size_t)p->cap, sizeof(egg_poll_entry));
+            if (p->slots == NULL) egg_panic("out of memory");
+            p->used = 0;
+            for (int64_t i = 0; i < old_cap; i++)
+                if (old[i].token > 0) *egg_poll_slot(p, old[i].token) = old[i];
+            free(old);
+        }
+        /* An empty slot for token t, the table grown if need be. */
+        static egg_poll_entry *egg_poll_slot(egg_poller *p, int64_t t) {
+            if ((p->used + 1) * 2 > p->cap) egg_poll_grow(p);
+            int64_t i = (int64_t)((uint64_t)t * 11400714819323198485ULL % (uint64_t)p->cap);
+            for (;;) {
+                egg_poll_entry *e = &p->slots[i];
+                if (e->token <= 0) {
+                    if (e->token == 0) p->used += 1;
+                    e->token = t;
+                    return e;
+                }
+                i = (i + 1) % p->cap;
+            }
+        }
+        /* Takes a connection (conn, an egg_conn) or a listener (its socket
+           s); closes it if it cannot be added. */
+        static int egg_poll_add(void *v, void *conn, int64_t s, int kind, int interest, int64_t *token) {
+            egg_poller *p = (egg_poller *)v;
+            egg_sock sock = kind == 0 ? ((egg_conn *)conn)->s : (egg_sock)s;
+            int64_t t = p->next;
+            int code = egg_poll_nonblocking(sock, 1) == 0 ? egg_poll_os(p, sock, t, kind == 1 ? 0 : interest, 0) : egg_net_last();
+            if (code != 0) {
+                egg_net_close(sock);
+                if (kind == 0) free(conn);
+                return code;
+            }
+            p->next += 1;
+            egg_poll_entry *e = egg_poll_slot(p, t);
+            e->kind = kind;
+            e->interest = kind == 1 ? 0 : interest;
+            e->s = sock;
+            e->conn = conn;
+            if (kind == 0 && ((egg_conn *)conn)->pos < ((egg_conn *)conn)->len) egg_poll_ready(p, t);
+            *token = t;
+            return 0;
+        }
+      C
+      "egg_poll_want" => <<~C,
+        static int egg_poll_want(void *v, int64_t t, int interest) {
+            egg_poller *p = (egg_poller *)v;
+            egg_poll_entry *e = egg_poll_find(p, t);
+            if (e == NULL || e->kind != 0) return 9;
+            if (e->interest == interest) return 0;
+            int code = egg_poll_os(p, e->s, t, interest, 1);
+            if (code == 0) e->interest = interest;
+            return code;
+        }
+      C
+      "egg_poll_remove" => <<~C,
+        static void egg_poll_forget(egg_poller *p, egg_poll_entry *e) {
+            egg_poll_os(p, e->s, e->token, e->interest, 2);
+            e->token = -2;
+            e->conn = NULL;
+        }
+        /* Hands back a connection, blocking again. */
+        static int egg_poll_remove(void *v, int64_t t, void **out) {
+            egg_poller *p = (egg_poller *)v;
+            egg_poll_entry *e = egg_poll_find(p, t);
+            if (e == NULL || e->kind != 0) return 9;
+            void *conn = e->conn;
+            egg_sock s = e->s;
+            egg_poll_forget(p, e);
+            egg_poll_nonblocking(s, 0);
+            *out = conn;
+            return 0;
+        }
+      C
+      "egg_poll_wait" => <<~C,
+        static void egg_poll_add_event(egg_poller *p, int64_t t, bool r, bool w, bool h) {
+            /* kqueue reports reading and writing apart: one event a token. */
+            for (int64_t i = 0; i < p->nevents; i++) {
+                if (p->events[i].token == t) {
+                    p->events[i].r |= r;
+                    p->events[i].w |= w;
+                    p->events[i].h |= h;
+                    return;
+                }
+            }
+            if (p->nevents == EGG_POLL_BATCH) return;
+            egg_poll_event *ev = &p->events[p->nevents++];
+            ev->token = t;
+            ev->r = r;
+            ev->w = w;
+            ev->h = h;
+        }
+        static int egg_poll_wait(void *v, int64_t ms, int64_t *count) {
+            egg_poller *p = (egg_poller *)v;
+            if (ms < -1) egg_panic("negative timeout");
+            p->nevents = 0;
+            /* Bytes read ahead are ready now: do not wait. */
+            int64_t pending = p->nready;
+            for (int64_t i = 0; i < pending; i++) {
+                egg_poll_entry *e = egg_poll_find(p, p->ready[i]);
+                if (e != NULL) egg_poll_add_event(p, p->ready[i], true, false, false);
+            }
+            p->nready = 0;
+            if (p->nevents > 0) ms = 0;
+            int timeout = ms < 0 ? -1 : ms > 2147483647 ? 2147483647 : (int)ms;
+            int n;
+        #if defined(EGG_POLL_EPOLL)
+            struct epoll_event got[EGG_POLL_BATCH];
+            do {
+                n = epoll_wait(p->fd, got, EGG_POLL_BATCH, timeout);
+            } while (n < 0 && errno == EINTR);
+            if (n < 0) return egg_net_last();
+            for (int i = 0; i < n; i++) {
+                uint32_t f = got[i].events;
+                egg_poll_add_event(p, (int64_t)got[i].data.u64, (f & EPOLLIN) != 0, (f & EPOLLOUT) != 0, (f & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) != 0);
+            }
+        #elif defined(EGG_POLL_KQUEUE)
+            struct kevent got[EGG_POLL_BATCH];
+            struct timespec ts, *tp = NULL;
+            if (timeout >= 0) {
+                ts.tv_sec = timeout / 1000;
+                ts.tv_nsec = (long)(timeout % 1000) * 1000000L;
+                tp = &ts;
+            }
+            do {
+                n = kevent(p->fd, NULL, 0, got, EGG_POLL_BATCH, tp);
+            } while (n < 0 && errno == EINTR);
+            if (n < 0) return egg_net_last();
+            for (int i = 0; i < n; i++) {
+                bool h = (got[i].flags & (EV_EOF | EV_ERROR)) != 0;
+                egg_poll_add_event(p, (int64_t)(intptr_t)got[i].udata, got[i].filter == EVFILT_READ, got[i].filter == EVFILT_WRITE, h);
+            }
+        #else
+            /* poll: every socket and the wake socket, each time. */
+            int64_t total = 1;
+            for (int64_t i = 0; i < p->cap; i++) if (p->slots[i].token > 0) total += 1;
+        #ifdef _WIN32
+            WSAPOLLFD *fds = (WSAPOLLFD *)egg_buf_resize(NULL, total, sizeof(WSAPOLLFD));
+        #else
+            struct pollfd *fds = (struct pollfd *)egg_buf_resize(NULL, total, sizeof(struct pollfd));
+        #endif
+            int64_t *tokens = (int64_t *)egg_buf_resize(NULL, total, sizeof(int64_t));
+            int64_t k = 0;
+            fds[k].fd = p->wake_rx;
+            fds[k].events = POLLIN;
+            fds[k].revents = 0;
+            tokens[k++] = -1;
+            for (int64_t i = 0; i < p->cap; i++) {
+                egg_poll_entry *e = &p->slots[i];
+                if (e->token <= 0) continue;
+                fds[k].fd = e->s;
+                fds[k].events = (short)((e->interest != 1 ? POLLIN : 0) | (e->interest != 0 ? POLLOUT : 0));
+                fds[k].revents = 0;
+                tokens[k++] = e->token;
+            }
+        #ifdef _WIN32
+            n = WSAPoll(fds, (ULONG)k, timeout);
+        #else
+            do {
+                n = poll(fds, (nfds_t)k, timeout);
+            } while (n < 0 && errno == EINTR);
+        #endif
+            if (n < 0) {
+                free(fds);
+                free(tokens);
+                return egg_net_last();
+            }
+            for (int64_t i = 0; i < k; i++) {
+                short f = fds[i].revents;
+                if (f == 0) continue;
+                egg_poll_add_event(p, tokens[i], (f & POLLIN) != 0, (f & POLLOUT) != 0, (f & (POLLHUP | POLLERR)) != 0);
+            }
+            free(fds);
+            free(tokens);
+        #endif
+            /* A wake: empty the socket, report it once, as token -1. */
+            for (int64_t i = 0; i < p->nevents; i++) {
+                if (p->events[i].token == -1) {
+                    uint8_t junk[64];
+                    while (recv(p->wake_rx, (char *)junk, sizeof junk, 0) > 0) { }
+                    p->events[i].r = true;
+                }
+            }
+            *count = p->nevents;
+            return 0;
+        }
+        static void egg_poll_event_at(void *v, int64_t i, int64_t *t, bool *r, bool *w, bool *h) {
+            egg_poll_event *ev = &((egg_poller *)v)->events[i];
+            *t = ev->token;
+            *r = ev->r;
+            *w = ev->w;
+            *h = ev->h;
+        }
+      C
+      "egg_poll_accept" => <<~C,
+        /* 1 with a new connection (blocking, as any other), 0 if none waits. */
+        static int egg_poll_accept(void *v, int64_t t, void **out, int *code) {
+            egg_poller *p = (egg_poller *)v;
+            egg_poll_entry *e = egg_poll_find(p, t);
+            *code = 0;
+            if (e == NULL || e->kind != 1) {
+                *code = 9;
+                return 0;
+            }
+            egg_sock s;
+            for (;;) {
+                s = EGG_ACCEPT(e->s);
+                if (s != EGG_NO_SOCK) break;
+        #ifndef _WIN32
+                if (errno == EINTR) continue;
+        #endif
+                if (EGG_POLL_WOULD_BLOCK) return 0;
+                *code = egg_net_last();
+                return 0;
+            }
+            egg_net_prep(s);
+            egg_poll_nonblocking(s, 0);
+            *out = egg_conn_new(s);
+            return 1;
+        }
+      C
+      "egg_poll_read" => <<~C,
+        /* What has arrived, up to n bytes, in place of what the buffer held:
+           1 with some (or 0 bytes at the end), 0 if nothing has. */
+        static int egg_poll_read(void *v, int64_t t, uint8_t **ptr, int64_t *len, int64_t *cap, int64_t n, int64_t *got, int *code) {
+            egg_poller *p = (egg_poller *)v;
+            egg_poll_entry *e = egg_poll_find(p, t);
+            *code = 0;
+            if (e == NULL || e->kind != 0) {
+                *code = 9;
+                return 0;
+            }
+            if (n < 0) egg_panic("negative buffer length");
+            if (n > *cap || *ptr == NULL) {
+                *ptr = (uint8_t *)egg_buf_resize(*ptr, n, 1);
+                *cap = n;
+            }
+            *len = 0;
+            egg_conn *c = (egg_conn *)e->conn;
+            if (c->pos < c->len) {
+                *len = c->len - c->pos < n ? c->len - c->pos : n;
+                memcpy(*ptr, c->buf + c->pos, (size_t)*len);
+                c->pos += *len;
+                if (c->pos < c->len) egg_poll_ready(p, t);
+                *got = *len;
+                return 1;
+            }
+            if (n == 0) {
+                *got = 0;
+                return 1;
+            }
+            int64_t r = egg_net_recv(c->s, *ptr, n);
+            if (r < 0) {
+                if (EGG_POLL_WOULD_BLOCK) return 0;
+                *code = egg_net_last();
+                return 0;
+            }
+            *len = r;
+            *got = r;
+            return 1;
+        }
+      C
+      "egg_poll_write" => <<~C,
+        /* How much of data went out, maybe none. */
+        static int egg_poll_write(void *v, int64_t t, egg_str data, int64_t *sent) {
+            egg_poller *p = (egg_poller *)v;
+            egg_poll_entry *e = egg_poll_find(p, t);
+            if (e == NULL || e->kind != 0) return 9;
+            *sent = 0;
+            if (data.len == 0) return 0;
+            for (;;) {
+        #ifdef _WIN32
+                int r = send(e->s, (const char *)data.ptr, data.len > 1073741824 ? 1073741824 : (int)data.len, 0);
+        #else
+                ssize_t r = send(e->s, data.ptr, (size_t)data.len, MSG_NOSIGNAL);
+                if (r < 0 && errno == EINTR) continue;
+        #endif
+                if (r >= 0) {
+                    *sent = (int64_t)r;
+                    return 0;
+                }
+                if (EGG_POLL_WOULD_BLOCK) return 0;
+                return egg_net_last();
+            }
+        }
+      C
+      "egg_poll_waker" => <<~C,
+        static int egg_poll_waker(void *v, void **out) {
+            egg_poller *p = (egg_poller *)v;
+            egg_waker *w = (egg_waker *)calloc(1, sizeof(egg_waker));
+            if (w == NULL) egg_panic("out of memory");
+            w->s = socket(AF_INET, SOCK_DGRAM | EGG_SOCK_CLOEXEC, 0);
+            if (w->s == EGG_NO_SOCK) {
+                int code = egg_net_last();
+                free(w);
+                return code;
+            }
+            egg_net_prep(w->s);
+            egg_poll_nonblocking(w->s, 1);
+            w->to = p->wake_to;
+            *out = w;
+            return 0;
+        }
+        static void egg_waker_close(void *v) {
+            egg_waker *w = (egg_waker *)v;
+            egg_net_close(w->s);
+            free(w);
+        }
+      C
+      "egg_waker_wake" => <<~C,
+        static void egg_waker_wake(void *v) {
+            egg_waker *w = (egg_waker *)v;
+            char one = 1;
+            /* Nothing to do if the poller is gone or the byte is dropped. */
+            (void)sendto(w->s, &one, 1, 0, (const struct sockaddr *)&w->to, (socklen_t)sizeof w->to);
+        }
+      C
       "egg_udp_recv" => <<~C,
         static int egg_udp_recv(int64_t s, uint8_t **ptr, int64_t *len, int64_t *cap, int64_t n, egg_addr *from) {
             if (n < 0) egg_panic("negative buffer length");
@@ -1918,6 +2413,18 @@ module Egg
                     "egg_tcp_read" => %w[egg_conn egg_net_recv egg_net_last], "egg_tcp_read_all" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_write" => %w[egg_conn egg_net_last], "egg_tcp_timeout" => %w[egg_conn egg_net_timeout],
                     "egg_tcp_clone" => %w[egg_conn egg_net_last egg_net_prep],
+                    "egg_poll" => %w[egg_conn egg_net_last egg_net_close egg_net_prep egg_net_start egg_buf_resize],
+                    "egg_poll_find" => %w[egg_poll],
+                    "egg_poll_ready" => %w[egg_poll],
+                    "egg_poll_add" => %w[egg_poll egg_poll_ready],
+                    "egg_poll_want" => %w[egg_poll_find],
+                    "egg_poll_remove" => %w[egg_poll_find],
+                    "egg_poll_wait" => %w[egg_poll_find],
+                    "egg_poll_accept" => %w[egg_poll_find],
+                    "egg_poll_read" => %w[egg_poll_find egg_poll_ready egg_net_recv],
+                    "egg_poll_write" => %w[egg_poll_find],
+                    "egg_poll_waker" => %w[egg_poll],
+                    "egg_waker_wake" => %w[egg_poll],
                     "egg_tcp_close" => %w[egg_conn egg_net_close], "egg_udp_recv" => %w[egg_net_base egg_net_last egg_buf_resize],
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"], "egg_args_env" => ["egg_buf_resize"] }.freeze
@@ -2214,7 +2721,7 @@ module Egg
     def helper(name)
       @used[name] = true
       @used["egg_panic"] = true unless name.start_with?("egg_print") || NO_PANIC.include?(name)
-      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_tcp_write egg_udp_send egg_args_get egg_args_env].include?(name)
+      @need_str = true if %w[egg_str_eq egg_str_cmp egg_print_str egg_concat egg_cstr egg_fs_path egg_fs_read egg_fs_write egg_fs_handle egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_tcp_write egg_udp_send egg_poll_write egg_args_get egg_args_env].include?(name)
       (HELPER_DEPS[name] || []).each { |d| helper(d) }
       name
     end
@@ -2252,9 +2759,10 @@ module Egg
       when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread", "Clock", "Random"
         @need_cap[t] = true
         "egg_#{t.downcase}"
-      when "TcpConn", "TcpListener", "UdpSocket"
+      when "TcpConn", "TcpListener", "UdpSocket", "Poller", "Waker"
         @need_cap[t] = true
-        { "TcpConn" => "egg_tcp_conn", "TcpListener" => "egg_tcp_listener", "UdpSocket" => "egg_udp_socket" }[t]
+        { "TcpConn" => "egg_tcp_conn", "TcpListener" => "egg_tcp_listener", "UdpSocket" => "egg_udp_socket",
+          "Poller" => "egg_poller_v", "Waker" => "egg_waker_v" }[t]
       when *INT_C.keys then INT_C[t][0]
       when *FLOAT_C.keys then FLOAT_C[t]
       else
@@ -3291,6 +3799,91 @@ module Egg
                line("#{c_type(ret)} #{r} = { .err = 0 };")
                line("#{r}.err = #{net_error("#{helper('egg_tcp_clone')}(#{c}.c, &#{r}.value.c)")};")
                r
+             when "Net.poller"
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_poll')}_new(&#{r}.value.p)")};")
+               r
+             when "Poller.add", "Poller.add_listener"
+               pl = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               call = if m == "Poller.add"
+                        "#{helper('egg_poll_add')}(#{pl}.p, #{codes[0]}.c, 0, 0, (int)#{codes[1]}, &#{r}.value)"
+                      else
+                        "#{helper('egg_poll_add')}(#{pl}.p, NULL, #{codes[0]}.s, 1, 0, &#{r}.value)"
+                      end
+               line("#{r}.err = #{net_error(call)};")
+               r
+             when "Poller.want"
+               pl = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_poll_want')}(#{pl}.p, #{codes[0]}, (int)#{codes[1]})")};")
+               r
+             when "Poller.remove"
+               pl = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_poll_remove')}(#{pl}.p, #{codes[0]}, &#{r}.value.c)")};")
+               r
+             when "Poller.wait"
+               line("(void)#{codes[0]};")
+               pl = hoist(recv, obj.ty)
+               b = tmp
+               line("#{c_type(args[1].ty)} *#{b} = #{codes[1]};")
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_poll_wait')}(#{pl}.p, #{codes[2]}, &#{r}.value)")};")
+               line("if (#{r}.err == 0) {")
+               line("    if (#{r}.value > #{b}->cap || #{b}->ptr == NULL) {")
+               line("        #{b}->ptr = egg_buf_resize(#{b}->ptr, #{r}.value, sizeof *#{b}->ptr);")
+               line("        #{b}->cap = #{r}.value;")
+               line("    }")
+               line("    #{b}->len = #{r}.value;")
+               line("    for (int64_t i = 0; i < #{r}.value; i++) egg_poll_event_at(#{pl}.p, i, &#{b}->ptr[i].f_token, &#{b}->ptr[i].f_readable, &#{b}->ptr[i].f_writable, &#{b}->ptr[i].f_hangup);")
+               line("}")
+               r
+             when "Poller.accept"
+               pl = hoist(recv, obj.ty)
+               r = tmp
+               code = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("int #{code} = 0;")
+               line("#{r}.value.has = #{helper('egg_poll_accept')}(#{pl}.p, #{codes[0]}, &#{r}.value.value.c, &#{code}) == 1;")
+               line("#{r}.err = #{net_error(code)};")
+               r
+             when "Poller.read"
+               line("(void)#{codes[1]};")
+               pl = hoist(recv, obj.ty)
+               b = tmp
+               line("#{c_type(args[2].ty)} *#{b} = #{codes[2]};")
+               r = tmp
+               code = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("int #{code} = 0;")
+               line("#{r}.value.has = #{helper('egg_poll_read')}(#{pl}.p, #{codes[0]}, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{codes[3]}, &#{r}.value.value, &#{code}) == 1;")
+               line("#{r}.err = #{net_error(code)};")
+               r
+             when "Poller.write"
+               pl = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_poll_write')}(#{pl}.p, #{codes[0]}, #{coerce(codes[1], args[1].ty, 'str')}, &#{r}.value)")};")
+               r
+             when "Poller.waker"
+               pl = hoist(recv, obj.ty)
+               r = tmp
+               line("#{c_type(ret)} #{r} = { .err = 0 };")
+               line("#{r}.err = #{net_error("#{helper('egg_poll_waker')}(#{pl}.p, &#{r}.value.w)")};")
+               r
+             when "Poller.close"
+               "#{helper('egg_poll')}_close(#{hoist(recv, obj.ty)}.p)"
+             when "Waker.wake"
+               "#{helper('egg_waker_wake')}(#{hoist(recv, obj.ty)}.w)"
+             when "Waker.close"
+               helper("egg_poll_waker")
+               "egg_waker_close(#{hoist(recv, obj.ty)}.w)"
              when "TcpConn.close"
                "#{helper('egg_tcp_close')}(#{hoist(recv, obj.ty)}.c)"
              when "TcpListener.close", "UdpSocket.close"
