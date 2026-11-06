@@ -1491,7 +1491,7 @@ with a value type that is the only way to use it:
 | --- | --- | --- |
 | `io` | `Io` | `io.print(x, ...)`: prints one or more values (integers, floats, `bool`, text, enums, `Addr`) one after another, with nothing between them, and then a newline, to standard output: `io.print(w, ": ", n)`; `io.eprint(x, ...)`: the same, to standard error, after everything printed before it; `io.read_line(a, &line) !bool`: replaces the `Buf(u8)` `line` with the next line of standard input, without its `\n` or `\r\n`, and returns false at the end of the input, with `line` empty (an empty line returns true; a last line without a line ending is a line); `io.read_line_max(a, &line, max) !bool`: the same, but a line of more than max bytes, not counting its line ending, fails with `error.LineTooLong`, and a negative max panics; `io.read_all(a) !Buf(u8)`: the rest of standard input, byte for byte. All three show what was printed before them first, need `uses alloc` too, and fail with `error.IoFailed` |
 | `args` | `Args` | `args.len() i64`: how many arguments there are, counting the program's name; `args.get(i) str`: argument i, where 0 is the program's name and the first argument given is 1; an index out of range panics; `args.env(name) ?str`: the environment variable called name (text), or null when it is not set or name is empty or holds `=` or a 0 byte, or, on Windows, is not UTF-8. The environment is, like the arguments, what the program was started with, so it is the same `args` capability. On Windows each call keeps a UTF-8 copy of the value for the rest of the program, so read a variable once rather than in a loop |
-| `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`: see below |
+| `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`, `net.poller() !Poller`: see below |
 | `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values (with 0, a sender waits for the receiver); see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; `fs.open_dir(path) !DirReader`, `fs.make_dir(path) !void`, `fs.remove_file(path) !void`, `fs.remove_dir(path) !void`, `fs.rename(from, to) !void`, `fs.stat(path) !Stat`, `fs.real_path(a, path) !Buf(u8)`: directories and names; see below |
 | `time` | `Clock` | `clock.now() i64`: the time in nanoseconds since 1970-01-01 UTC, from the system's clock, which may be set back; failing to read a clock panics `cannot read the clock`; `clock.monotonic() i64`: nanoseconds since an unspecified start, never decreasing, for measuring how long something took |
@@ -1691,12 +1691,111 @@ panics), not connecting or accepting.
 | `error.PermissionDenied` | the system refused, as for a low port |
 | `error.IoFailed` | any other failure, such as a name server that does not answer |
 | `error.LineTooLong` | `read_line_max` met a longer line. Its first bytes are gone and reading would go on inside it, so treat the input as bad |
+| `error.Closed` | a `Poller` has no socket by that token (any more), or not of that kind |
 
 A line from the network can be any length, so `read_line` lets the other
 side use all the memory: use `read_line_max` for anything you do not trust.
 
 The other side closing normally is not an error: `read` returns 0 and
 `read_line` returns false.
+
+### Many sockets on one thread: Poller
+
+Every method above waits. A `Poller` serves many sockets from one thread
+instead: it waits until some are ready, and then reads, writes and accepts
+on them without waiting.
+
+| Type | Methods |
+| --- | --- |
+| `Poller` | `p.add(conn, interest) !i64`: takes the `TcpConn` and returns its token; `p.add_listener(l) !i64`: takes the `TcpListener`; `p.want(t, interest) !void`: what to wait for on a connection; `p.remove(t) !TcpConn`: hands the connection back; `p.wait(a, &events, ms) !i64`: waits until some sockets are ready or ms milliseconds pass (-1: no limit, 0: does not wait; below -1 panics), and puts in `events` (a `Buf(PollEvent)`, in place of what it held) one event for each, and how many; `p.accept(t) !?TcpConn`: a connection waiting at listener t, or null if none is; `p.read(t, a, &buf, n) !?i64`: what has arrived, up to n bytes, in place of what `buf` held, and how much, or null if nothing has; with n above 0, a 0 is the end (an n of 0 reads nothing and returns 0); `p.write(t, text) !i64`: how much of text went out now, maybe none; `p.waker() !Waker`; `p.close()`: closes the poller and every socket in it |
+| `Waker` | `w.wake()`: makes the poller's `wait` return now, with an event of token -1; `w.close()` |
+| `PollEvent` | a plain struct: `token: i64`, `readable: bool`, `writable: bool`, `hangup: bool` (the other side closed or the socket failed) |
+| `Interest` | an enum: `.read`, `.write`, `.read_write` |
+
+The poller owns what is added to it, so the variable given to `add` cannot
+be used after (E136), and a `Poller` and a `Waker` must be closed (E135),
+as a `TcpConn`. Tokens count up from 1 and are not used again, so an event
+for a socket removed while handling the same batch finds `error.Closed`.
+A connection handed back by `remove`, and one `accept` gives, waits again
+on every method; one added waits on none.
+
+Readiness is level-triggered: a socket with something to read is reported
+by every `wait` until it is read, so handling part of an event is not
+missing it; bytes a connection had read ahead before it was added count as
+something to read. A `Waker` can go to another thread (it is owned, and
+moves as a `Sender` does); waking a poller that is closed does nothing.
+One poller is for one thread at a time; serve more cores with a poller
+each. Underneath: epoll on Linux, kqueue on macOS and the BSDs, `WSAPoll`
+on Windows, `poll` elsewhere.
+
+```egg
+// An echo server on one thread, and a client of it.
+// expect: hello
+uses alloc, io, net
+
+fn main(io: Io, net: Net, a: Allocator) !void {
+    const p = try net.poller()
+    defer p.close()
+    const listener = try net.tcp_listen("127.0.0.1", 0)
+    const port = listener.port()
+    const lt = try p.add_listener(listener)
+    const client = try net.tcp_connect("127.0.0.1", port)
+    defer client.close()
+    try client.set_timeout(5000)
+    try client.write("hello\n")
+
+    var events: Buf(PollEvent) = .empty
+    defer a.free(events)
+    var buf: Buf(u8) = .empty
+    defer a.free(buf)
+    // What has come of the line so far: a read may return part of it.
+    var line_in: Buf(u8) = .empty
+    defer a.free(line_in)
+    var echoed = false
+    while (!echoed) {
+        _ = try p.wait(a, &events, 5000)
+        var i = 0
+        while (i < @len(events)) {
+            const e = events[i]
+            i = i + 1
+            if (e.token == lt) {
+                while (try p.accept(lt)) |c| {
+                    _ = try p.add(c, .read)
+                }
+            } else if (try p.read(e.token, a, &buf, 4096)) |n| {
+                if (n == 0) {
+                    const gone = try p.remove(e.token)
+                    gone.close()
+                } else {
+                    a.append_str(&line_in, buf)
+                    if (@len(line_in) > 4096) {
+                        // No line is that long: a client could send
+                        // bytes forever. Let it go.
+                        const gone = try p.remove(e.token)
+                        gone.close()
+                        echoed = true
+                    } else if (line_in[@len(line_in) - 1] == '\n') {
+                        // A write may send part: the rest goes out
+                        // waiting, the connection taken back for it.
+                        const sent = try p.write(e.token, line_in)
+                        if (sent < @len(line_in)) {
+                            const c = try p.remove(e.token)
+                            defer c.close()
+                            try c.write(line_in[sent..])
+                        }
+                        echoed = true
+                    }
+                }
+            }
+        }
+    }
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    if (try client.read_line(a, &line)) {
+        io.print(line)
+    }
+}
+```
 
 ```egg
 // expect: 5

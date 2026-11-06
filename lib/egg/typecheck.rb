@@ -78,17 +78,19 @@ module Egg
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
     IF_SLICE_HINT = "slices exist only as parameters and local slices; use an if statement, or call a function in each branch".freeze
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Addr Threads Thread Clock Random]).freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Poller Waker Addr Threads Thread Clock Random]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args", "Clock" => "time", "Random" => "rand" }.freeze
     CAPABILITIES = %w[alloc args fs io net rand thread time].freeze
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
-    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Thread" => "thread" }.freeze
-    NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed LineTooLong].freeze
+    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Poller" => "net", "Waker" => "net", "Thread" => "thread" }.freeze
+    NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed LineTooLong Closed].freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
     FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed AlreadyExists NotEmpty NotDirectory].freeze
     # What fs.stat returns: plain values, made into types when first named.
     FS_VALUE_TYPES = %w[Stat FileKind].freeze
+    # What a Poller reports and is asked for: plain values, likewise.
+    NET_VALUE_TYPES = %w[PollEvent Interest].freeze
     # Methods of capability values: name -> [parameter types, result]
     # ("printable" accepts numbers, bool, text and enums; "text" a str, a
     # []u8 or a Buf(u8), borrowed; "integer" any
@@ -100,7 +102,16 @@ module Egg
                 "read_all" => [["Allocator"], "!Buf(u8)"] },
       "Args" => { "len" => [[], "i64"], "get" => [["i64"], "str"], "env" => [["text"], "?str"] },
       "Net" => { "tcp_connect" => [%w[text i64], "!TcpConn"], "tcp_listen" => [%w[text i64], "!TcpListener"],
-                 "udp_bind" => [%w[text i64], "!UdpSocket"], "resolve" => [%w[text i64], "!Addr"] },
+                 "udp_bind" => [%w[text i64], "!UdpSocket"], "resolve" => [%w[text i64], "!Addr"],
+                 "poller" => [[], "!Poller"] },
+      # A Poller owns the sockets added to it (add takes them) and answers
+      # for each by its token; nothing it does blocks but wait.
+      "Poller" => { "add" => [%w[TcpConn Interest], "!i64"], "add_listener" => [["TcpListener"], "!i64"],
+                    "want" => [%w[i64 Interest], "!void"], "remove" => [["i64"], "!TcpConn"],
+                    "wait" => [%w[Allocator inout_buffer i64], "!i64"], "accept" => [["i64"], "!?TcpConn"],
+                    "read" => [%w[i64 Allocator inout_buffer i64], "!?i64"], "write" => [%w[i64 text], "!i64"],
+                    "waker" => [[], "!Waker"], "close" => [[], "void"] },
+      "Waker" => { "wake" => [[], "void"], "close" => [[], "void"] },
       "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                      "read_all" => [["Allocator"], "!Buf(u8)"],
                      "read" => [%w[Allocator inout_buffer i64], "!i64"], "write" => [["text"], "!void"],
@@ -134,7 +145,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + %w[Buf Sender Receiver]).freeze
+    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -869,6 +880,15 @@ module Egg
       name
     end
 
+    # PollEvent and Interest, the same way.
+    def net_value_type(name)
+      unless @types.key?("PollEvent")
+        register("Interest", :enum, nil, nil).members = %w[read write read_write]
+        register("PollEvent", :struct, nil, nil).fields = [%w[token i64], %w[readable bool], %w[writable bool], %w[hangup bool]]
+      end
+      name
+    end
+
     # Source type -> canonical type string (registering composite types).
     def resolve_type(t, line, col)
       case t
@@ -876,6 +896,7 @@ module Egg
         return @tenv[t] if @tenv.key?(t)
         return t if PRIMS.include?(t) || t == "type" || t == "anyerror"
         return fs_value_type(t) if FS_VALUE_TYPES.include?(t)
+        return net_value_type(t) if NET_VALUE_TYPES.include?(t)
         if t == "Buf"
           err("E108", "Buf needs its element type: Buf(T), such as Buf(u8)", line, col)
           return "error"
@@ -2054,6 +2075,7 @@ module Egg
       return @tenv[name] if @tenv.key?(name)
       return name if PRIMS.include?(name)
       return fs_value_type(name) if FS_VALUE_TYPES.include?(name)
+      return net_value_type(name) if NET_VALUE_TYPES.include?(name)
       d = @decls[qualify(name)]
       d.nil? ? nil : decl_type(d)
     end
@@ -2597,6 +2619,7 @@ module Egg
       end
       cap = CAP_TYPES[t] || FILE_TYPES[t]
       @current.direct[cap] ||= [line, col, "#{t}.#{name}"] unless cap.nil?
+      net_value_type("Interest") if t == "Poller"
       # A file or socket used without closing it, such as (try c.clone()).write(s),
       # would never be closed; close (join, detach for a Thread) ends a temporary.
       check_borrowed(obj, t) if FILE_TYPES.key?(t) && !%w[close join detach].include?(name)
@@ -2604,6 +2627,8 @@ module Egg
       ret = ptr_type("u8") if ret == "*u8"
       if ret == "!Buf(u8)"
         ret = resolve_type(ErrType.new(GenericType.new("Buf", ["u8"])), line, col)
+      elsif ret.start_with?("!?")
+        ret = resolve_type(ErrType.new(OptType.new(ret[2..])), line, col)
       elsif ret.start_with?("!")
         ret = resolve_type(ErrType.new(ret[1..]), line, col)
       end
@@ -2675,6 +2700,10 @@ module Egg
             return "error"
           end
           elem = @types[at].elem
+          if t == "Poller" && name == "wait" && elem != net_value_type("PollEvent")
+            err("E103", "'wait' fills a Buf(PollEvent), found #{at}", a.line, a.col)
+            return "error"
+          end
           if (name.start_with?("append_") || name.start_with?("read") || name == "recv_from" || name == "fill") && elem != "u8"
             err("E103", "'#{name}' writes #{name == "fill" ? "random bytes" : "text"} to a Buf(u8), found #{at}", a.line, a.col)
             return "error"

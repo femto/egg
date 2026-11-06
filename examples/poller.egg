@@ -1,0 +1,148 @@
+// One thread, many sockets: a Poller owns the connections added to it,
+// waits until some are ready, and reads and writes them without blocking.
+// Here it serves an echo server's listener and its clients, and a Waker
+// from another thread ends the loop.
+// expect: echoed 50 lines over 5 connections
+// expect: woken
+uses alloc, io, net, thread
+
+const CLIENTS = 5
+const LINES = 10
+
+// A client: connects, sends LINES lines, reads them back.
+fn client(net: Net, port: i64, a: Allocator, sink done: Sender(i64)) void {
+    defer done.close()
+    const c = net.tcp_connect("127.0.0.1", port) catch {
+        done.send(0)
+        return
+    }
+    defer c.close()
+    c.set_timeout(5000) catch {}
+    var got = 0
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    var i = 0
+    while (i < LINES) {
+        c.write("ping\n") catch {
+            break
+        }
+        if (c.read_line(a, &line) catch false) {
+            if (line == "ping") {
+                got = got + 1
+            }
+        }
+        i = i + 1
+    }
+    done.send(got)
+}
+
+// Sends back what client t sent, and how many lines that was. A client
+// that ends or fails is closed alone; the others go on.
+fn echo(p: Poller, t: i64, a: Allocator, inout buf: Buf(u8)) i64 {
+    const got = p.read(t, a, &buf, 4096) catch {
+        drop(p, t)
+        return 0
+    }
+    const n = got orelse {
+        return 0
+    }
+    if (n == 0) {
+        drop(p, t)
+        return 0
+    }
+    const sent = p.write(t, buf) catch {
+        drop(p, t)
+        return 0
+    }
+    if (sent < n) {
+        // The rest goes out waiting: the connection taken back for it.
+        const c = p.remove(t) catch {
+            return 0
+        }
+        c.write(buf[sent..]) catch {
+            c.close()
+            return 0
+        }
+        _ = p.add(c, .read) catch {
+            return 0
+        }
+    }
+    var lines = 0
+    for (buf) |ch| {
+        if (ch == '\n') {
+            lines = lines + 1
+        }
+    }
+    return lines
+}
+
+fn drop(p: Poller, t: i64) void {
+    const c = p.remove(t) catch {
+        return
+    }
+    c.close()
+}
+
+fn wake_later(sink w: Waker, sink go: Receiver(bool)) void {
+    defer w.close()
+    defer go.close()
+    _ = go.recv()
+    w.wake()
+}
+
+fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
+    const p = try net.poller()
+    defer p.close()
+    const listener = try net.tcp_listen("127.0.0.1", 0)
+    const port = listener.port()
+    const lt = try p.add_listener(listener)
+
+    const results = threads.channel(i64, CLIENTS)
+    defer results.close()
+    var i = 0
+    while (i < CLIENTS) {
+        threads.spawn(client, net, port, a, results.sender()).detach()
+        i = i + 1
+    }
+    const go = threads.channel(bool, 1)
+    defer go.close()
+    const start = go.sender()
+    defer start.close()
+    threads.spawn(wake_later, try p.waker(), go.clone()).detach()
+
+    var events: Buf(PollEvent) = .empty
+    defer a.free(events)
+    var buf: Buf(u8) = .empty
+    defer a.free(buf)
+    var echoed = 0
+    var finished = 0
+    var woken = false
+    while (!woken) {
+        _ = try p.wait(a, &events, 5000)
+        var k = 0
+        while (k < @len(events)) {
+            const e = events[k]
+            k = k + 1
+            if (e.token == -1) {
+                woken = true
+            } else if (e.token == lt) {
+                // Every connection waiting to be taken.
+                while (try p.accept(lt)) |c| {
+                    _ = try p.add(c, .read)
+                }
+            } else if (e.readable or e.hangup) {
+                echoed = echoed + echo(p, e.token, a, &buf)
+            }
+        }
+        // Once every client has reported, wake the loop from outside.
+        while (results.recv_timeout(0)) |done| {
+            _ = done
+            finished = finished + 1
+            if (finished == CLIENTS) {
+                start.send(true)
+            }
+        }
+    }
+    io.print("echoed ", echoed, " lines over ", CLIENTS, " connections")
+    io.print("woken")
+}

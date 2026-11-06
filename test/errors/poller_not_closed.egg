@@ -1,0 +1,7 @@
+// A Poller owns sockets: it must be closed.
+uses net
+fn main(net: Net) !void {
+    const p = try net.poller()
+    try p.want(1, .read)
+}
+// error: E135 @5

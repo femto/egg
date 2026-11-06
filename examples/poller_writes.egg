@@ -1,0 +1,84 @@
+// A Poller's writes never wait: to a peer that does not read, they send
+// what fits and then nothing, until the peer reads and the socket is
+// writable again. remove hands the connection back, blocking as before;
+// its token is then unknown, as a closed connection's (error.Closed).
+// expect: filled the socket: true
+// expect: writable again: true
+// expect: back to blocking: hello
+// expect: Closed
+uses alloc, io, net
+
+fn main(io: Io, net: Net, a: Allocator) !void {
+    const p = try net.poller()
+    defer p.close()
+    const listener = try net.tcp_listen("127.0.0.1", 0)
+    const port = listener.port()
+    const lt = try p.add_listener(listener)
+    const client = try net.tcp_connect("127.0.0.1", port)
+    defer client.close()
+    try client.set_timeout(5000)
+
+    var events: Buf(PollEvent) = .empty
+    defer a.free(events)
+    var t = -1
+    while (t < 0) {
+        _ = try p.wait(a, &events, 5000)
+        if (try p.accept(lt)) |c| {
+            t = try p.add(c, .read)
+        }
+    }
+
+    // Write until the socket takes no more.
+    const chunk: Buf(u8) = a.alloc(65536, 'x')
+    defer a.free(chunk)
+    var total = 0
+    var rounds = 0
+    while (rounds < 10000) {
+        const n = try p.write(t, chunk)
+        if (n == 0) {
+            break
+        }
+        total = total + n
+        rounds = rounds + 1
+    }
+    // A write that sent nothing: the socket was full.
+    io.print("filled the socket: ", total > 0 and rounds < 10000)
+
+    // The peer reads some; the socket becomes writable.
+    try p.want(t, .write)
+    var got: Buf(u8) = .empty
+    defer a.free(got)
+    var drained = 0
+    while (drained < total / 2) {
+        drained = drained + try client.read(a, &got, 65536)
+    }
+    var writable = false
+    var tries = 0
+    while (!writable and tries < 50) {
+        _ = try p.wait(a, &events, 100)
+        for (events) |e| {
+            if (e.token == t and e.writable) {
+                writable = true
+            }
+        }
+        tries = tries + 1
+    }
+    io.print("writable again: ", writable)
+
+    // Back to blocking: the rest of what was sent, then a line.
+    const conn = try p.remove(t)
+    defer conn.close()
+    try conn.write("\nhello\n")
+    var line: Buf(u8) = .empty
+    defer a.free(line)
+    while (try client.read_line(a, &line)) {
+        if (line == "hello") {
+            io.print("back to blocking: ", line)
+            break
+        }
+    }
+    _ = p.write(t, "gone") catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+}
