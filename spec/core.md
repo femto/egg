@@ -1707,7 +1707,7 @@ on them without waiting.
 
 | Type | Methods |
 | --- | --- |
-| `Poller` | `p.add(conn, interest) !i64`: takes the `TcpConn` and returns its token; `p.add_listener(l) !i64`: takes the `TcpListener`; `p.want(t, interest) !void`: what to wait for on a connection; `p.remove(t) !TcpConn`: hands the connection back; `p.wait(a, &events, ms) !i64`: waits until some sockets are ready or ms milliseconds pass (-1: no limit, 0: does not wait; below -1 panics), and puts in `events` (a `Buf(PollEvent)`, in place of what it held) one event for each, and how many; `p.accept(t) !?TcpConn`: a connection waiting at listener t, or null if none is; `p.read(t, a, &buf, n) !?i64`: what has arrived, up to n bytes, in place of what `buf` held, and how much (0 at the end), or null if nothing has; `p.write(t, text) !i64`: how much of text went out now, maybe none; `p.waker() !Waker`; `p.close()`: closes the poller and every socket in it |
+| `Poller` | `p.add(conn, interest) !i64`: takes the `TcpConn` and returns its token; `p.add_listener(l) !i64`: takes the `TcpListener`; `p.want(t, interest) !void`: what to wait for on a connection; `p.remove(t) !TcpConn`: hands the connection back; `p.wait(a, &events, ms) !i64`: waits until some sockets are ready or ms milliseconds pass (-1: no limit, 0: does not wait; below -1 panics), and puts in `events` (a `Buf(PollEvent)`, in place of what it held) one event for each, and how many; `p.accept(t) !?TcpConn`: a connection waiting at listener t, or null if none is; `p.read(t, a, &buf, n) !?i64`: what has arrived, up to n bytes, in place of what `buf` held, and how much, or null if nothing has; with n above 0, a 0 is the end (an n of 0 reads nothing and returns 0); `p.write(t, text) !i64`: how much of text went out now, maybe none; `p.waker() !Waker`; `p.close()`: closes the poller and every socket in it |
 | `Waker` | `w.wake()`: makes the poller's `wait` return now, with an event of token -1; `w.close()` |
 | `PollEvent` | a plain struct: `token: i64`, `readable: bool`, `writable: bool`, `hangup: bool` (the other side closed or the socket failed) |
 | `Interest` | an enum: `.read`, `.write`, `.read_write` |
@@ -1748,6 +1748,9 @@ fn main(io: Io, net: Net, a: Allocator) !void {
     defer a.free(events)
     var buf: Buf(u8) = .empty
     defer a.free(buf)
+    // What has come of the line so far: a read may return part of it.
+    var line_in: Buf(u8) = .empty
+    defer a.free(line_in)
     var echoed = false
     while (!echoed) {
         _ = try p.wait(a, &events, 5000)
@@ -1764,8 +1767,18 @@ fn main(io: Io, net: Net, a: Allocator) !void {
                     const gone = try p.remove(e.token)
                     gone.close()
                 } else {
-                    _ = try p.write(e.token, buf)
-                    echoed = true
+                    a.append_str(&line_in, buf)
+                    if (line_in[@len(line_in) - 1] == '\n') {
+                        // A write may send part: the rest goes out
+                        // waiting, the connection taken back for it.
+                        const sent = try p.write(e.token, line_in)
+                        if (sent < @len(line_in)) {
+                            const c = try p.remove(e.token)
+                            defer c.close()
+                            try c.write(line_in[sent..])
+                        }
+                        echoed = true
+                    }
                 }
             }
         }

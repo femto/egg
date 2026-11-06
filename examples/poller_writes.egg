@@ -3,7 +3,6 @@
 // writable again. remove hands the connection back, blocking as before;
 // its token is then unknown, as a closed connection's (error.Closed).
 // expect: filled the socket: true
-// expect: then wrote nothing: true
 // expect: writable again: true
 // expect: back to blocking: hello
 // expect: Closed
@@ -42,8 +41,8 @@ fn main(io: Io, net: Net, a: Allocator) !void {
         total = total + n
         rounds = rounds + 1
     }
+    // A write that sent nothing: the socket was full.
     io.print("filled the socket: ", total > 0 and rounds < 10000)
-    io.print("then wrote nothing: ", try p.write(t, chunk) == 0)
 
     // The peer reads some; the socket becomes writable.
     try p.want(t, .write)

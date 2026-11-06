@@ -851,7 +851,8 @@ module Egg
       end
     end
 
-    # Capability methods that take what they are given: a.free and a.push.
+    # Capability methods that take what they are given: a.free and a.push,
+    # and a Poller's add and add_listener, which take the socket.
     # The others (io.print, a.concat, a.append_str, ...) only read theirs.
     TAKING_CAP_METHODS = %w[Allocator.free Allocator.push Poller.add Poller.add_listener].freeze
 
