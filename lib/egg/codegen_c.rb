@@ -137,7 +137,7 @@ module Egg
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
-                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send egg_poll egg_poll_find egg_poll_ready egg_poll_add egg_poll_want egg_poll_remove egg_poll_wait egg_poll_accept egg_poll_read egg_poll_write egg_poll_waker egg_waker_wake].freeze
+                      egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_peer_ip egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send egg_poll egg_poll_find egg_poll_ready egg_poll_add egg_poll_want egg_poll_remove egg_poll_wait egg_poll_accept egg_poll_read egg_poll_write egg_poll_waker egg_waker_wake].freeze
 
     HELPERS = {
       "egg_panic" => <<~C,
@@ -1798,6 +1798,17 @@ module Egg
             return 0;
         }
       C
+      "egg_tcp_peer_ip" => <<~C,
+        static int egg_tcp_peer_ip(void *v, uint8_t **ptr, int64_t *len, int64_t *cap) {
+            struct sockaddr_storage address;
+            socklen_t size = sizeof address;
+            char host[128]; /* numeric IPv6 plus an interface scope */
+            if (getpeername(((egg_conn *)v)->s, (struct sockaddr *)&address, &size) != 0) return egg_net_last();
+            if (getnameinfo((struct sockaddr *)&address, size, host, sizeof host, NULL, 0, NI_NUMERICHOST) != 0) return 7;
+            egg_append(ptr, len, cap, (const uint8_t *)host, (int64_t)strlen(host));
+            return 0;
+        }
+      C
       "egg_tcp_close" => <<~C,
         static void egg_tcp_close(void *v) {
             egg_net_close(((egg_conn *)v)->s);
@@ -2447,6 +2458,7 @@ module Egg
                     "egg_tcp_read" => %w[egg_conn egg_net_recv egg_net_last], "egg_tcp_read_all" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_write" => %w[egg_conn egg_net_last], "egg_tcp_timeout" => %w[egg_conn egg_net_timeout],
                     "egg_tcp_clone" => %w[egg_conn egg_net_last egg_net_prep],
+                    "egg_tcp_peer_ip" => %w[egg_conn egg_net_last egg_append],
                     "egg_poll" => %w[egg_conn egg_net_last egg_net_close egg_net_prep egg_net_start egg_buf_resize],
                     "egg_poll_find" => %w[egg_poll],
                     "egg_poll_ready" => %w[egg_poll],
@@ -3807,12 +3819,13 @@ module Egg
                line("#{r}.value = #{helper('egg_tcp_read')}(#{c}.c, &#{b}->ptr, &#{b}->len, &#{b}->cap, #{codes[2]});")
                line("if (#{r}.value < 0) #{r}.err = #{net_error("-#{r}.value")};")
                r
-             when "TcpConn.read_all"
+             when "TcpConn.read_all", "TcpConn.peer_ip"
                line("(void)#{codes[0]};")
                c = hoist(recv, obj.ty)
                r = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("#{r}.err = #{net_error("#{helper('egg_tcp_read_all')}(#{c}.c, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)")};")
+               operation = m == "TcpConn.peer_ip" ? "egg_tcp_peer_ip" : "egg_tcp_read_all"
+               line("#{r}.err = #{net_error("#{helper(operation)}(#{c}.c, &#{r}.value.ptr, &#{r}.value.len, &#{r}.value.cap)")};")
                r
              when "TcpConn.write"
                c = hoist(recv, obj.ty)
