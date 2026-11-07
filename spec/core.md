@@ -1675,7 +1675,7 @@ the connection's and applies to both, and the connection closes when every
 handle is closed. Calling a method on a connection or file that is not in a
 variable, such as `(try c.clone()).write(s)`, is an error (E133), since
 nothing would close it; `close` is the exception. `Addr` is a plain value, copied freely. `read_line`,
-`read_line_max`, `read`, `read_all` and `recv_from` need `uses alloc` too.
+`read_line_max`, `read`, `read_all`, `recv_from` and `peer_ip` need `uses alloc` too.
 
 Nothing is buffered on the way out, so there is no flush, and `close` cannot
 fail. `set_timeout` bounds each later read and write (0 means none; negative
