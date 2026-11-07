@@ -115,7 +115,7 @@ module Egg
       "TcpConn" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                      "read_all" => [["Allocator"], "!Buf(u8)"],
                      "read" => [%w[Allocator inout_buffer i64], "!i64"], "write" => [["text"], "!void"],
-                     "set_timeout" => [["i64"], "!void"], "clone" => [[], "!TcpConn"], "close" => [[], "void"] },
+                     "set_timeout" => [["i64"], "!void"], "peer_ip" => [["Allocator"], "!Buf(u8)"], "clone" => [[], "!TcpConn"], "close" => [[], "void"] },
       "TcpListener" => { "accept" => [[], "!TcpConn"], "port" => [[], "i64"], "close" => [[], "void"] },
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
@@ -2643,7 +2643,7 @@ module Egg
       # Reading standard input can fail, and fills a buffer.
       if (t == "Io" && name.start_with?("read_")) || (FILE_TYPES.key?(t) && name != "close")
         error_id("IoFailed")
-        @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read") || name == "recv_from" || name == "next"
+        @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read") || %w[recv_from next peer_ip].include?(name)
       end
       error_id("LineTooLong") if name == "read_line_max"
       NET_ERRORS.each { |n| error_id(n) } if ret.start_with?("!") && (FILE_TYPES[t] == "net" || t == "Net")

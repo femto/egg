@@ -1662,7 +1662,7 @@ at a time, unless it hands each to a thread.
 
 | Type | Methods |
 | --- | --- |
-| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_line_max(a, &line, max) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.clone() !TcpConn`: another handle to the same connection; `c.close()` |
+| `TcpConn` | `c.read_line(a, &line) !bool`, `c.read_line_max(a, &line, max) !bool`, `c.read_all(a) !Buf(u8)`: as on `Io`, up to when the other side closes; `c.read(a, &buf, n) !i64`: what has arrived, up to n bytes, in place of what `buf` held, and 0 at the end; `c.write(text) !void`: all of it, at once; `c.set_timeout(ms) !void`; `c.peer_ip(a) !Buf(u8)`: the numeric IP address of the peer, without a DNS lookup; `c.clone() !TcpConn`: another handle to the same connection; `c.close()` |
 | `TcpListener` | `l.accept() !TcpConn`: waits for the next connection; `l.port() i64`; `l.close()` |
 | `UdpSocket` | `u.recv_from(a, &buf, n) !Addr`: the next datagram, in place of what `buf` held, and who sent it; what does not fit in n bytes is lost; `u.send_to(addr, data) !void`; `u.set_timeout(ms) !void`; `u.port() i64`; `u.close()` |
 | `Addr` | `addr.port() i64`; `io.print` shows it, as `127.0.0.1:80` or `[::1]:80` |

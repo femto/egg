@@ -1,0 +1,25 @@
+// Numeric peer addresses, without a DNS lookup; clones name the same peer.
+// expect: client: 127.0.0.1
+// expect: accepted: 127.0.0.1
+// expect: clone: 127.0.0.1
+uses alloc, io, net
+
+fn main(io: Io, net: Net, a: Allocator) !void {
+    const listener = try net.tcp_listen("127.0.0.1", 0)
+    defer listener.close()
+    const client = try net.tcp_connect("127.0.0.1", listener.port())
+    defer client.close()
+    const accepted = try listener.accept()
+    defer accepted.close()
+    const clone = try accepted.clone()
+    defer clone.close()
+    const client_ip = try client.peer_ip(a)
+    defer a.free(client_ip)
+    const accepted_ip = try accepted.peer_ip(a)
+    defer a.free(accepted_ip)
+    const clone_ip = try clone.peer_ip(a)
+    defer a.free(clone_ip)
+    io.print("client: ", client_ip)
+    io.print("accepted: ", accepted_ip)
+    io.print("clone: ", clone_ip)
+}
