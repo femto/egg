@@ -6,6 +6,7 @@
 // expect: true
 // expect: true
 // expect: [hello there]
+// expect: [no copy][]
 // expect: 3
 // expect: [a]
 // expect: []
@@ -51,6 +52,7 @@ fn main(io: Io, a: Allocator) void {
     const trimmed = text.trim(a, "  hello there\r\n")
     defer a.free(trimmed)
     io.print("[", trimmed, "]")
+    io.print("[", text.strip(" \tno copy \n"), "][", text.strip("   "), "]")
 
     const parts = text.split(a, "a,,b", ",")
     defer a.free(parts)

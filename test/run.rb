@@ -135,7 +135,9 @@ def bad_line_marks(c_source, src, path)
     # for one.
     ty = /(?:[A-Z]\w*|[iuf]\d+|usize|str|bool|anyerror|void)\b/
     comptime = text.match?(/\A\} else if \((\s*!?\s*\w+\s*[!=]=\s*#{ty}\s*(and|or)?)+\s*\) \{\z/) || text.start_with?("@compileError(")
-    code << i + 1 unless continued || declares || comptime || text.match?(/\A\}( else \{)?\z/)
+    # A closing brace generates nothing, nor does the `}) orelse {` that
+    # closes a catch block and opens the fallback of the optional it gave.
+    code << i + 1 unless continued || declares || comptime || text.match?(/\A\}( else \{|\) orelse \{)?\z/)
     prev = text
   end
   (marked - code) + (code - marked)
@@ -707,13 +709,16 @@ def check_http_server(dir)
       report(status.(big) == "200" && body == blob, "http serves binary data whole", big.bytesize.to_s)
       report(head.("/note.txt?v=1").end_with?("hello\n"), "http ignores the query", "")
       report(status.(head.("/missing")) == "404", "http 404", "")
+      headed = ask.(port, "HEAD /note.txt HTTP/1.0\r\n\r\n")
+      report(status.(headed) == "200" && headed.include?("Content-Length: 6\r\n") && headed.end_with?("\r\n\r\n"), "http answers HEAD with the length and no body", headed)
       # Closed with the rest unread, so the client may see a reset.
       long = begin
         ask.(port, "GET /#{"x" * 100_000} HTTP/1.0\r\n\r\n")
       rescue SystemCallError
         ""
       end
-      report(long.empty?, "http drops a line that is too long", long[0, 40].to_s)
+      # Refused with 431, or reset before the answer is read.
+      report(long.empty? || status.(long) == "431", "http refuses a head that is too long", long[0, 40].to_s)
       report(status.(head.("/sub")) == "404", "http 404 for a directory", "")
       report(status.(head.("/../secret.txt")) == "403", "http refuses to leave the root", "")
       report(status.(ask.(port, "POST / HTTP/1.0\r\n\r\n")) == "405", "http 405", "")

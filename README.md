@@ -233,11 +233,26 @@ v3 (memory without GC, and what realistic programs needed):
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
   `std/text` searches and takes text apart (`find`, `find_from`, `contains`,
-  `starts_with`, `ends_with`, `trim`, `split`, `parse_int`).
+  `starts_with`, `ends_with`, `trim`, `strip` (a part, not a copy), `split`,
+  `parse_int`).
   `std/sort` sorts, reverses and checks a mutable slice in place, also of
   elements that own buffers
   (`sort.sort(i64, &b[0..])`, numbers or text; `sort.sort_by(Row,
-  &rows[0..], less)` by any order)
+  &rows[0..], less)` by any order).
+  `std/http` is HTTP/1.1 for servers: `parse` takes a request from the
+  bytes received so far (null until it has all come, so a Poller can feed
+  it), `read_request` reads one from a blocking `TcpConn`; a `Request` has
+  `method`, `path`, `query`, `host`, `cookie`, `content_type`, `body`,
+  `keep` and `upgrade`, and every header (`http.header(req, "Origin")` is
+  a `?[]u8` of the request, not a copy). Responses are written
+  whole (`write_response`, `append_response`), with validators the caller
+  makes (`conditional(c, a, req, tag, ...)`: 304 when If-None-Match has
+  it) and byte ranges (`ranged`); forms, cookies and multipart uploads are
+  read with `field`, `fields`, `cookie` and `file`.
+  `std/ws` is WebSocket for servers: `is_handshake` and `handshake` (the
+  101 response), frames out, and messages in with `take` (from received
+  bytes) or `read_message`. `std/codec` has Base64, hex and form escaping;
+  `std/sha1` SHA-1, in Egg, for the WebSocket handshake
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
@@ -434,7 +449,8 @@ lib/egg/own.rb         ownership check of buffers, along every path
 lib/egg/codegen_c.rb   AST -> C99 (only the runtime helpers a program uses)
 lib/egg/lsp.rb         language server (a tool: uses the json and uri stdlib, not Spinel)
 lib/std/               the standard library: @import("std/math") is lib/std/math.egg
-                       (math: min, max, abs, clamp; map: HashMap(K, V))
+                       (math: min, max, abs, clamp; map: HashMap(K, V); text;
+                       sort; http; ws; codec; sha1)
 spec/core.md           the core language spec: types, scoping, semantics
 spec/grammar.ebnf      the grammar, machine-readable
 spec/diagnostics.md    every error code
