@@ -2,7 +2,6 @@
 // []u8 or a Buf(u8), and nothing here keeps what it is given.
 // const text = @import("std/text")
 // text.find("a=b", "=") is 1; text.parse_int("-12") is -12;
-// text.strip(" a ") is "a", a part of what it was given;
 // text.split(a, "a,b", ",") is a Buf(Buf(u8)) to free with a.free.
 uses alloc
 
@@ -10,14 +9,8 @@ uses alloc
 // is found at once, where it starts.
 fn find_from(s: []u8, needle: []u8, from: i64) ?i64 {
     var i = if (from < 0) 0 else from
-    const n = @len(needle)
-    if (n == 0) {
-        return if (i <= @len(s)) i else null
-    }
-    // The first byte decides most places at once.
-    const first = needle[0]
-    while (i <= @len(s) - n) {
-        if (s[i] == first and s[i..i + n] == needle) {
+    while (i <= @len(s) and @len(needle) <= @len(s) - i) {
+        if (s[i..i + @len(needle)] == needle) {
             return i
         }
         i = i + 1
@@ -56,20 +49,6 @@ fn trim(a: Allocator, s: []u8) Buf(u8) {
         hi = hi - 1
     }
     return a.concat(s[lo..hi], "")
-}
-
-// s without spaces, tabs and line endings at either end: a part of s, not
-// a copy (trim makes one).
-fn strip(s: []u8) []u8 {
-    var lo = 0
-    var hi = @len(s)
-    while (lo < hi and is_space(s[lo])) {
-        lo = lo + 1
-    }
-    while (hi > lo and is_space(s[hi - 1])) {
-        hi = hi - 1
-    }
-    return s[lo..hi]
 }
 
 // The parts of s between each sep. "a,,b" has three, and "" has one, empty.

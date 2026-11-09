@@ -136,7 +136,7 @@ module Egg
                       egg_chan_tx_close egg_chan_rx_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
-                      egg_conn egg_conn_new egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
+                      egg_conn egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
                       egg_tcp_read_all egg_tcp_write egg_tcp_timeout egg_tcp_peer_ip egg_tcp_clone egg_tcp_close egg_udp_recv egg_udp_send egg_poll egg_poll_find egg_poll_ready egg_poll_add egg_poll_want egg_poll_remove egg_poll_wait egg_poll_accept egg_poll_read egg_poll_write egg_poll_waker egg_waker_wake].freeze
 
     HELPERS = {
@@ -1580,10 +1580,6 @@ module Egg
             int64_t pos, len;
             uint8_t buf[4096];
         } egg_conn;
-      C
-      # Only where connections are made: a program that is handed one and
-      # never makes one (it imports std/http, say) must not carry it unused.
-      "egg_conn_new" => <<~C,
         static void *egg_conn_new(egg_sock s) {
             egg_conn *c = (egg_conn *)egg_buf_resize(NULL, 1, sizeof(egg_conn));
             c->s = s;
@@ -2454,14 +2450,14 @@ module Egg
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
                     "egg_print_addr" => ["egg_net_base"], "egg_net_resolve" => ["egg_net_addrinfo"],
-                    "egg_conn" => %w[egg_net_base], "egg_conn_new" => %w[egg_conn egg_buf_resize],
-                    "egg_tcp_connect" => %w[egg_net_addrinfo egg_net_last egg_net_close egg_net_prep egg_conn_new],
+                    "egg_conn" => %w[egg_net_base egg_buf_resize],
+                    "egg_tcp_connect" => %w[egg_net_addrinfo egg_net_last egg_net_close egg_net_prep egg_conn],
                     "egg_net_bind" => %w[egg_net_addrinfo egg_net_last egg_net_close egg_net_prep],
-                    "egg_tcp_accept" => %w[egg_net_last egg_net_prep egg_conn_new],
+                    "egg_tcp_accept" => %w[egg_net_last egg_net_prep egg_conn],
                     "egg_tcp_read_line" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_read" => %w[egg_conn egg_net_recv egg_net_last], "egg_tcp_read_all" => %w[egg_conn egg_net_recv egg_net_last egg_append],
                     "egg_tcp_write" => %w[egg_conn egg_net_last], "egg_tcp_timeout" => %w[egg_conn egg_net_timeout],
-                    "egg_tcp_clone" => %w[egg_conn_new egg_net_last egg_net_prep],
+                    "egg_tcp_clone" => %w[egg_conn egg_net_last egg_net_prep],
                     "egg_tcp_peer_ip" => %w[egg_conn egg_net_last egg_append],
                     "egg_poll" => %w[egg_conn egg_net_last egg_net_close egg_net_prep egg_net_start egg_buf_resize],
                     "egg_poll_find" => %w[egg_poll],
@@ -2470,7 +2466,7 @@ module Egg
                     "egg_poll_want" => %w[egg_poll_find egg_poll_ready],
                     "egg_poll_remove" => %w[egg_poll_find],
                     "egg_poll_wait" => %w[egg_poll_find],
-                    "egg_poll_accept" => %w[egg_poll_find egg_conn_new],
+                    "egg_poll_accept" => %w[egg_poll_find],
                     "egg_poll_read" => %w[egg_poll_find egg_poll_ready egg_net_recv],
                     "egg_poll_write" => %w[egg_poll_find],
                     "egg_poll_waker" => %w[egg_poll],
