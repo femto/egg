@@ -1,7 +1,6 @@
 // A small static file server: eggc run server.egg -- ROOT PORT
-// HTTP/1.1 with keep-alive. A fixed pool of threads takes connections from a
-// queue, and a logger thread
-// prints what they report. While every thread is busy and the queue is full,
+// HTTP/1.1 with keep-alive, on std/http. A fixed pool of threads takes
+// connections from a queue, and a logger thread prints what they report. While every thread is busy and the queue is full,
 // the server accepts one more connection and waits with it: load cannot make
 // it start more threads. A connection holds its thread while it is open, so
 // it may idle for 2 seconds and make 100 requests.
@@ -10,6 +9,7 @@
 uses alloc, args, fs, io, net, thread
 
 const text = @import("std/text")
+const http = @import("std/http")
 
 const Worker = owned struct {
     t: Thread
@@ -57,171 +57,89 @@ fn plain(s: []u8) bool {
     return true
 }
 
-fn lower(c: u8) u8 {
-    if (c >= 'A' and c <= 'Z') {
-        return c + 32
-    }
-    return c
+fn respond(c: TcpConn, a: Allocator, req: http.Request, status: str, kind: str, body: []u8) !void {
+    const headers = a.concat("Content-Type: ", kind, "\r\n")
+    defer a.free(headers)
+    return http.respond(c, a, req, status, "", headers, body)
 }
 
-// Header names and the words of Connection have no case.
-fn same(s: []u8, word: str) bool {
-    if (@len(s) != @len(word)) {
-        return false
-    }
-    var i = 0
-    while (i < @len(s)) {
-        if (lower(s[i]) != lower(word[i])) {
-            return false
-        }
-        i = i + 1
-    }
-    return true
-}
-
-fn is_header(line: []u8, name: str) bool {
-    const n = @len(name)
-    return @len(line) > n and line[n] == ':' and same(line[0..n], name)
-}
-
-// A line with no name, or a name that is not one word, may hide a header.
-fn odd_header(line: []u8) bool {
-    const colon = text.find(line, ":") orelse -1
-    if (colon <= 0) {
-        return true
-    }
-    for (line[0..colon]) |c| {
-        if (c == ' ' or c == '\t') {
-            return true
-        }
-    }
-    return false
-}
-
-// Is word one of the comma-separated words of list?
-fn has_word(list: []u8, word: str) bool {
-    var i = 0
-    while (i <= @len(list)) {
-        const end = text.find_from(list, ",", i) orelse @len(list)
-        var lo = i
-        var hi = end
-        while (lo < hi and (list[lo] == ' ' or list[lo] == '\t')) {
-            lo = lo + 1
-        }
-        while (hi > lo and (list[hi - 1] == ' ' or list[hi - 1] == '\t')) {
-            hi = hi - 1
-        }
-        if (same(list[lo..hi], word)) {
-            return true
-        }
-        i = end + 1
-    }
-    return false
-}
-
-fn respond(c: TcpConn, a: Allocator, status: str, kind: str, body: []u8, keep: bool) !void {
-    const size = a.int_str(@len(body))
-    defer a.free(size)
-    const connection = if (keep) "keep-alive" else "close"
-    const head = a.concat("HTTP/1.1 ", status, "\r\nContent-Type: ", kind, "\r\nContent-Length: ", size, "\r\nConnection: ", connection, "\r\n\r\n")
-    defer a.free(head)
-    try c.write(head)
-    try c.write(body)
-}
-
-fn serve_file(c: TcpConn, files: Fs, a: Allocator, root: str, path: []u8, keep: bool) !i64 {
+fn serve_file(c: TcpConn, files: Fs, a: Allocator, root: str, req: http.Request, path: []u8) !i64 {
     const full = a.concat(root, path)
     defer a.free(full)
     const body = files.read(a, full) catch |e| {
         if (e == error.NotFound or e == error.IsDirectory) {
-            try respond(c, a, "404 Not Found", "text/plain", "not found\n", keep)
+            try respond(c, a, req, "404 Not Found", "text/plain", "not found\n")
             return 404
         }
-        try respond(c, a, "500 Internal Server Error", "text/plain", "cannot read\n", keep)
+        try respond(c, a, req, "500 Internal Server Error", "text/plain", "cannot read\n")
         return 500
     }
     defer a.free(body)
-    try respond(c, a, "200 OK", content_type(path), body, keep)
+    try respond(c, a, req, "200 OK", content_type(path), body)
     return 200
 }
 
+// What a request that could not be read gets, before the connection closes.
+fn refuse(c: TcpConn, a: Allocator, e: anyerror) !void {
+    if (e == error.HeadTooLarge) {
+        return http.write_response(c, a, "431 Request Header Fields Too Large", "Content-Type: text/plain\r\n", "too long\n", false)
+    }
+    if (e == error.BodyTooLarge) {
+        return http.write_response(c, a, "413 Payload Too Large", "Content-Type: text/plain\r\n", "too large\n", false)
+    }
+    if (e == error.BadRequest) {
+        return http.write_response(c, a, "400 Bad Request", "Content-Type: text/plain\r\n", "bad request\n", false)
+    }
+    return e
+}
+
 fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) !void {
-    var line: Buf(u8) = .empty
-    defer a.free(line)
-    var header: Buf(u8) = .empty
-    defer a.free(header)
+    // Quiet for 2 s, between requests or inside one, and it is let go.
+    try c.set_timeout(2000)
+    var inbox: Buf(u8) = .empty
+    defer a.free(inbox)
     var served = 0
-    while (served < 100) {
-        try c.set_timeout(2000)
-        if (!try c.read_line_max(a, &line, 8192)) {
-            return
-        }
-        try c.set_timeout(5000)
+    while (true) {
+        const got = (http.read_request(c, a, &inbox, 65536) catch |e| {
+            return refuse(c, a, e)
+        }) orelse break
+        var req = got
+        defer req.deinit(a)
         served = served + 1
-        var close = false
-        var ask_keep = false
-        var has_body = false
-        while (true) {
-            if (!try c.read_line_max(a, &header, 8192)) {
-                return
-            }
-            if (@len(header) == 0) {
-                break
-            }
-            if (odd_header(header)) {
-                has_body = true
-            } else if (is_header(header, "Connection")) {
-                const value = header[@len("Connection:")..]
-                close = close or has_word(value, "close")
-                ask_keep = ask_keep or has_word(value, "keep-alive")
-            } else if (is_header(header, "Content-Length")) {
-                // Exactly 0: a list could disagree with itself.
-                const value = header[@len("Content-Length:")..]
-                has_body = has_body or text.contains(value, ",") or !has_word(value, "0")
-            } else if (is_header(header, "Transfer-Encoding")) {
-                has_body = true
-            }
+        // Only GET and HEAD are served, without a body: a client that sends
+        // anything else is not one to keep talking to.
+        const reads = req.method == "GET" or req.method == "HEAD"
+        if (served >= 100 or !reads or @len(req.body) > 0) {
+            http.close_after(&req)
         }
-        const space = text.find(line, " ") orelse {
-            return respond(c, a, "400 Bad Request", "text/plain", "bad request\n", false)
-        }
-        const end = text.find_from(line, " ", space + 1) orelse {
-            return respond(c, a, "400 Bad Request", "text/plain", "bad request\n", false)
-        }
-        const stop = text.find_from(line[0..end], "?", space + 1) orelse end
-        const method = line[0..space]
-        const path = line[space + 1..stop]
-        const wanted = text.ends_with(line, " HTTP/1.1") or ask_keep
-        // A body nobody reads would be taken for the next request. Anything
-        // that might frame one ends the connection, and with it what follows.
-        const keep = wanted and !close and !has_body and method == "GET" and served < 100
-        try route(c, files, a, root, log, method, path, keep)
-        if (!keep) {
+        try route(c, files, a, root, log, req)
+        if (!req.keep) {
             return
         }
     }
 }
 
-fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), method: []u8, path: []u8, keep: bool) !void {
+fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), req: http.Request) !void {
     var status = 400
-    if (method != "GET") {
+    const path = req.path[0..]
+    if (req.method != "GET" and req.method != "HEAD") {
         status = 405
-        try respond(c, a, "405 Method Not Allowed", "text/plain", "only GET\n", keep)
+        try respond(c, a, req, "405 Method Not Allowed", "text/plain", "only GET\n")
     } else if (!safe(path)) {
         status = 403
-        try respond(c, a, "403 Forbidden", "text/plain", "forbidden\n", keep)
+        try respond(c, a, req, "403 Forbidden", "text/plain", "forbidden\n")
     } else if (text.ends_with(path, "/")) {
         const index = a.concat(path, "index.html")
         defer a.free(index)
-        status = try serve_file(c, files, a, root, index, keep)
+        status = try serve_file(c, files, a, root, req, index)
     } else {
-        status = try serve_file(c, files, a, root, path, keep)
+        status = try serve_file(c, files, a, root, req, path)
     }
     const code = a.int_str(status)
     defer a.free(code)
     // The path is the client's: nothing it holds may reach the terminal.
-    if (plain(method) and plain(path)) {
-        log.send(a.concat(code, " ", method, " ", path))
+    if (plain(req.method) and plain(path)) {
+        log.send(a.concat(code, " ", req.method, " ", path))
     } else {
         log.send(a.concat(code, " ?"))
     }

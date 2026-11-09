@@ -1,0 +1,878 @@
+// std/http: HTTP/1.1 for servers. parse takes a request from the bytes a
+// connection has sent so far, whoever reads them (a Poller, say);
+// read_request does the reading itself, on a blocking TcpConn. Responses
+// are built whole, with Content-Length, and written at once.
+// const http = @import("std/http")
+// var inbox: Buf(u8) = .empty
+// const req = (try http.read_request(c, a, &inbox, 1048576)) orelse return
+// defer req.deinit(a)
+// try http.respond(c, a, req, "200 OK", "", "Content-Type: text/plain\r\n", "hi")
+uses alloc, net
+
+const text = @import("std/text")
+const codec = @import("std/codec")
+
+// The request line and headers together may be no longer than this, and
+// no request has more headers than MAX_HEADERS.
+const MAX_HEAD = 65536
+const MAX_HEADERS = 100
+
+// Where a header is in its request's head: name and value, the value
+// without the spaces around it (req.head[h.value_lo..h.value_hi]).
+const Header = struct {
+    name_lo: i64
+    name_hi: i64
+    value_lo: i64
+    value_hi: i64
+}
+
+// A request, with the headers most handlers read taken out as fields
+// (empty when absent), and every header in headers, in order, as places
+// in head; header(req, name) looks one up without copying it.
+const Request = owned struct {
+    method: Buf(u8)
+    // The target up to its ?, and what follows the ? (not decoded).
+    path: Buf(u8)
+    query: Buf(u8)
+    host: Buf(u8)
+    // Every Cookie header, joined with "; ".
+    cookie: Buf(u8)
+    content_type: Buf(u8)
+    // Filled in by read_request; parse leaves it empty.
+    peer_ip: Buf(u8)
+    // The request line and the header lines, as they came.
+    head: Buf(u8)
+    headers: Buf(Header)
+    // Content-Length bytes of body, or the chunks of a chunked one joined.
+    body: Buf(u8)
+    // Connection: upgrade with Upgrade: websocket.
+    upgrade: bool
+    // Whether the client means to send another request on the connection:
+    // HTTP/1.1 unless Connection: close, HTTP/1.0 with Connection: keep-alive.
+    keep: bool
+
+    fn deinit(sink self: Request, a: Allocator) void {
+        a.free(self.method)
+        a.free(self.path)
+        a.free(self.query)
+        a.free(self.host)
+        a.free(self.cookie)
+        a.free(self.content_type)
+        a.free(self.peer_ip)
+        a.free(self.head)
+        a.free(self.headers)
+        a.free(self.body)
+        @forget(self)
+    }
+}
+
+fn lower(c: u8) u8 {
+    if (c >= 'A' and c <= 'Z') {
+        return c + 32
+    }
+    return c
+}
+
+// Equal but for the case of letters, as header names and the words of
+// Connection compare.
+fn same(s: []u8, word: []u8) bool {
+    if (@len(s) != @len(word)) {
+        return false
+    }
+    var i = 0
+    while (i < @len(s)) {
+        if (lower(s[i]) != lower(word[i])) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn is_blank(c: u8) bool {
+    return c == ' ' or c == '\t'
+}
+
+// Where s[lo..hi] starts without the spaces and tabs before it.
+fn skip_blank(s: []u8, lo: i64, hi: i64) i64 {
+    var i = lo
+    while (i < hi and is_blank(s[i])) {
+        i = i + 1
+    }
+    return i
+}
+
+// Where s[lo..hi] ends without the spaces and tabs after it.
+fn drop_blank(s: []u8, lo: i64, hi: i64) i64 {
+    var i = hi
+    while (i > lo and is_blank(s[i - 1])) {
+        i = i - 1
+    }
+    return i
+}
+
+// s without the spaces and tabs around it.
+fn unblank(s: []u8) []u8 {
+    const lo = skip_blank(s, 0, @len(s))
+    return s[lo..drop_blank(s, lo, @len(s))]
+}
+
+// Is word one of the comma-separated words of list, whatever its
+// parameters (;q=...)? A word with q=0 is refused, so it is not there.
+fn has_word(list: []u8, word: []u8) bool {
+    var i = 0
+    while (i <= @len(list)) {
+        const end = text.find_from(list, ",", i) orelse @len(list)
+        var lo = i
+        while (lo < end and is_blank(list[lo])) {
+            lo = lo + 1
+        }
+        var hi = text.find_from(list[0..end], ";", lo) orelse end
+        const params = hi
+        while (hi > lo and is_blank(list[hi - 1])) {
+            hi = hi - 1
+        }
+        if (same(list[lo..hi], word) and !refused(list[params..end])) {
+            return true
+        }
+        i = end + 1
+    }
+    return false
+}
+
+// Do the parameters of a word (";q=0", say) give it a weight of 0?
+fn refused(params: []u8) bool {
+    const at = text.find(params, "q=") orelse -1
+    if (at < 0) {
+        return false
+    }
+    var i = at + 2
+    if (i >= @len(params) or params[i] != '0') {
+        return false
+    }
+    i = i + 1
+    if (i < @len(params) and params[i] == '.') {
+        i = i + 1
+        while (i < @len(params) and params[i] == '0') {
+            i = i + 1
+        }
+    }
+    return i == @len(params) or is_blank(params[i]) or params[i] == ';'
+}
+
+// A decimal number of up to 18 digits, all of s, or null.
+fn digits(s: []u8) ?i64 {
+    if (@len(s) == 0 or @len(s) > 18) {
+        return null
+    }
+    for (s) |c| {
+        if (c < '0' or c > '9') {
+            return null
+        }
+    }
+    return text.parse_int(s)
+}
+
+// Where the line at `from` ends: its \n, or -1 if it has not come yet.
+fn line_end(s: []u8, from: i64) i64 {
+    var i = from
+    while (i < @len(s)) {
+        if (s[i] == '\n') {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// The line from `from` to its \n at `nl`, without a \r before that.
+fn line_to(s: []u8, from: i64, nl: i64) i64 {
+    return if (nl > from and s[nl - 1] == '\r') nl - 1 else nl
+}
+
+// Where the chunked body from `from` ends (past its last chunk, trailers
+// and empty line); -1 while it has not all come. Fails on what is not
+// chunked, or data over max_body.
+fn chunked_end(s: []u8, from: i64, max_body: i64) !i64 {
+    var size = 0
+    var at = from
+    while (true) {
+        const nl = line_end(s, at)
+        if (nl < 0) {
+            return -1
+        }
+        var n = 0
+        var i = at
+        const stop = line_to(s, at, nl)
+        while (i < stop and s[i] != ';') {
+            const v = codec.hex_value(s[i])
+            if (v < 0 or n > 0xFFFFFFFFFF) {
+                return error.BadRequest
+            }
+            n = n * 16 + v
+            i = i + 1
+        }
+        if (i == at) {
+            return error.BadRequest
+        }
+        at = nl + 1
+        if (n == 0) {
+            break
+        }
+        size = size + n
+        if (size > max_body) {
+            return error.BodyTooLarge
+        }
+        // The data and its CRLF.
+        if (@len(s) < at + n + 2) {
+            return -1
+        }
+        if (s[at + n..at + n + 2] != "\r\n") {
+            return error.BadRequest
+        }
+        at = at + n + 2
+    }
+    // Trailers, which are dropped, up to an empty line.
+    while (true) {
+        const nl = line_end(s, at)
+        if (nl < 0) {
+            return -1
+        }
+        const empty = line_to(s, at, nl) == at
+        at = nl + 1
+        if (empty) {
+            return at
+        }
+        if (at - from > max_body + MAX_HEAD) {
+            return error.BadRequest
+        }
+    }
+    return -1
+}
+
+// The data of the chunked body from `from`, which chunked_end has checked.
+fn dechunk(a: Allocator, s: []u8, from: i64) Buf(u8) {
+    var out: Buf(u8) = .empty
+    var at = from
+    while (true) {
+        const nl = line_end(s, at)
+        var n = 0
+        var i = at
+        while (i < nl and codec.hex_value(s[i]) >= 0) {
+            n = n * 16 + codec.hex_value(s[i])
+            i = i + 1
+        }
+        if (n == 0) {
+            break
+        }
+        a.append_str(&out, s[nl + 1..nl + 1 + n])
+        at = nl + 1 + n + 2
+    }
+    return out
+}
+
+// What the head says of the body: its Content-Length (-1 for none), and
+// whether it is chunked.
+const Framing = struct {
+    length: i64
+    chunked: bool
+}
+
+// The framing headers of the head at s[from..to], before anything is
+// taken out of it; fails on a head that cannot be framed safely.
+fn framing(s: []u8, from: i64, to: i64) !Framing {
+    var f = Framing{ .length = -1, .chunked = false }
+    var at = from
+    while (at < to) {
+        const nl = line_end(s, at)
+        const line = s[at..line_to(s, at, nl)]
+        if (@len(line) > 15 and line[14] == ':' and same(line[0..14], "Content-Length")) {
+            const n = digits(unblank(line[15..])) orelse { return error.BadRequest }
+            if (f.length >= 0 and f.length != n) {
+                return error.BadRequest
+            }
+            f.length = n
+        } else if (@len(line) > 18 and line[17] == ':' and same(line[0..17], "Transfer-Encoding")) {
+            // Only chunked is understood, and it comes last.
+            if (!same(unblank(line[18..]), "chunked")) {
+                return error.BadRequest
+            }
+            f.chunked = true
+        }
+        at = nl + 1
+    }
+    // Both is how requests are smuggled past a proxy (RFC 9112 6.3).
+    if (f.chunked and f.length >= 0) {
+        return error.BadRequest
+    }
+    return f
+}
+
+// The next request at the start of inbox, taken out of it (what follows
+// stays, for the next call); null while inbox does not hold a whole
+// request yet. Fails with error.BadRequest on what is not HTTP/1.x,
+// error.HeadTooLarge (431) for a head over MAX_HEAD or MAX_HEADERS, and
+// error.BodyTooLarge (413) for a body over max_body bytes.
+fn parse(a: Allocator, inout inbox: Buf(u8), max_body: i64) !?Request {
+    // Empty lines before a request are allowed (RFC 9112 2.2).
+    var start = 0
+    while (start < @len(inbox) and (inbox[start] == '\r' or inbox[start] == '\n')) {
+        start = start + 1
+    }
+    // The head: lines up to an empty one.
+    var head_end = -1
+    var lines = 0
+    var at = start
+    while (head_end < 0) {
+        const nl = line_end(inbox, at)
+        if (nl < 0) {
+            if (@len(inbox) - start > MAX_HEAD) {
+                return error.HeadTooLarge
+            }
+            return null
+        }
+        if (line_to(inbox, at, nl) == at) {
+            head_end = at
+        }
+        lines = lines + 1
+        at = nl + 1
+    }
+    if (head_end - start > MAX_HEAD or lines > MAX_HEADERS + 2) {
+        return error.HeadTooLarge
+    }
+    const body_from = at
+    const f = try framing(inbox, start, head_end)
+    var end = body_from
+    if (f.chunked) {
+        end = try chunked_end(inbox, body_from, max_body)
+        if (end < 0) {
+            return null
+        }
+    } else if (f.length > 0) {
+        if (f.length > max_body) {
+            return error.BodyTooLarge
+        }
+        end = body_from + f.length
+        if (@len(inbox) < end) {
+            return null
+        }
+    }
+
+    // The request line: method, target and version, one space apart.
+    const first_nl = line_end(inbox, start)
+    const line = inbox[start..line_to(inbox, start, first_nl)]
+    const space = text.find(line, " ") orelse { return error.BadRequest }
+    const space2 = text.find_from(line, " ", space + 1) orelse { return error.BadRequest }
+    const version = line[space2 + 1..]
+    if (space == 0 or space2 == space + 1 or !text.starts_with(version, "HTTP/1.") or @len(version) != 8) {
+        return error.BadRequest
+    }
+    const q = text.find_from(line[0..space2], "?", space + 1) orelse space2
+
+    var headers: Buf(Header) = .empty
+    errdefer a.free(headers)
+    var host: Buf(u8) = .empty
+    errdefer a.free(host)
+    var cookies: Buf(u8) = .empty
+    errdefer a.free(cookies)
+    var content_type: Buf(u8) = .empty
+    errdefer a.free(content_type)
+    var close = false
+    var ask_keep = false
+    var connection_upgrade = false
+    var upgrade_websocket = false
+    at = first_nl + 1
+    while (at < head_end) {
+        const nl = line_end(inbox, at)
+        const h = inbox[at..line_to(inbox, at, nl)]
+        // Places in head, which starts where the request does.
+        const from = at - start
+        at = nl + 1
+        // A name, then a colon at once; no line folded onto the last.
+        const colon = text.find(h, ":") orelse { return error.BadRequest }
+        if (colon == 0 or is_blank(h[0]) or is_blank(h[colon - 1])) {
+            return error.BadRequest
+        }
+        const name = h[0..colon]
+        const lo = skip_blank(h, colon + 1, @len(h))
+        const hi = drop_blank(h, lo, @len(h))
+        const value = h[lo..hi]
+        if (same(name, "Host")) {
+            a.free(@replace(&host, a.concat(value, "")))
+        } else if (same(name, "Cookie")) {
+            if (@len(cookies) > 0) {
+                a.append_str(&cookies, "; ")
+            }
+            a.append_str(&cookies, value)
+        } else if (same(name, "Content-Type")) {
+            a.free(@replace(&content_type, a.concat(value, "")))
+        } else if (same(name, "Connection")) {
+            close = close or has_word(value, "close")
+            ask_keep = ask_keep or has_word(value, "keep-alive")
+            connection_upgrade = connection_upgrade or has_word(value, "upgrade")
+        } else if (same(name, "Upgrade")) {
+            upgrade_websocket = has_word(value, "websocket")
+        }
+        a.push(&headers, Header{ .name_lo = from, .name_hi = from + colon, .value_lo = from + lo, .value_hi = from + hi })
+    }
+    const body = if (f.chunked) dechunk(a, inbox, body_from) else a.concat(inbox[body_from..end], "")
+    const http11 = version == "HTTP/1.1"
+    const req = Request{
+        .method = a.concat(line[0..space], ""),
+        .path = a.concat(line[space + 1..q], ""),
+        .query = if (q < space2) a.concat(line[q + 1..space2], "") else .empty,
+        .host = host,
+        .cookie = cookies,
+        .content_type = content_type,
+        .peer_ip = .empty,
+        .head = a.concat(inbox[start..head_end], ""),
+        .headers = headers,
+        .body = body,
+        .upgrade = connection_upgrade and upgrade_websocket,
+        .keep = !close and (http11 or ask_keep),
+    }
+    const rest = a.concat(inbox[end..], "")
+    a.free(@replace(&inbox, rest))
+    return req
+}
+
+// Has inbox nothing in it but the empty lines that may come between
+// requests?
+fn idle(inbox: []u8) bool {
+    for (inbox) |c| {
+        if (c != '\r' and c != '\n') {
+            return false
+        }
+    }
+    return true
+}
+
+// The next request on c, read into inbox, which keeps what came after it
+// for the next call (keep it for the life of the connection); null when
+// the client is done: it closed, or stayed quiet past c's timeout,
+// between requests. Fails as parse does, with error.BadRequest for a
+// request cut off, or with c's errors.
+fn read_request(c: TcpConn, a: Allocator, inout inbox: Buf(u8), max_body: i64) !?Request {
+    var ip = try c.peer_ip(a)
+    defer a.free(ip)
+    var chunk: Buf(u8) = .empty
+    defer a.free(chunk)
+    while (true) {
+        if (try parse(a, &inbox, max_body)) |got| {
+            var req = got
+            a.free(@replace(&req.peer_ip, @replace(&ip, .empty)))
+            return req
+        }
+        const n = c.read(a, &chunk, 65536) catch |e| {
+            if (e == error.TimedOut and idle(inbox)) {
+                return null
+            }
+            return e
+        }
+        if (n == 0) {
+            if (idle(inbox)) {
+                return null
+            }
+            return error.BadRequest
+        }
+        a.append_str(&inbox, chunk)
+    }
+    return null
+}
+
+// Makes req the last request of its connection, whatever the client
+// asked: its response says Connection: close. For a server that lets a
+// connection make only so many requests.
+fn close_after(inout req: Request) void {
+    req.keep = false
+}
+
+// The value of the first header called name (in any case), or null: a
+// part of req, not a copy.
+fn header(req: Request, name: []u8) ?[]u8 from req {
+    for (req.headers) |h| {
+        if (same(req.head[h.name_lo..h.name_hi], name)) {
+            return req.head[h.value_lo..h.value_hi]
+        }
+    }
+    return null
+}
+
+// The values of every header called name, joined with ", " as a list
+// header's may be (Sec-WebSocket-Protocol, Accept); empty if none.
+fn header_list(a: Allocator, req: Request, name: []u8) Buf(u8) {
+    var out: Buf(u8) = .empty
+    for (req.headers) |h| {
+        if (same(req.head[h.name_lo..h.name_hi], name)) {
+            if (@len(out) > 0) {
+                a.append_str(&out, ", ")
+            }
+            a.append_str(&out, req.head[h.value_lo..h.value_hi])
+        }
+    }
+    return out
+}
+
+fn has_header(req: Request, name: []u8) bool {
+    for (req.headers) |h| {
+        if (same(req.head[h.name_lo..h.name_hi], name)) {
+            return true
+        }
+    }
+    return false
+}
+
+// Does a header called name list word among its comma-separated words
+// (Accept-Encoding and gzip, Connection and close)? Words with q=0 do not
+// count.
+fn lists(req: Request, name: []u8, word: []u8) bool {
+    for (req.headers) |h| {
+        if (same(req.head[h.name_lo..h.name_hi], name) and has_word(req.head[h.value_lo..h.value_hi], word)) {
+            return true
+        }
+    }
+    return false
+}
+
+// Does the client take the body in this content coding ("gzip", say)?
+fn accepts(req: Request, coding: []u8) bool {
+    return lists(req, "Accept-Encoding", coding)
+}
+
+// Does a response with this status have no body, and so no length?
+fn bodiless(status: []u8) bool {
+    return text.starts_with(status, "1") or text.starts_with(status, "204") or text.starts_with(status, "304")
+}
+
+// The head of a response at the end of out: the status line ("200 OK"),
+// the headers of this request (Set-Cookie, say) and those of its body,
+// which a cache can keep with it (each header ending in \r\n),
+// Content-Length (length), Connection and the empty line.
+fn append_head(a: Allocator, inout out: Buf(u8), status: []u8, own: []u8, headers: []u8, length: i64, keep: bool) void {
+    a.append_str(&out, "HTTP/1.1 ")
+    a.append_str(&out, status)
+    a.append_str(&out, "\r\n")
+    a.append_str(&out, own)
+    a.append_str(&out, headers)
+    if (!bodiless(status)) {
+        a.append_str(&out, "Content-Length: ")
+        a.append_int(&out, length)
+        a.append_str(&out, "\r\n")
+    }
+    a.append_str(&out, if (keep) "Connection: keep-alive\r\n\r\n" else "Connection: close\r\n\r\n")
+}
+
+// A whole response at the end of out, head and body. A 1xx, 204 or 304
+// response has neither length nor body. Not for the answer to a HEAD,
+// which has the length but not the body: see respond.
+fn append_response(a: Allocator, inout out: Buf(u8), status: []u8, own: []u8, headers: []u8, body: []u8, keep: bool) void {
+    append_head(a, &out, status, own, headers, @len(body), keep)
+    if (!bodiless(status)) {
+        a.append_str(&out, body)
+    }
+}
+
+// The response to req: kept alive if req is, and without its body (but
+// with its length) if req is a HEAD.
+fn respond(c: TcpConn, a: Allocator, req: Request, status: []u8, own: []u8, headers: []u8, body: []u8) !void {
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    append_head(a, &out, status, own, headers, @len(body), req.keep)
+    if (!bodiless(status) and req.method != "HEAD") {
+        a.append_str(&out, body)
+    }
+    try c.write(out)
+}
+
+// A response written whole, for when there is no request to answer (a
+// 400 for one that could not be read, say); answer a request with respond.
+fn write_parts(c: TcpConn, a: Allocator, status: []u8, own: []u8, headers: []u8, body: []u8, keep: bool) !void {
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    append_response(a, &out, status, own, headers, body, keep)
+    try c.write(out)
+}
+
+fn write_response(c: TcpConn, a: Allocator, status: []u8, headers: []u8, body: []u8, keep: bool) !void {
+    return write_parts(c, a, status, "", headers, body, keep)
+}
+
+// Is tag (an ETag, quotes and all) one that If-None-Match lists? The
+// comparison is weak, as for GET: W/"x" and "x" are the same.
+fn none_match(list: []u8, tag: []u8) bool {
+    var start = 0
+    while (start < @len(list)) {
+        const end = text.find_from(list, ",", start) orelse @len(list)
+        const item = unblank(list[start..end])
+        if (item == "*" or strong(item) == strong(tag)) {
+            return true
+        }
+        start = end + 1
+    }
+    return false
+}
+
+// An ETag without the W/ that makes it weak.
+fn strong(tag: []u8) []u8 {
+    if (text.starts_with(tag, "W/")) {
+        return tag[2..]
+    }
+    return tag
+}
+
+// A 200 response with ETag: tag, or 304 Not Modified if the GET or HEAD
+// already has it. The tag is the caller's: a digest of body, a version, a
+// file's size and time ("W/\"1a2b-5f00\"")... with its quotes.
+fn conditional(c: TcpConn, a: Allocator, req: Request, tag: []u8, own: []u8, headers: []u8, body: []u8) !void {
+    const tagged = a.concat(headers, "ETag: ", tag, "\r\n")
+    defer a.free(tagged)
+    if (req.method == "GET" or req.method == "HEAD") {
+        for (req.headers) |h| {
+            if (same(req.head[h.name_lo..h.name_hi], "If-None-Match") and none_match(req.head[h.value_lo..h.value_hi], tag)) {
+                return respond(c, a, req, "304 Not Modified", own, tagged, "")
+            }
+        }
+    }
+    return respond(c, a, req, "200 OK", own, tagged, body)
+}
+
+// body as the request's Range asks for it: 206 Partial Content for one
+// range of bytes, 416 for one that is not in it, and 200 for the whole
+// (without a Range, or with several ranges). Says Accept-Ranges.
+fn ranged(c: TcpConn, a: Allocator, req: Request, headers: []u8, body: []u8) !void {
+    const with_ranges = a.concat(headers, "Accept-Ranges: bytes\r\n")
+    defer a.free(with_ranges)
+    const range = header(req, "Range") orelse ""
+    if (@len(range) == 0 or !text.starts_with(range, "bytes=") or text.contains(range, ",")) {
+        return respond(c, a, req, "200 OK", "", with_ranges, body)
+    }
+    var from = -1
+    var to = @len(body) - 1
+    const dash = text.find_from(range, "-", 6) orelse -1
+    if (dash == 6) {
+        // bytes=-n: the last n.
+        const suffix = digits(range[dash + 1..]) orelse 0
+        if (suffix > 0) {
+            from = if (suffix >= @len(body)) 0 else @len(body) - suffix
+        }
+    } else if (dash > 6) {
+        from = digits(range[6..dash]) orelse -1
+        if (dash + 1 < @len(range)) {
+            const last = digits(range[dash + 1..]) orelse -1
+            to = if (last < 0) -1 else if (last < to) last else to
+        }
+    }
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    a.append_str(&out, with_ranges)
+    a.append_str(&out, "Content-Range: bytes ")
+    if (from < 0 or from >= @len(body) or to < from) {
+        a.append_str(&out, "*/")
+        a.append_int(&out, @len(body))
+        a.append_str(&out, "\r\n")
+        return respond(c, a, req, "416 Range Not Satisfiable", "", out, "")
+    }
+    a.append_int(&out, from)
+    a.push(&out, '-')
+    a.append_int(&out, to)
+    a.push(&out, '/')
+    a.append_int(&out, @len(body))
+    a.append_str(&out, "\r\n")
+    return respond(c, a, req, "206 Partial Content", "", out, body[from..to + 1])
+}
+
+// The value of name in a form body or a query string, decoded, or null.
+fn form_value(a: Allocator, form: []u8, name: []u8) ?Buf(u8) {
+    var i = 0
+    while (i < @len(form)) {
+        const end = text.find_from(form, "&", i) orelse @len(form)
+        const eq = text.find_from(form[0..end], "=", i) orelse end
+        var key: Buf(u8) = .empty
+        codec.unescape(a, &key, form[i..eq])
+        const found = key == name
+        a.free(key)
+        if (found) {
+            var v: Buf(u8) = .empty
+            if (eq < end) {
+                codec.unescape(a, &v, form[eq + 1..end])
+            }
+            return v
+        }
+        i = end + 1
+    }
+    return null
+}
+
+// Every value of name in a form body or a query string, in order.
+fn form_values(a: Allocator, form: []u8, name: []u8) Buf(Buf(u8)) {
+    var out: Buf(Buf(u8)) = .empty
+    var i = 0
+    while (i < @len(form)) {
+        const end = text.find_from(form, "&", i) orelse @len(form)
+        if (form_value(a, form[i..end], name)) |value| {
+            a.push(&out, value)
+        }
+        i = end + 1
+    }
+    return out
+}
+
+// The value of the cookie called name in a Cookie header, form-unescaped
+// (as Rack and most frameworks write cookies), or null.
+fn cookie_value(a: Allocator, cookies: []u8, name: []u8) ?Buf(u8) {
+    var i = 0
+    while (i < @len(cookies)) {
+        while (i < @len(cookies) and (cookies[i] == ' ' or cookies[i] == ';')) {
+            i = i + 1
+        }
+        const end = text.find_from(cookies, ";", i) orelse @len(cookies)
+        const eq = text.find_from(cookies[0..end], "=", i) orelse end
+        if (eq < end and cookies[i..eq] == name) {
+            var v: Buf(u8) = .empty
+            codec.unescape(a, &v, cookies[eq + 1..end])
+            return v
+        }
+        i = end + 1
+    }
+    return null
+}
+
+fn cookie(a: Allocator, req: Request, name: []u8) ?Buf(u8) {
+    return cookie_value(a, req.cookie, name)
+}
+
+// The boundary of a multipart/form-data Content-Type, or empty: a part of
+// content_type.
+fn boundary(content_type: []u8) []u8 {
+    const at = text.find(content_type, "boundary=") orelse -1
+    if (at < 0 or !text.starts_with(content_type, "multipart/form-data")) {
+        return ""
+    }
+    var from = at + @len("boundary=")
+    const to = text.find_from(content_type, ";", from) orelse @len(content_type)
+    var hi = to
+    if (hi - from >= 2 and content_type[from] == '"' and content_type[hi - 1] == '"') {
+        from = from + 1
+        hi = hi - 1
+    }
+    return content_type[from..hi]
+}
+
+// The text parts called name of a multipart/form-data body, in order (a
+// file's part is not one: see file).
+fn multipart_values(a: Allocator, req: Request, b: []u8, name: []u8, first_only: bool) Buf(Buf(u8)) {
+    const delim = a.concat("--", b)
+    defer a.free(delim)
+    const want = a.concat("name=\"", name, "\"")
+    defer a.free(want)
+    var out: Buf(Buf(u8)) = .empty
+    var at = text.find(req.body, delim) orelse -1
+    while (at >= 0) {
+        const head_from = at + @len(delim) + 2
+        const head_end = text.find_from(req.body, "\r\n\r\n", head_from) orelse -1
+        if (head_end < 0) {
+            break
+        }
+        const next = text.find_from(req.body, delim, head_end) orelse -1
+        if (next < 0) {
+            break
+        }
+        const head = req.body[head_from..head_end]
+        if (text.contains(head, want) and !text.contains(head, "filename=")) {
+            // The value ends before the CRLF that comes before the next delimiter.
+            const end = if (next >= head_end + 6) next - 2 else head_end + 4
+            a.push(&out, a.concat(req.body[head_end + 4..end], ""))
+            if (first_only) {
+                break
+            }
+        }
+        at = next
+    }
+    return out
+}
+
+// A field of the request's form, urlencoded or multipart/form-data (a
+// file's part is not a field here: see file); null if absent.
+fn field(a: Allocator, req: Request, name: []u8) ?Buf(u8) {
+    const b = boundary(req.content_type)
+    if (@len(b) == 0) {
+        return form_value(a, req.body, name)
+    }
+    var found = multipart_values(a, req, b, name, true)
+    defer a.free(found)
+    if (@len(found) == 0) {
+        return null
+    }
+    return @replace(&found[0], .empty)
+}
+
+// Every value of a field of the request's form, in order.
+fn fields(a: Allocator, req: Request, name: []u8) Buf(Buf(u8)) {
+    const b = boundary(req.content_type)
+    if (@len(b) == 0) {
+        return form_values(a, req.body, name)
+    }
+    return multipart_values(a, req, b, name, false)
+}
+
+// A file sent in a multipart/form-data body: its name without any
+// directory, its Content-Type, and its bytes.
+const Upload = owned struct {
+    filename: Buf(u8)
+    content_type: Buf(u8)
+    data: Buf(u8)
+
+    fn deinit(sink self: Upload, a: Allocator) void {
+        a.free(self.filename)
+        a.free(self.content_type)
+        a.free(self.data)
+        @forget(self)
+    }
+}
+
+// The file in the part called name, or null if there is none (or it has
+// no filename: no file was chosen).
+fn file(a: Allocator, req: Request, name: []u8) ?Upload {
+    const b = boundary(req.content_type)
+    if (@len(b) == 0) {
+        return null
+    }
+    const delim = a.concat("\r\n--", b)
+    defer a.free(delim)
+    const want = a.concat("name=\"", name, "\"")
+    defer a.free(want)
+    var at = 0
+    while (at < @len(req.body)) {
+        const head_end = text.find_from(req.body, "\r\n\r\n", at) orelse { return null }
+        const next = text.find_from(req.body, delim, head_end + 4) orelse { return null }
+        const head = req.body[at..head_end]
+        const filename_at = text.find(head, "filename=\"") orelse -1
+        if (filename_at >= 0 and text.contains(head, want)) {
+            const from = filename_at + @len("filename=\"")
+            const end = text.find_from(head, "\"", from) orelse { return null }
+            if (end == from) {
+                return null
+            }
+            var filename: Buf(u8) = .empty
+            for (head[from..end]) |c| {
+                if (c == '/' or c == '\\') {
+                    a.resize(&filename, 0, 0)
+                } else if (c >= 32 and c != 127) {
+                    a.push(&filename, c)
+                }
+            }
+            var mime: Buf(u8) = .empty
+            const type_at = text.find(head, "Content-Type: ") orelse -1
+            if (type_at >= 0) {
+                const type_from = type_at + @len("Content-Type: ")
+                const type_end = text.find_from(head, "\r\n", type_from) orelse @len(head)
+                a.append_str(&mime, head[type_from..type_end])
+            } else {
+                a.append_str(&mime, "application/octet-stream")
+            }
+            return Upload{ .filename = filename, .content_type = mime, .data = a.concat(req.body[head_end + 4..next], "") }
+        }
+        at = next + @len(delim)
+    }
+    return null
+}

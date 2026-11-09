@@ -1,0 +1,227 @@
+// std/http, std/ws, std/codec and std/sha1 on bytes, without a socket:
+// requests parsed as they come in pieces, forms, cookies, multipart,
+// responses, validators, WebSocket frames and the handshake.
+// expect: need more
+// expect: need more
+// expect: POST /rooms [id=4&x] host=example.com keep=true upgrade=false body=[hello] headers=4
+// expect: GET / [] host= keep=true upgrade=false body=[] headers=1
+// expect: GET /2 [] host= keep=false upgrade=false body=[] headers=0
+// expect: need more
+// expect: left 0
+// expect: cookie [a=1; b=x%20y]
+// expect: b=x y
+// expect: length 5 false
+// expect: list [a=1, b=x%20y]
+// expect: id=4 x=[]
+// expect: PUT /c [] host= keep=true upgrade=false body=[abcde] headers=1
+// expect: need more
+// expect: error BadRequest
+// expect: error BodyTooLarge
+// expect: error BadRequest
+// expect: error BadRequest
+// expect: error BadRequest
+// expect: error BadRequest
+// expect: GET /chat [] host= keep=true upgrade=true body=[] headers=2
+// expect: GET / [] host= keep=true upgrade=false body=[] headers=0
+// expect: gzip false true true
+// expect: HTTP/1.1 200 OK|Set-Cookie: s=1|Content-Type: text/plain|Content-Length: 2|Connection: keep-alive||hiHTTP/1.1 304 Not Modified|ETag: "x"|Connection: close||
+// expect: true true false true
+// expect: field one fields 2 two
+// expect: file a.txt text/plain [file body]
+// expect: file in tag false
+// expect: aGVsbG8/Pg== aGVsbG8_Pg a+b%26c%2F%C3%A9
+// expect: a9993e364706816aba3e25717850c26c9cd0d89d
+// expect: handshake true false
+// expect: HTTP/1.1 101 Switching Protocols|Upgrade: websocket|Connection: Upgrade|Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=|Sec-WebSocket-Protocol: chat||
+// expect: kind 9 []
+// expect: kind 1 [Hello]
+// expect: unmasked -1002
+// expect: 4 129 2 4 3 232
+uses io, alloc
+
+const http = @import("std/http")
+const ws = @import("std/ws")
+const codec = @import("std/codec")
+const sha1 = @import("std/sha1")
+
+fn show(io: Io, a: Allocator, inout inbox: Buf(u8)) void {
+    const r = (http.parse(a, &inbox, 64) catch |e| {
+        io.print("error ", @errorName(e))
+        return
+    }) orelse {
+        io.print("need more")
+        return
+    }
+    io.print(r.method, " ", r.path, " [", r.query, "] host=", r.host, " keep=", r.keep, " upgrade=", r.upgrade, " body=[", r.body, "] headers=", @len(r.headers))
+    r.deinit(a)
+}
+
+// s with each CRLF shown as |, to print a response on one line.
+fn crlf(a: Allocator, s: []u8) Buf(u8) {
+    var out: Buf(u8) = .empty
+    var i = 0
+    while (i < @len(s)) {
+        if (i + 1 < @len(s) and s[i] == '\r' and s[i + 1] == '\n') {
+            a.push(&out, '|')
+            i = i + 2
+        } else {
+            a.push(&out, s[i])
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn has_file(a: Allocator, req: http.Request, name: []u8) bool {
+    const up = http.file(a, req, name) orelse { return false }
+    up.deinit(a)
+    return true
+}
+
+fn parse_text(io: Io, a: Allocator, s: []u8) void {
+    var inbox = a.concat(s, "")
+    defer a.free(inbox)
+    show(io, a, &inbox)
+}
+
+fn main(io: Io, a: Allocator) void {
+    // A request in pieces: nothing until its head and body have all come,
+    // and two pipelined requests one after the other.
+    var inbox: Buf(u8) = .empty
+    defer a.free(inbox)
+    a.append_str(&inbox, "\r\nPOST /rooms?id=4&x HTTP/1.1\r\nHost: example.com\r\n")
+    show(io, a, &inbox)
+    a.append_str(&inbox, "content-length: 5\r\nCookie: a=1\r\nCookie: b=x%20y\r\n\r\nhel")
+    show(io, a, &inbox)
+    a.append_str(&inbox, "loGET / HTTP/1.0\r\nConnection: Keep-Alive\r\n\r\nGET /2 HTTP/1.0\n\n")
+    var keep = a.concat(inbox, "")
+    defer a.free(keep)
+    show(io, a, &inbox)
+    show(io, a, &inbox)
+    show(io, a, &inbox)
+    show(io, a, &inbox)
+    io.print("left ", @len(inbox))
+
+    // The first request again, looked into.
+    const r = (http.parse(a, &keep, 64) catch null) orelse return
+    defer r.deinit(a)
+    io.print("cookie [", r.cookie, "]")
+    const b = http.cookie(a, r, "b") orelse .empty
+    defer a.free(b)
+    io.print("b=", b)
+    const len = http.header(r, "CONTENT-LENGTH") orelse ""
+    io.print("length ", len, " ", http.has_header(r, "origin"))
+    const both = http.header_list(a, r, "cookie")
+    defer a.free(both)
+    io.print("list [", both, "]")
+    const id = http.form_value(a, r.query, "id") orelse .empty
+    defer a.free(id)
+    const x = http.form_value(a, r.query, "x") orelse a.concat("none", "")
+    defer a.free(x)
+    io.print("id=", id, " x=[", x, "]")
+
+    // Chunked bodies, and what is refused.
+    parse_text(io, a, "PUT /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;ext=1\r\nde\r\n0\r\nTrailer: t\r\n\r\n")
+    parse_text(io, a, "PUT /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab")
+    parse_text(io, a, "PUT /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\nabc")
+    parse_text(io, a, "PUT /c HTTP/1.1\r\nContent-Length: 65\r\n\r\n")
+    parse_text(io, a, "PUT /c HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab")
+    parse_text(io, a, "GET /c HTTP/1.1\r\nHost : x\r\n\r\n")
+    parse_text(io, a, "GET /c HTTP/2.0\r\n\r\n")
+    parse_text(io, a, "GET /c\r\n\r\n")
+    parse_text(io, a, "GET /chat HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n\r\n")
+
+    // Accept-Encoding, with weights.
+    parse_text(io, a, "GET / HTTP/1.1\r\n\r\n")
+    var enc = a.concat("GET / HTTP/1.1\r\nAccept-Encoding: br;q=1.0, gzip;q=0\r\n\r\nGET / HTTP/1.1\r\nAccept-Encoding: deflate, GZIP ; q=0.5\r\n\r\n", "")
+    defer a.free(enc)
+    const e1 = (http.parse(a, &enc, 64) catch null) orelse return
+    defer e1.deinit(a)
+    const e2 = (http.parse(a, &enc, 64) catch null) orelse return
+    defer e2.deinit(a)
+    io.print("gzip ", http.accepts(e1, "gzip"), " ", http.accepts(e2, "gzip"), " ", http.accepts(e1, "br"))
+
+    // Responses, and If-None-Match.
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    http.append_response(a, &out, "200 OK", "Set-Cookie: s=1\r\n", "Content-Type: text/plain\r\n", "hi", true)
+    http.append_response(a, &out, "304 Not Modified", "", "ETag: \"x\"\r\n", "ignored", false)
+    const shown = crlf(a, out)
+    defer a.free(shown)
+    io.print(shown)
+    io.print(http.none_match("\"a\", W/\"b\"", "\"b\""), " ", http.none_match("W/\"a\"", "W/\"a\""), " ", http.none_match("\"a\"", "\"ab\""), " ", http.none_match("*", "\"z\""))
+
+    // multipart/form-data.
+    const parts = "--XyZ\r\nContent-Disposition: form-data; name=\"tag\"\r\n\r\none\r\n--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"../dir/a.txt\"\r\nContent-Type: text/plain\r\n\r\nfile body\r\n--XyZ\r\nContent-Disposition: form-data; name=\"tag\"\r\n\r\ntwo\r\n--XyZ--\r\n"
+    var form = a.concat("POST /up HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=\"XyZ\"\r\nContent-Length: ", "")
+    a.append_int(&form, @len(parts))
+    a.append_str(&form, "\r\n\r\n")
+    a.append_str(&form, parts)
+    defer a.free(form)
+    const m = (http.parse(a, &form, 1000) catch null) orelse return
+    defer m.deinit(a)
+    const tag = http.field(a, m, "tag") orelse .empty
+    defer a.free(tag)
+    const tags = http.fields(a, m, "tag")
+    defer a.free(tags)
+    io.print("field ", tag, " fields ", @len(tags), " ", tags[1])
+    if (http.file(a, m, "f")) |up| {
+        io.print("file ", up.filename, " ", up.content_type, " [", up.data, "]")
+        up.deinit(a)
+    }
+    io.print("file in tag ", has_file(a, m, "tag"))
+
+    // codec and sha1.
+    var enc64: Buf(u8) = .empty
+    defer a.free(enc64)
+    codec.base64_encode(a, &enc64, "hello?>")
+    a.push(&enc64, ' ')
+    codec.base64url_encode(a, &enc64, "hello?>")
+    a.push(&enc64, ' ')
+    codec.escape(a, &enc64, "a b&c/é")
+    io.print(enc64)
+    const digest = sha1.sum(a, "abc")
+    defer a.free(digest)
+    var hex: Buf(u8) = .empty
+    defer a.free(hex)
+    codec.hex_encode(a, &hex, digest)
+    io.print(hex)
+
+    // WebSocket: the handshake of RFC 6455 section 1.3, and a masked
+    // client message in two fragments with a ping between them.
+    var hs = a.concat("GET /chat HTTP/1.1\r\nHost: server.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", "")
+    defer a.free(hs)
+    const h = (http.parse(a, &hs, 0) catch null) orelse return
+    defer h.deinit(a)
+    io.print("handshake ", ws.is_handshake(a, h), " ", ws.is_handshake(a, r))
+    const reply = ws.handshake(a, "dGhlIHNhbXBsZSBub25jZQ==", "chat")
+    defer a.free(reply)
+    const reply_shown = crlf(a, reply)
+    defer a.free(reply_shown)
+    io.print(reply_shown)
+    var wire: Buf(u8) = .empty
+    defer a.free(wire)
+    for ([_]u8{ 0x01, 0x83, 1, 2, 3, 4, 'H' ^ 1, 'e' ^ 2, 'l' ^ 3, 0x89, 0x80, 0, 0, 0, 0, 0x80, 0x82, 0, 0, 0, 0, 'l', 'o' }) |byte| {
+        a.push(&wire, byte)
+    }
+    var part = ws.partial()
+    defer part.deinit(a)
+    var data: Buf(u8) = .empty
+    defer a.free(data)
+    var piece: Buf(u8) = .empty
+    defer a.free(piece)
+    for (wire) |byte| {
+        a.push(&piece, byte)
+        const kind = ws.take(a, &piece, &part, &data)
+        if (kind != ws.NEED_MORE) {
+            io.print("kind ", kind, " [", data, "]")
+        }
+    }
+    a.append_str(&piece, "\x81\x05hello")
+    io.print("unmasked ", ws.take(a, &piece, &part, &data))
+    const f = ws.text_frame(a, "hi")
+    defer a.free(f)
+    const cf = ws.close_frame(a, 1000)
+    defer a.free(cf)
+    io.print(@len(f), " ", f[0], " ", f[1], " ", @len(cf), " ", cf[2], " ", cf[3])
+}
