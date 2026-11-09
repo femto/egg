@@ -12,7 +12,7 @@ Egg compiles to portable C99. It is designed to be written by AI and read by peo
 
 - **Capabilities, not ambient power.** The core language can't do IO or allocate. A file declares `uses io, alloc`, and `main` passes the values down, so a signature shows what a function can touch.
 - **Ownership without a GC.** A buffer has one owner. Use after free, double free and leaks are compile errors, with no lifetime annotations.
-- **No undefined behaviour.** Integer overflow, integer division by zero and out-of-bounds indexing panic.
+- **No undefined behaviour** outside `allow unsafe` code. Integer overflow, integer division by zero and out-of-bounds indexing panic.
 - **Fast enough to be a systems language.** Near C on most programs, with every check on ([numbers](#performance)).
 - **Threads without shared data.** Owned values move between threads over channels.
 
@@ -427,8 +427,8 @@ Design choices worth knowing:
   signature alone (E151, E152).
 - **Left-to-right evaluation** on every C compiler: each call is evaluated
   into a temporary in source order.
-- **No undefined behaviour**: integer overflow, integer division by zero and
-  out-of-bounds indexing panic.
+- **No undefined behaviour** outside `allow unsafe` code: integer overflow,
+  integer division by zero and out-of-bounds indexing panic.
 - **Zig-style strictness**, all compile errors: unused locals, a `var`
   never changed, an ignored result or error, shadowing, missing returns,
   non-exhaustive switches, no implicit conversions.
