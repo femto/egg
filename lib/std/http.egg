@@ -1024,7 +1024,9 @@ fn url_host(url: []u8, u: Url) []u8 {
     return url[u.host_lo..u.host_hi]
 }
 
-// The request line's target: the path and query, or "/".
+// The request line's target: the path and query, or "/". A query with no
+// path (http://h?q) comes back as "?q": the request line needs "/" before
+// it, as fetch puts.
 fn url_target(url: []u8, u: Url) []u8 {
     if (u.target_lo == u.target_hi) {
         return "/"
@@ -1061,10 +1063,11 @@ fn send_request(c: TcpConn, a: Allocator, method: []u8, target: []u8, host: []u8
 
 // The status code of a status line ("HTTP/1.1 200 OK"), or -1.
 fn status_of(line: []u8) i64 {
-    if (@len(line) < 12 or !text.starts_with(line, "HTTP/1.") or line[8] != ' ' or (@len(line) > 12 and line[12] != ' ')) {
+    if (@len(line) < 12 or !text.starts_with(line, "HTTP/1.") or line[7] < '0' or line[7] > '9' or line[8] != ' ' or (@len(line) > 12 and line[12] != ' ')) {
         return -1
     }
-    return digits(line[9..12]) orelse -1
+    const n = digits(line[9..12]) orelse -1
+    return if (n >= 100 and n <= 599) n else -1
 }
 
 // The next response at the start of inbox, taken out of it; null while
@@ -1087,7 +1090,7 @@ fn parse_response(a: Allocator, inout inbox: Buf(u8), max_body: i64, head_reques
         }
         const first_nl = line_end(inbox, 0)
         const status = status_of(inbox[0..line_to(inbox, 0, first_nl)])
-        if (status < 100 or status > 999) {
+        if (status < 0) {
             return error.BadResponse
         }
         if (status < 200 and status != 101) {
@@ -1177,7 +1180,11 @@ fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, bo
     try c.set_timeout(opts.timeout_ms)
     const all = a.concat(headers, "Connection: close\r\n")
     defer a.free(all)
-    try send_request(c, a, method, url_target(url, u), url[u.authority_lo..u.authority_hi], all, body)
+    const target = url_target(url, u)
+    const slash = if (text.starts_with(target, "?")) "/" else ""
+    const line_target = a.concat(slash, target)
+    defer a.free(line_target)
+    try send_request(c, a, method, line_target, url[u.authority_lo..u.authority_hi], all, body)
     var inbox: Buf(u8) = .empty
     defer a.free(inbox)
     return read_response(c, a, &inbox, opts.max_body, method == "HEAD")
@@ -1196,8 +1203,13 @@ fn resolve(a: Allocator, base: []u8, location: []u8) ?Buf(u8) {
     if (text.starts_with(location, "/")) {
         return a.concat(base[0..u.authority_hi], location)
     }
-    // A relative path: next to the last part of base's path.
     const path_end = text.find_from(base[0..u.target_hi], "?", u.target_lo) orelse u.target_hi
+    // A query alone: the same path, with it.
+    if (text.starts_with(location, "?")) {
+        const slash = if (path_end == u.target_lo) "/" else ""
+        return a.concat(base[0..path_end], slash, location)
+    }
+    // A relative path: next to the last part of base's path.
     var dir = u.target_lo
     var i = u.target_lo
     while (i < path_end) {
@@ -1223,23 +1235,37 @@ fn is_redirect(status: i64) bool {
     return status == 301 or status == 302 or status == 303 or status == 307 or status == 308
 }
 
+// Do x and y (http:// URLs) have one host and port?
+fn same_origin(x: []u8, y: []u8) bool {
+    const ux = parse_url(x) catch { return false }
+    const uy = parse_url(y) catch { return false }
+    return ux.port == uy.port and same(url_host(x, ux), url_host(y, uy))
+}
+
 // method url (http:// only) with headers (each ending in \r\n; not Host,
 // Content-Length or Connection, which fetch writes) and body, on a
 // connection of its own. With opts.redirects above 0 it follows that
 // many redirects: a 303, or a 301 or 302 after a POST, as a GET without
-// the body; a 307 or 308 as it was. Fails as parse_url, net.tcp_connect
-// and read_response do.
+// the body; a 307 or 308 as it was. A redirect to another host or port
+// goes without the caller's headers, which may hold credentials
+// (Authorization, Cookie). A 3xx without a Location is returned. Fails as
+// parse_url, net.tcp_connect and read_response do.
 fn fetch(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options) !Response {
     var current = a.concat(url, "")
     defer a.free(current)
     var get = false
     var hops = 0
     while (true) {
-        const resp = try fetch_once(net, a, choose(get, "GET", method), current, headers, choose(get, "", body), opts)
+        const own = choose(same_origin(url, current), headers, "")
+        const resp = try fetch_once(net, a, choose(get, "GET", method), current, own, choose(get, "", body), opts)
         if (hops >= opts.redirects or !is_redirect(resp.status)) {
             return resp
         }
-        const next = resolve(a, current, resp.header("Location") orelse "") orelse { return resp }
+        const location = resp.header("Location") orelse ""
+        if (@len(location) == 0) {
+            return resp
+        }
+        const next = resolve(a, current, location) orelse { return resp }
         get = get or resp.status == 303 or ((resp.status == 301 or resp.status == 302) and method == "POST")
         resp.deinit(a)
         a.free(@replace(&current, next))

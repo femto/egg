@@ -1,8 +1,9 @@
 // The std/http client: URLs, responses parsed as they come in pieces, and
 // fetch against a server thread that answers with canned bytes: lengths,
 // chunks, a body until close, 100 Continue, HEAD, redirects (followed or
-// not, relative and absolute, 303 turning a POST into a GET), and two
-// requests on one kept connection.
+// not, relative, absolute and query-only, 303 turning a POST into a GET,
+// the caller's headers kept on one server and dropped for another), and
+// two requests on one kept connection.
 // expect: http://example.com -> host=example.com port=80 target=/ authority=example.com
 // expect: HTTP://Example.com:8080/a/b?q=1#frag -> host=Example.com port=8080 target=/a/b?q=1 authority=Example.com:8080
 // expect: http://[::1]:9000/x -> host=::1 port=9000 target=/x authority=[::1]:9000
@@ -28,6 +29,8 @@
 // expect: error BadResponse
 // expect: error BadResponse
 // expect: 200  keep=true body=[] type=-
+// expect: error BadResponse
+// expect: error BadResponse
 // expect: GET 200 [hello] location=-
 // expect: GET 200 [Wikipedia] location=-
 // expect: GET 201 [ok] location=-
@@ -39,6 +42,11 @@
 // expect: POST 200 [GET []] location=-
 // expect: PUT 200 [PUT [data]] location=-
 // expect: GET 302 [] location=/loop
+// expect: GET 302 [] location=-
+// expect: GET 200 [page=2] location=-
+// expect: GET 200 [x=1] location=-
+// expect: GET 200 [Bearer secret] location=-
+// expect: GET 200 [none] location=-
 // expect: kept true [hello] then 200 [POST [again]]
 uses io, alloc, net, thread
 
@@ -70,6 +78,15 @@ fn parse_text(io: Io, a: Allocator, s: []u8, head_request: bool, ended: bool) vo
     show_parse(io, a, &inbox, head_request, ended)
 }
 
+// A 200 with body.
+fn reply(a: Allocator, body: []u8) Buf(u8) {
+    var out = a.concat("HTTP/1.1 200 OK\r\nContent-Length: ", "")
+    a.append_int(&out, @len(body))
+    a.append_str(&out, "\r\n\r\n")
+    a.append_str(&out, body)
+    return out
+}
+
 // What the server thread answers for a path: a whole response, as bytes.
 fn canned(a: Allocator, req: http.Request) Buf(u8) {
     const p = req.path[0..]
@@ -99,6 +116,30 @@ fn canned(a: Allocator, req: http.Request) Buf(u8) {
     }
     if (p == "/loop") {
         return a.concat("HTTP/1.1 302 Found\r\nLocation: /loop\r\nContent-Length: 0\r\n\r\n", "")
+    }
+    if (p == "/no-location") {
+        return a.concat("HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n", "")
+    }
+    if (p == "/dir/q") {
+        if (@len(req.query) == 0) {
+            return a.concat("HTTP/1.1 302 Found\r\nLocation: ?page=2\r\nContent-Length: 0\r\n\r\n", "")
+        }
+        return reply(a, req.query)
+    }
+    // To /auth here, or on the server at port `to`.
+    if (p == "/same") {
+        return a.concat("HTTP/1.1 307 Temporary Redirect\r\nLocation: /auth\r\nContent-Length: 0\r\n\r\n", "")
+    }
+    if (p == "/cross") {
+        const to = http.form_value(a, req.query, "to") orelse a.concat("0", "")
+        defer a.free(to)
+        return a.concat("HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:", to, "/auth\r\nContent-Length: 0\r\n\r\n")
+    }
+    if (p == "/auth") {
+        return reply(a, req.header("Authorization") orelse "none")
+    }
+    if (p == "/" and @len(req.query) > 0) {
+        return reply(a, req.query)
     }
     if (p == "/echo") {
         const body = a.concat(req.method, " [", req.body, "]")
@@ -146,9 +187,13 @@ fn server(sink l: TcpListener, a: Allocator) void {
 }
 
 fn get(io: Io, net: Net, a: Allocator, method: []u8, url: []u8, body: []u8, redirects: i64) void {
+    send(io, net, a, method, url, "", body, redirects)
+}
+
+fn send(io: Io, net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, redirects: i64) void {
     var opts = http.options()
     opts.redirects = redirects
-    const r = http.fetch(net, a, method, url, "", body, opts) catch |e| {
+    const r = http.fetch(net, a, method, url, headers, body, opts) catch |e| {
         io.print(method, " -> ", @errorName(e))
         return
     }
@@ -189,6 +234,8 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
     parse_text(io, a, "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n", false, false)
     parse_text(io, a, "HTTP/2 200\r\n\r\n", false, false)
     parse_text(io, a, "HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n", false, false)
+    parse_text(io, a, "HTTP/1.x 200 OK\r\n\r\n", false, false)
+    parse_text(io, a, "HTTP/1.1 700 Odd\r\n\r\n", false, false)
 
     // fetch, against the server thread.
     const l = try net.tcp_listen("127.0.0.1", 0)
@@ -221,6 +268,24 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
     const loop = a.concat(base, "/loop")
     defer a.free(loop)
     get(io, net, a, "GET", loop, "", 2)
+    for ([_]str{ "/no-location", "/dir/q", "?x=1" }) |p| {
+        const url = a.concat(base, p)
+        defer a.free(url)
+        get(io, net, a, "GET", url, "", 3)
+    }
+
+    // The caller's headers go along a redirect on this server, not to
+    // another one.
+    const other = try net.tcp_listen("127.0.0.1", 0)
+    const other_port = other.port()
+    threads.spawn(server, other, a).detach()
+    const same = a.concat(base, "/same")
+    defer a.free(same)
+    send(io, net, a, "GET", same, "Authorization: Bearer secret\r\n", "", 3)
+    var cross = a.concat(base, "/cross?to=")
+    defer a.free(cross)
+    a.append_int(&cross, other_port)
+    send(io, net, a, "GET", cross, "Authorization: Bearer secret\r\n", "", 3)
 
     // Two requests on one connection, the second sent before the first is read.
     const c = try net.tcp_connect("127.0.0.1", port)
