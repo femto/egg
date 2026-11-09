@@ -40,7 +40,7 @@ a file has a syntax error, navigation uses its last version that parsed.
 
 ## Debugging
 
-`eggc build -g` emits `#line` directives and compiles with `-g -O0`, so a
+`eggc build -g` emits `#line` directives and compiles with `-g` (and `-O0`), so a
 native debugger stops on `.egg` lines. This extension only lets you set
 breakpoints; the debugging itself goes through a C debugger extension:
 CodeLLDB (`vadimcn.vscode-lldb`) or C/C++ (`ms-vscode.cpptools`, for gdb).

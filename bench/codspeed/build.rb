@@ -39,7 +39,7 @@ end
 
 Dir[File.join(HERE, "*.egg")].sort.each do |src|
   exe = out(File.basename(src, ".egg"))
-  build(exe, "ruby", EGGC, "build", src, "-o", exe)
+  build(exe, "ruby", EGGC, "build", "--release", src, "-o", exe)
 end
 
 # The HTTP benchmarks.
@@ -49,7 +49,7 @@ srand(1)
 File.binwrite(out("www/10k.bin"), Random.bytes(10_240))
 
 build(out("http_load"), CC, "-O2", "-o", out("http_load"), File.join(HERE, "http_load.c"))
-build(out("http-egg"), "ruby", EGGC, "build", File.join(ROOT, "examples", "http_server", "server.egg"), "-o", out("http-egg"))
+build(out("http-egg"), "ruby", EGGC, "build", "--release", File.join(ROOT, "examples", "http_server", "server.egg"), "-o", out("http-egg"))
 build(out("http-c"), CC, "-O2", "-o", out("http-c"), File.join(HTTP, "server.c"), "-lpthread")
 build(out("http-rust"), "rustc", "-O", "-o", out("http-rust"), File.join(HTTP, "server.rs"))
 # Without cgo: the Go runtime's cgo start-up does not run under valgrind,

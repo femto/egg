@@ -183,7 +183,8 @@ More in [examples/](examples), including an [HTTP server](examples/http_server/s
 ```bash
 bin/eggc run examples/fib.egg        # 6765
 bin/eggc emit-c examples/fib.egg     # show the generated C
-bin/eggc build examples/fib.egg -o fib
+bin/eggc build examples/fib.egg -o fib            # quick to build: cc -O0
+bin/eggc build --release examples/fib.egg -o fib  # optimized: cc -O2
 bin/eggc check file.egg --json       # diagnostics as JSON lines
 bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
 bin/eggc run app.egg -- one two      # what follows -- goes to the program
@@ -513,7 +514,8 @@ Rebuild the `.vsix` with `cd editors/vscode && npx @vscode/vsce package --no-dep
 ## Debugging
 
 `eggc build -g` puts `#line` directives in the generated C and compiles with
-`-g -O0`, so gdb and lldb break, step and show the stack in `.egg` source:
+`-g` (and `-O0`, unless `--release`), so gdb and lldb break, step and show
+the stack in `.egg` source:
 
 ```bash
 bin/eggc build -g examples/loops.egg -o build/loops
