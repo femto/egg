@@ -138,7 +138,7 @@ fn main(io: Io) void {
 | enum `Name` | one of a fixed set of names | section 10 |
 | `union(enum)` `Name` | one member, maybe with a payload | section 10 |
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
-| `[]T` | a view of consecutive T, read-only unless `inout` | parameters and local slices; section 11 |
+| `[]T` | a view of consecutive T, read-only unless `inout` | parameters, local slices and function results; section 11 |
 | `!T` | a T or an error | section 13 |
 | `anyerror` | an error: `error.Name` | compared with `==`, switched on, named with `@errorName`; section 13 |
 | `?T` | a T or `null` | section 13 |
