@@ -1,9 +1,53 @@
-// error: E116 @4
-uses io
+// error: E151 @14
+// error: E151 @18
+// error: E151 @23
+// error: E151 @27
+// error: E151 @34
+// error: E151 @43
+// error: E151 @50
+uses alloc
 
-fn first_two(xs: []i64) []i64 {
-    return xs
+// A local buffer ends with the function.
+fn of_local(a: Allocator) []u8 {
+    const b = a.concat("x", "")
+    defer a.free(b)
+    return b[0..]
 }
-fn main(io: Io) void {
-    io.print(1)
+// An array parameter is the function's own copy.
+fn of_array(xs: [4]u8) []u8 {
+    return xs[0..]
+}
+// A sink parameter is the function's to free.
+fn of_sink(sink b: Buf(u8), a: Allocator) []u8 {
+    defer a.free(b)
+    return b[0..]
+}
+// The signature lends only a.
+fn other(a: []u8, b: []u8) []u8 from a {
+    return b
+}
+// A method lends self by default, when self can.
+const Row = struct {
+    text: Buf(u8)
+
+    fn pick(self: Row, s: []u8) []u8 {
+        return s
+    }
+}
+// A local slice of a local.
+fn via_local(a: Allocator) []u8 {
+    var b = a.concat("x", "")
+    defer a.free(b)
+    a.push(&b, 'y')
+    const s = b[0..]
+    return s
+}
+// A struct parameter's inline array is a copy too.
+const Pair = struct {
+    bytes: [2]u8
+}
+fn of_field(p: Pair) []u8 {
+    return p.bytes[0..]
+}
+fn main() void {
 }

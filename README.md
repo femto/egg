@@ -397,9 +397,13 @@ From v1:
 Design choices worth knowing:
 
 - **Slices are second-class**: they exist only as parameters, arguments,
-  `for` subjects and local `const` or `inout` names, so a view can never outlive its array,
-  with no lifetime annotations (E116). A local slice borrows its owner until
-  its last use: many readers or one writer (E149).
+  `for` subjects, local `const` or `inout` names and function results, so a
+  view can never outlive its array (E116). A local slice borrows its owner
+  until its last use: many readers or one writer (E149). A function may
+  return a slice of its plain parameters (`fn trim(s: []u8) []u8`); which
+  ones its signature says, by `from` (`?[]u8 from req`) or a default rule,
+  never its body, so callers and separate compilation depend on the
+  signature alone (E151, E152).
 - **Left-to-right evaluation** on every C compiler: each call is evaluated
   into a temporary in source order.
 - **No undefined behaviour**: integer overflow, integer division by zero and

@@ -173,6 +173,7 @@ module Egg
         close = f.body.nil? ? extern_end(i) : closing_brace(i)
         params = f.params.map { |p| "#{p.mode.nil? ? '' : "#{p.mode} "}#{p.name}: #{Egg.type_src(p.type)}" }.join(", ")
         head = "fn #{f.name}(#{params}) #{Egg.type_src(f.ret)}"
+        head += " from #{f.from.map(&:first).join(', ')}" unless f.from.nil?
         unless f.ext.nil?
           head = "extern #{head}"
           head += " uses #{f.ext.map(&:name).join(', ')}" unless f.ext.empty?

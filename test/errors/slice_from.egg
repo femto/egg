@@ -1,0 +1,20 @@
+// error: E152 @7
+// error: E152 @10
+// error: E152 @13
+// error: E152 @16
+uses alloc
+
+fn not_a_param(s: []u8) []u8 from t {
+    return s
+}
+fn inout_one(inout b: Buf(u8)) []u8 from b {
+    return "x"
+}
+fn no_slice(s: []u8) i64 from s {
+    return @len(s)
+}
+fn holds_none(n: i64, s: []u8) []u8 from n {
+    return s
+}
+fn main() void {
+}

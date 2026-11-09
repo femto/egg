@@ -322,12 +322,14 @@ module Egg
     # ---- local slices ----------------------------------------------------
 
     # A local slice borrows what it views until its last use. @slices: its
-    # name -> [the path it views, how deep in @rest it was declared, whether
-    # it is writable, the slice it was taken from].
+    # name -> [the paths it views, how deep in @rest it was declared, whether
+    # it is writable, the slice it was taken from]. A slice taken from a
+    # place views one path; the result of a call that lends a slice views
+    # every argument the callee's signature says it borrows.
 
     def place_path(e)
       case e
-      in Var[name:] then @slices.key?(name) ? @slices[name][0] : name
+      in Var[name:] then @slices.key?(name) ? @slices[name][0].first : name
       in Field[obj:, name:]
         path = place_path(obj)
         path.nil? ? nil : "#{path}.#{name}"
@@ -337,11 +339,36 @@ module Egg
       end
     end
 
-    def declare_slice(name, value, writable)
-      path = place_path(value)
-      return if path.nil?
-      @slices[name] = [path, @rest.length - 1, writable, place_root(value)]
+    # The paths a slice-valued expression views (none for static text).
+    def paths_of(e)
+      case e
+      in Var[name:] then @slices.key?(name) ? @slices[name][0] : [name]
+      in Field[obj:, name:] then paths_of(obj).map { |p| "#{p}.#{name}" }
+      in Index[obj:] then paths_of(obj)
+      in SliceExpr[obj:] then paths_of(obj)
+      in Call | MethodCall then (e.info&.dig(:borrow_args) || []).flat_map { |a| paths_of(a) }.uniq
+      in Orelse | Catch
+        fb = e.fallback
+        fb = nil if fb.is_a?(Return) || fb.is_a?(Break) || fb.is_a?(Continue) || fb.is_a?(Block)
+        (paths_of(e.expr) + (fb.nil? ? [] : paths_of(fb))).uniq
+      in Try[expr:] then paths_of(expr)
+      else []
+      end
+    end
+
+    # depth: where in @rest its block's statements are (a capture is
+    # declared before its block runs).
+    def declare_slice(name, value, writable, depth = @rest.length - 1)
+      paths = paths_of(value)
+      return if paths.empty?
+      @slices[name] = [paths, depth, writable, place_root(value)]
       @frames.last.slices << name
+    end
+
+    def slice_type?(t)
+      t = t[1..] if t.start_with?("!")
+      t = t[1..] if t.start_with?("?")
+      t.start_with?("[]")
     end
 
     def place_root(e)
@@ -412,7 +439,7 @@ module Egg
       through = views_of(by)
       @slices.each do |name, (viewed, depth)|
         next if through.include?(name)
-        next unless overlap?(viewed, path) && live?(name, depth)
+        next unless viewed.any? { |v| overlap?(v, path) } && live?(name, depth)
         slice_err("'#{path}' cannot be #{what} here: the slice '#{name}' of it is used later", line, col)
       end
     end
@@ -431,7 +458,7 @@ module Egg
       through = views_of(place_root(e))
       @slices.each do |name, (viewed, depth, writable)|
         next if !writable || through.include?(name)
-        next unless overlap?(viewed, path) && live?(name, depth)
+        next unless viewed.any? { |v| overlap?(v, path) } && live?(name, depth)
         slice_err("'#{path}' cannot be read here: the writable slice '#{name}' of it is used later", e.line, e.col)
       end
     end
@@ -457,7 +484,7 @@ module Egg
         @read_whole = value.obj if inout # judged just above
         walk(value, value.is_a?(SliceExpr) || ty.start_with?("[]"))
         declare(name, :local, line, col, ty) if owned?(ty)
-        declare_slice(name, value, inout == true) if ty.start_with?("[]")
+        declare_slice(name, value, inout == true) if slice_type?(ty)
       in Assign[name:, value:, line:, col:, target:]
         check_slices(target.nil? ? name : place_path(target), line, col, "assigned", target.nil? ? nil : place_root(target))
         if target.nil?
@@ -485,6 +512,8 @@ module Egg
         @st = dup(start)
         inner = capture.nil? ? nil : @types[cond.ty].inner
         pre = !inner.nil? && owned?(inner) ? -> { declare(capture, :local, line, col, inner) } : nil
+        # if (find(s)) |v|: v views what the optional slice does.
+        pre = -> { declare_slice(capture, cond, false, @rest.length) } if !inner.nil? && slice_type?(inner)
         walk_block(then_body, pre)
         after_then = @st
         @st = dup(start)
@@ -508,6 +537,9 @@ module Egg
         root = iter_root(iter)
         fresh = !root.nil? && !@iterated.key?(root)
         @iterated[root] = line if fresh
+        # for (trim(s)) |c|: what the result views stays put while it runs.
+        lent = %w[Call MethodCall Orelse Catch Try].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
+        lent.each { |p| @iterated[p] = line }
         elem = iter.ty == "str" ? nil : @types[iter.ty]&.elem
         # An element that owns buffers is only borrowed by the loop variable.
         pre = nil
@@ -517,6 +549,7 @@ module Egg
         end
         walk_loop(body, line, col, pre)
         @iterated.delete(root) if fresh
+        lent.each { |p| @iterated.delete(p) }
       in Switch[subject:, arms:, line:, col:]
         walk(subject)
         start = @st

@@ -26,7 +26,8 @@ module Egg
   # owner: the struct a method belongs to (nil for free functions)
   # mod: prefix of the module it is declared in ("" for the root file)
   # ext: for `extern fn` (no body), the UsesItem list after `uses`; else nil
-  Func     = Struct.new(:name, :params, :ret, :body, :line, :col, :owner, :mod, :ext)
+  # from: [Param-like [name, line, col]] after `from` (what a slice result borrows), or nil
+  Func     = Struct.new(:name, :params, :ret, :body, :line, :col, :owner, :mod, :ext, :from)
   # mode: nil (by value), "inout", or "comptime"
   Param    = Struct.new(:name, :type, :line, :col, :mode)
   Block    = Struct.new(:stmts)
