@@ -10,7 +10,7 @@ There are four groups:
 | --- | --- |
 | `compile ...`, `diagnose ...` | the compiler in one process (`compile.rb`): lexing, parsing, checking and C generation of the examples, and the diagnostics for `test/errors` |
 | `eggc ...` | the eggc command line, Ruby start-up included |
-| `run ...` | the code eggc generates: the programs here, built with `eggc build` |
+| `run ...` | the code eggc generates: the programs here, built with `eggc build --release` |
 | `http ...` | the HTTP servers of `bench/http/` against `examples/http_server`: egg, c, rust, go-pool, go-net/http and python, each serving `/index.html` (12 B) and `/10k.bin` (10 KiB) |
 
 The programs here are the ones in `bench/egg/` with smaller inputs (fib(30),

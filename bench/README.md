@@ -23,7 +23,7 @@ the same output, or the run fails.
 | variant | checks |
 | --- | --- |
 | c | none (`cc -O2`): the baseline |
-| egg | overflow and bounds (`eggc build`, `cc -O2`) |
+| egg | overflow and bounds (`eggc build --release`, `cc -O2`) |
 | rust | bounds; overflow wraps (`rustc -O`) |
 | rust+ovf | bounds and overflow (`-C overflow-checks=on`) |
 | go | bounds; overflow wraps |

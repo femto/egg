@@ -6,7 +6,7 @@
 # same output (stdout and stderr together: Zig prints with std.debug.print).
 #
 #   c          cc -O2, no checks: the baseline
-#   egg        eggc build (C with overflow and bounds checks, cc -O2)
+#   egg        eggc build --release (C with overflow and bounds checks, cc -O2)
 #   rust       rustc -O: bounds checks, overflow wraps
 #   rust+ovf   rustc -O -C overflow-checks=on: both checked, like Egg
 #   go         go build: bounds checks, overflow wraps
@@ -42,7 +42,7 @@ names = args.empty? ? Dir[File.join(BENCH, "egg", "*.egg")].map { |f| File.basen
 # the command that runs the source instead]
 VARIANTS = [
   ["c", CC, "c", "c", ->(src, exe) { [CC, "-std=c99", "-O2", "-o", exe, src] }],
-  ["egg", "ruby", "egg", "egg", ->(src, exe) { ["ruby", File.join(ROOT, "bin", "eggc"), "build", src, "-o", exe] }],
+  ["egg", "ruby", "egg", "egg", ->(src, exe) { ["ruby", File.join(ROOT, "bin", "eggc"), "build", "--release", src, "-o", exe] }],
   ["rust", "rustc", "rust", "rs", ->(src, exe) { ["rustc", "-O", "-o", exe, src] }],
   ["rust+ovf", "rustc", "rust", "rs", ->(src, exe) { ["rustc", "-O", "-C", "overflow-checks=on", "-o", exe, src] }],
   ["go", "go", "go", "go", ->(src, exe) { ["go", "build", "-o", exe, src] }],

@@ -50,7 +50,7 @@ def has?(tool) = system("command -v #{tool} >/dev/null")
 exe = ->(name) { [File.join(OUT, name)] }
 SERVERS = {
   "egg" => lambda {
-    build("ruby", File.join(ROOT, "bin", "eggc"), "build", File.join(ROOT, "examples", "http_server", "server.egg"), "-o", File.join(OUT, "egg"))
+    build("ruby", File.join(ROOT, "bin", "eggc"), "build", "--release", File.join(ROOT, "examples", "http_server", "server.egg"), "-o", File.join(OUT, "egg"))
     exe.("egg")
   },
   "c" => lambda {
