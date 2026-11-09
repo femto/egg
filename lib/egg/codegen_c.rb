@@ -2536,9 +2536,31 @@ module Egg
       @used.key?("egg_random_fill")
     end
 
-    def generate
+    # Functions are emitted from roots (main) to what their code refers to:
+    # calls, function values, and the deinit a drop runs. What nothing
+    # reaches is checked but not handed to the C compiler, so a program
+    # pays for the parts of a module it uses. A library compiled on its own
+    # would pass its exported functions as the roots instead.
+    attr_reader :skipped
+
+    def generate(roots = [@checker.main_sig])
+      @by_c_name = @checker.concrete.to_h { |sig| [sig.c_name, sig] }
+      @wanted = []
+      @bodies = {}
+      roots.each { |sig| want(sig.c_name) }
       # Function bodies first, so we know which helpers and tables they use.
-      @checker.concrete.each { |sig| gen_func(sig) }
+      until @wanted.empty?
+        sig = @wanted.shift
+        @out = +""
+        gen_func(sig)
+        @bodies[sig] = @out
+      end
+      emitted = @checker.concrete.select { |sig| @bodies.key?(sig) }
+      # By where they are declared: an instance of a generic function is a
+      # copy of its AST, and one emitted instance is enough.
+      kept = emitted.to_h { |sig| [[sig.func.mod, sig.func.line], true] }
+      @skipped = @checker.concrete.map { |sig| [sig.func.mod, sig.func.line] }.uniq.reject { |k| kept[k] }
+      @out = emitted.map { |sig| @bodies[sig] }.join
       gen_entry
       body = @out
 
@@ -2574,7 +2596,7 @@ module Egg
       out << "\n"
       # One prototype per C function, however many files declare it.
       @checker.externs.uniq(&:c_name).each { |sig| out << extern_prototype(sig) << ";\n" }
-      @checker.concrete.each { |sig| out << signature(sig) << ";\n" }
+      emitted.each { |sig| out << signature(sig) << ";\n" }
       out << "\n"
       @spawns.each { |text| out << text << "\n" }
       # After the prototypes: an owned struct's drop calls its deinit.
@@ -2594,7 +2616,12 @@ module Egg
       info = @types[t]
       case info.kind
       when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
-      when :struct then info.fields.each { |_, ft, _| drop(ft) if @checker.owned?(ft) } if info.deinit.nil?
+      when :struct
+        if info.deinit.nil?
+          info.fields.each { |_, ft, _| drop(ft) if @checker.owned?(ft) }
+        else
+          want(info.deinit.c_name)
+        end
       end
       @drops[t]
     end
@@ -3409,9 +3436,11 @@ module Egg
         @need_str = true
         "((egg_str){ #{c_string(value)}, #{value.bytesize} })"
       in Var[info: { fn_ref: String => c_name }]
+        want(c_name)
         c_name
       # m.f as a value: a function of another module.
       in Field[info: { fn_ref: String => c_name }]
+        want(c_name)
         c_name
       in Var[info: { const: c }]
         expr(c.lit)
@@ -3635,7 +3664,16 @@ module Egg
 
     # Arguments are evaluated left to right into the call; a non-void result
     # is hoisted into a temporary, so the call happens here and now.
+    # The function called c_name is needed: emit it (once).
+    def want(c_name)
+      sig = @by_c_name[c_name]
+      return if sig.nil? || @bodies.key?(sig) || @wanted.include?(sig)
+      @bodies[sig] = nil
+      @wanted << sig
+    end
+
     def call(c_name, args, params, receiver, ret)
+      want(c_name)
       codes = receiver.dup
       args.each_with_index do |a, i|
         pt = params[i][0]
