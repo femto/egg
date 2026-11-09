@@ -82,6 +82,15 @@ module Egg
       #define EGG_BUILTIN_OVERFLOW 1
       #endif
       #endif
+
+      /* An inout parameter is the only way to its value during the call
+         (no other argument may borrow it: E117), so it is restrict. MSVC
+         spells it __restrict in C. */
+      #if defined(_MSC_VER) && !defined(__clang__)
+      #define EGG_RESTRICT __restrict
+      #else
+      #define EGG_RESTRICT restrict
+      #endif
     C
 
     # One print is one line, whatever other threads print.
@@ -2953,7 +2962,9 @@ module Egg
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       params = runtime.each_with_index.map do |p, i|
         t, mode = sig.params[i]
-        by_ref?(t, mode) ? "#{c_type(t)} *v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
+        # restrict: GCC, for one, reloads a Buf's length after every byte
+        # written through its pointer, since a u8 may alias anything.
+        by_ref?(t, mode) ? "#{c_type(t)} *EGG_RESTRICT v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
       end
       params_text = params.empty? ? "void" : params.join(", ")
       # Not static: an unused function is not an error in Egg, and external

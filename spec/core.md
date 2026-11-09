@@ -2104,7 +2104,10 @@ Without `allow unsafe` these are E131 (and `&x` outside an inout argument
 stays E121). The compiler cannot check what pointers point to: a pointer
 can outlive the variable it points into, and `@ptrAdd` can leave the
 object. The one check is that `p.*` on `null` panics with
-`null pointer dereference`.
+`null pointer dereference`. Nor can it see a pointer into a value passed
+as `inout`: while the call runs, the inout parameter must be the only way
+to that value, so reading or writing it through a pointer taken earlier
+is undefined (the C has `restrict` on inout parameters).
 
 `allow unsafe` is local to its file: a file that imports an unsafe module
 does not need it, so an unsafe module can offer a safe API. Unlike a
