@@ -140,7 +140,26 @@ def bad_line_marks(c_source, src, path)
     code << i + 1 unless continued || declares || comptime || text.match?(/\A\}( else \{|\) orelse \{)?\z/)
     prev = text
   end
+  code -= unemitted_lines(c_source, src)
   (marked - code) + (code - marked)
+end
+
+# The lines of functions nothing reaches from main: they are checked, but
+# not emitted as C, so they have no #line marks. A function is `fn name(`
+# up to the brace that closes it at its indentation; it is emitted when
+# the C has fn_name( (fn_name_i64( for an instance of a generic one) or
+# fn_Type__name(. A type function (`) type {`) is never a C function.
+def unemitted_lines(c_source, src)
+  lines = src.lines
+  out = []
+  lines.each_with_index do |l, i|
+    m = l.match(/\A(\s*)fn (\w+)\(/)
+    next if m.nil? || l.include?("extern fn") || l.match?(/\)\s*type\s*\{\s*\z/)
+    next if c_source.match?(/\bfn_(?:\w*__)?#{m[2]}(?:_\w+)?\(/)
+    close = (i + 1...lines.length).find { |j| lines[j].match?(/\A#{m[1]}\}\s*\z/) }
+    out.concat(((i + 1)..((close || i) + 1)).to_a)
+  end
+  out
 end
 
 # Compile and require the listed diagnostics. "CODE @LINE" checks the line
