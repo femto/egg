@@ -248,7 +248,12 @@ v3 (memory without GC, and what realistic programs needed):
   whole (`write_response`, `append_response`), with validators the caller
   makes (`conditional(c, a, req, tag, ...)`: 304 when If-None-Match has
   it) and byte ranges (`ranged`); forms, cookies and multipart uploads are
-  read with `field`, `fields`, `cookie` and `file`.
+  read with `field`, `fields`, `cookie` and `file`. Its client is
+  `http://` only: `fetch(net, a, "GET", url, headers, body, opts)` on a
+  connection of its own, following `opts.redirects` redirects;
+  `send_request` and `read_response` on a connection kept for several;
+  `parse_response` on received bytes. A `Response` has `status`, `body`,
+  `keep`, `r.header(name)` and `r.reason()`.
   `std/ws` is WebSocket for servers: `is_handshake` and `handshake` (the
   101 response), frames out, and messages in with `take` (from received
   bytes) or `read_message`. `std/codec` has Base64, hex and form escaping;

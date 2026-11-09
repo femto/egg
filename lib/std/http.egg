@@ -1,12 +1,17 @@
-// std/http: HTTP/1.1 for servers. parse takes a request from the bytes a
-// connection has sent so far, whoever reads them (a Poller, say);
-// read_request does the reading itself, on a blocking TcpConn. Responses
-// are built whole, with Content-Length, and written at once.
+// std/http: HTTP/1.1 for servers and clients (http:// only: no TLS).
+// parse takes a request from the bytes a connection has sent so far,
+// whoever reads them (a Poller, say); read_request does the reading
+// itself, on a blocking TcpConn. Responses are built whole, with
+// Content-Length, and written at once. A client sends with fetch (a
+// connection of its own, redirects if asked), or send_request and
+// read_response on a connection it keeps, or parse_response on bytes.
 // const http = @import("std/http")
 // var inbox: Buf(u8) = .empty
 // const req = (try http.read_request(c, a, &inbox, 1048576)) orelse return
 // defer req.deinit(a)
 // try http.respond(c, a, req, "200 OK", "", "Content-Type: text/plain\r\n", "hi")
+// const r = try http.fetch(net, a, "GET", "http://example.com/", "", "", http.options())
+// defer r.deinit(a)
 uses alloc, net
 
 const text = @import("std/text")
@@ -63,6 +68,12 @@ const Request = owned struct {
         a.free(self.headers)
         a.free(self.body)
         @forget(self)
+    }
+
+    // The value of the first header called name (in any case), or null: a
+    // part of the request, not a copy.
+    fn header(self: Request, name: []u8) ?[]u8 {
+        return find_value(self.head, self.headers[0..], name)
     }
 }
 
@@ -308,6 +319,104 @@ fn framing(s: []u8, from: i64, to: i64) !Framing {
     return f
 }
 
+// Where the head of a message at s[start..] ends: where its empty line
+// starts, with where the body starts in body_from; -1 while the head has
+// not all come. Fails with error.HeadTooLarge over MAX_HEAD or
+// MAX_HEADERS.
+fn end_of_head(s: []u8, start: i64, inout body_from: i64) !i64 {
+    var lines = 0
+    var at = start
+    while (true) {
+        const nl = line_end(s, at)
+        if (nl < 0) {
+            if (@len(s) - start > MAX_HEAD) {
+                return error.HeadTooLarge
+            }
+            return -1
+        }
+        lines = lines + 1
+        if (line_to(s, at, nl) == at) {
+            if (at - start > MAX_HEAD or lines > MAX_HEADERS + 2) {
+                return error.HeadTooLarge
+            }
+            body_from = nl + 1
+            return at
+        }
+        at = nl + 1
+    }
+    return -1
+}
+
+// The header lines of s[from..to], as places counted from base. Fails
+// with error.BadRequest on a line that is not `Name: value` (a space
+// before the colon, or a line folded onto the one before).
+fn read_headers(a: Allocator, s: []u8, from: i64, to: i64, base: i64) !Buf(Header) {
+    var headers: Buf(Header) = .empty
+    errdefer a.free(headers)
+    var at = from
+    while (at < to) {
+        const nl = line_end(s, at)
+        const h = s[at..line_to(s, at, nl)]
+        const colon = text.find(h, ":") orelse { return error.BadRequest }
+        if (colon == 0 or is_blank(h[0]) or is_blank(h[colon - 1])) {
+            return error.BadRequest
+        }
+        const lo = skip_blank(h, colon + 1, @len(h))
+        const hi = drop_blank(h, lo, @len(h))
+        const p = at - base
+        a.push(&headers, Header{ .name_lo = p, .name_hi = p + colon, .value_lo = p + lo, .value_hi = p + hi })
+        at = nl + 1
+    }
+    return headers
+}
+
+// The value of the first header called name in a head, or null.
+fn find_value(head: []u8, headers: []Header, name: []u8) ?[]u8 from head {
+    for (headers) |h| {
+        if (same(head[h.name_lo..h.name_hi], name)) {
+            return head[h.value_lo..h.value_hi]
+        }
+    }
+    return null
+}
+
+// The values of every header called name in a head, joined with sep.
+fn joined(a: Allocator, head: []u8, headers: []Header, name: []u8, sep: []u8) Buf(u8) {
+    var out: Buf(u8) = .empty
+    for (headers) |h| {
+        if (same(head[h.name_lo..h.name_hi], name)) {
+            if (@len(out) > 0) {
+                a.append_str(&out, sep)
+            }
+            a.append_str(&out, head[h.value_lo..h.value_hi])
+        }
+    }
+    return out
+}
+
+// Does a header called name in a head list word (q=0 aside)?
+fn head_lists(head: []u8, headers: []Header, name: []u8, word: []u8) bool {
+    for (headers) |h| {
+        if (same(head[h.name_lo..h.name_hi], name) and has_word(head[h.value_lo..h.value_hi], word)) {
+            return true
+        }
+    }
+    return false
+}
+
+// Where a body framed by f, from body_from, ends; -1 while it has not
+// all come.
+fn body_end(s: []u8, body_from: i64, f: Framing, max_body: i64) !i64 {
+    if (f.chunked) {
+        return chunked_end(s, body_from, max_body)
+    }
+    if (f.length > max_body) {
+        return error.BodyTooLarge
+    }
+    const end = body_from + (if (f.length > 0) f.length else 0)
+    return if (@len(s) < end) -1 else end
+}
+
 // The next request at the start of inbox, taken out of it (what follows
 // stays, for the next call); null while inbox does not hold a whole
 // request yet. Fails with error.BadRequest on what is not HTTP/1.x,
@@ -319,43 +428,15 @@ fn parse(a: Allocator, inout inbox: Buf(u8), max_body: i64) !?Request {
     while (start < @len(inbox) and (inbox[start] == '\r' or inbox[start] == '\n')) {
         start = start + 1
     }
-    // The head: lines up to an empty one.
-    var head_end = -1
-    var lines = 0
-    var at = start
-    while (head_end < 0) {
-        const nl = line_end(inbox, at)
-        if (nl < 0) {
-            if (@len(inbox) - start > MAX_HEAD) {
-                return error.HeadTooLarge
-            }
-            return null
-        }
-        if (line_to(inbox, at, nl) == at) {
-            head_end = at
-        }
-        lines = lines + 1
-        at = nl + 1
+    var body_from = 0
+    const head_to = try end_of_head(inbox, start, &body_from)
+    if (head_to < 0) {
+        return null
     }
-    if (head_end - start > MAX_HEAD or lines > MAX_HEADERS + 2) {
-        return error.HeadTooLarge
-    }
-    const body_from = at
-    const f = try framing(inbox, start, head_end)
-    var end = body_from
-    if (f.chunked) {
-        end = try chunked_end(inbox, body_from, max_body)
-        if (end < 0) {
-            return null
-        }
-    } else if (f.length > 0) {
-        if (f.length > max_body) {
-            return error.BodyTooLarge
-        }
-        end = body_from + f.length
-        if (@len(inbox) < end) {
-            return null
-        }
+    const f = try framing(inbox, start, head_to)
+    const end = try body_end(inbox, body_from, f, max_body)
+    if (end < 0) {
+        return null
     }
 
     // The request line: method, target and version, one space apart.
@@ -369,54 +450,14 @@ fn parse(a: Allocator, inout inbox: Buf(u8), max_body: i64) !?Request {
     }
     const q = text.find_from(line[0..space2], "?", space + 1) orelse space2
 
-    var headers: Buf(Header) = .empty
-    errdefer a.free(headers)
-    var host: Buf(u8) = .empty
-    errdefer a.free(host)
-    var cookies: Buf(u8) = .empty
-    errdefer a.free(cookies)
-    var content_type: Buf(u8) = .empty
-    errdefer a.free(content_type)
-    var close = false
-    var ask_keep = false
-    var connection_upgrade = false
-    var upgrade_websocket = false
-    at = first_nl + 1
-    while (at < head_end) {
-        const nl = line_end(inbox, at)
-        const h = inbox[at..line_to(inbox, at, nl)]
-        // Places in head, which starts where the request does.
-        const from = at - start
-        at = nl + 1
-        // A name, then a colon at once; no line folded onto the last.
-        const colon = text.find(h, ":") orelse { return error.BadRequest }
-        if (colon == 0 or is_blank(h[0]) or is_blank(h[colon - 1])) {
-            return error.BadRequest
-        }
-        const name = h[0..colon]
-        const lo = skip_blank(h, colon + 1, @len(h))
-        const hi = drop_blank(h, lo, @len(h))
-        const value = h[lo..hi]
-        if (same(name, "Host")) {
-            a.free(@replace(&host, a.concat(value, "")))
-        } else if (same(name, "Cookie")) {
-            if (@len(cookies) > 0) {
-                a.append_str(&cookies, "; ")
-            }
-            a.append_str(&cookies, value)
-        } else if (same(name, "Content-Type")) {
-            a.free(@replace(&content_type, a.concat(value, "")))
-        } else if (same(name, "Connection")) {
-            close = close or has_word(value, "close")
-            ask_keep = ask_keep or has_word(value, "keep-alive")
-            connection_upgrade = connection_upgrade or has_word(value, "upgrade")
-        } else if (same(name, "Upgrade")) {
-            upgrade_websocket = has_word(value, "websocket")
-        }
-        a.push(&headers, Header{ .name_lo = from, .name_hi = from + colon, .value_lo = from + lo, .value_hi = from + hi })
-    }
-    const body = if (f.chunked) dechunk(a, inbox, body_from) else a.concat(inbox[body_from..end], "")
-    const http11 = version == "HTTP/1.1"
+    const headers = try read_headers(a, inbox, first_nl + 1, head_to, start)
+    const head = a.concat(inbox[start..head_to], "")
+    const close = head_lists(head, headers[0..], "Connection", "close")
+    const ask_keep = head_lists(head, headers[0..], "Connection", "keep-alive")
+    const upgrade = head_lists(head, headers[0..], "Connection", "upgrade") and head_lists(head, headers[0..], "Upgrade", "websocket")
+    const host = a.concat(find_value(head, headers[0..], "Host") orelse "", "")
+    const cookies = joined(a, head, headers[0..], "Cookie", "; ")
+    const content_type = a.concat(find_value(head, headers[0..], "Content-Type") orelse "", "")
     const req = Request{
         .method = a.concat(line[0..space], ""),
         .path = a.concat(line[space + 1..q], ""),
@@ -425,11 +466,11 @@ fn parse(a: Allocator, inout inbox: Buf(u8), max_body: i64) !?Request {
         .cookie = cookies,
         .content_type = content_type,
         .peer_ip = .empty,
-        .head = a.concat(inbox[start..head_end], ""),
+        .head = head,
         .headers = headers,
-        .body = body,
-        .upgrade = connection_upgrade and upgrade_websocket,
-        .keep = !close and (http11 or ask_keep),
+        .body = if (f.chunked) dechunk(a, inbox, body_from) else a.concat(inbox[body_from..end], ""),
+        .upgrade = upgrade,
+        .keep = !close and (version == "HTTP/1.1" or ask_keep),
     }
     const rest = a.concat(inbox[end..], "")
     a.free(@replace(&inbox, rest))
@@ -487,30 +528,15 @@ fn close_after(inout req: Request) void {
     req.keep = false
 }
 
-// The value of the first header called name (in any case), or null: a
-// part of req, not a copy.
+// req.header(name), as a function.
 fn header(req: Request, name: []u8) ?[]u8 from req {
-    for (req.headers) |h| {
-        if (same(req.head[h.name_lo..h.name_hi], name)) {
-            return req.head[h.value_lo..h.value_hi]
-        }
-    }
-    return null
+    return req.header(name)
 }
 
 // The values of every header called name, joined with ", " as a list
 // header's may be (Sec-WebSocket-Protocol, Accept); empty if none.
 fn header_list(a: Allocator, req: Request, name: []u8) Buf(u8) {
-    var out: Buf(u8) = .empty
-    for (req.headers) |h| {
-        if (same(req.head[h.name_lo..h.name_hi], name)) {
-            if (@len(out) > 0) {
-                a.append_str(&out, ", ")
-            }
-            a.append_str(&out, req.head[h.value_lo..h.value_hi])
-        }
-    }
-    return out
+    return joined(a, req.head, req.headers[0..], name, ", ")
 }
 
 fn has_header(req: Request, name: []u8) bool {
@@ -526,12 +552,7 @@ fn has_header(req: Request, name: []u8) bool {
 // (Accept-Encoding and gzip, Connection and close)? Words with q=0 do not
 // count.
 fn lists(req: Request, name: []u8, word: []u8) bool {
-    for (req.headers) |h| {
-        if (same(req.head[h.name_lo..h.name_hi], name) and has_word(req.head[h.value_lo..h.value_hi], word)) {
-            return true
-        }
-    }
-    return false
+    return head_lists(req.head, req.headers[0..], name, word)
 }
 
 // Does the client take the body in this content coding ("gzip", say)?
@@ -875,4 +896,354 @@ fn file(a: Allocator, req: Request, name: []u8) ?Upload {
         at = next + @len(delim)
     }
     return null
+}
+
+// ---- client -----------------------------------------------------------
+
+// A response, with every header as a place in head.
+const Response = owned struct {
+    status: i64
+    // The status line and the header lines, as they came.
+    head: Buf(u8)
+    headers: Buf(Header)
+    // Content-Length bytes, the chunks of a chunked body joined, or all
+    // that came before the server closed; none for HEAD, 1xx, 204 and 304.
+    body: Buf(u8)
+    // Whether the server keeps the connection for another request.
+    keep: bool
+
+    fn deinit(sink self: Response, a: Allocator) void {
+        a.free(self.head)
+        a.free(self.headers)
+        a.free(self.body)
+        @forget(self)
+    }
+
+    // The value of the first header called name (in any case), or null: a
+    // part of the response, not a copy.
+    fn header(self: Response, name: []u8) ?[]u8 {
+        return find_value(self.head, self.headers[0..], name)
+    }
+
+    // The reason phrase of the status line ("Not Found"), maybe empty.
+    fn reason(self: Response) []u8 {
+        const nl = line_end(self.head, 0)
+        const line = self.head[0..if (nl < 0) @len(self.head) else line_to(self.head, 0, nl)]
+        if (@len(line) > 13) {
+            return line[13..]
+        }
+        return ""
+    }
+}
+
+// How fetch goes about a request.
+const Options = struct {
+    // How long each read and write may wait, in milliseconds (0: no limit).
+    // Connecting waits as long as the system does.
+    timeout_ms: i64
+    // A longer response body fails with error.BodyTooLarge.
+    max_body: i64
+    // How many redirects fetch follows (0: it returns the 3xx itself).
+    redirects: i64
+}
+
+// 30 s, 16 MiB, no redirects.
+fn options() Options {
+    return Options{ .timeout_ms = 30000, .max_body = 16777216, .redirects = 0 }
+}
+
+// Where the parts of an http:// URL are in it: the host (without the []
+// of an IPv6 address), the authority as written (for Host), and the path
+// and query (empty for "/"; a #fragment is left out).
+const Url = struct {
+    host_lo: i64
+    host_hi: i64
+    port: i64
+    authority_lo: i64
+    authority_hi: i64
+    target_lo: i64
+    target_hi: i64
+}
+
+// The parts of url. Fails with error.Unsupported for https:// (there is no
+// TLS here) and error.BadUrl for anything else that is not
+// http://host[:port][/path][?query], user info and spaces included.
+fn parse_url(url: []u8) !Url {
+    for (url) |c| {
+        if (c <= ' ' or c == 127) {
+            return error.BadUrl
+        }
+    }
+    if (@len(url) >= 8 and same(url[0..8], "https://")) {
+        return error.Unsupported
+    }
+    if (@len(url) < 7 or !same(url[0..7], "http://")) {
+        return error.BadUrl
+    }
+    var end = 7
+    while (end < @len(url) and url[end] != '/' and url[end] != '?' and url[end] != '#') {
+        end = end + 1
+    }
+    var u = Url{ .host_lo = 7, .host_hi = end, .port = 80, .authority_lo = 7, .authority_hi = end, .target_lo = end, .target_hi = text.find_from(url, "#", end) orelse @len(url) }
+    const auth = url[7..end]
+    if (text.contains(auth, "@")) {
+        return error.BadUrl
+    }
+    var colon = -1
+    if (@len(auth) > 0 and auth[0] == '[') {
+        const close = text.find(auth, "]") orelse { return error.BadUrl }
+        u.host_lo = 8
+        u.host_hi = 7 + close
+        if (close + 1 < @len(auth)) {
+            if (auth[close + 1] != ':') {
+                return error.BadUrl
+            }
+            colon = close + 1
+        }
+    } else {
+        colon = text.find(auth, ":") orelse -1
+        if (colon >= 0) {
+            u.host_hi = 7 + colon
+        }
+    }
+    if (u.host_hi <= u.host_lo) {
+        return error.BadUrl
+    }
+    if (colon >= 0) {
+        const port = digits(auth[colon + 1..]) orelse { return error.BadUrl }
+        if (port < 1 or port > 65535) {
+            return error.BadUrl
+        }
+        u.port = port
+    }
+    return u
+}
+
+// The host of url to connect to, as parse_url found it.
+fn url_host(url: []u8, u: Url) []u8 {
+    return url[u.host_lo..u.host_hi]
+}
+
+// The request line's target: the path and query, or "/".
+fn url_target(url: []u8, u: Url) []u8 {
+    if (u.target_lo == u.target_hi) {
+        return "/"
+    }
+    return url[u.target_lo..u.target_hi]
+}
+
+// A request at the end of out: the request line, Host, the caller's
+// headers (each ending in \r\n), Content-Length when there is a body or
+// the method sends one, and the body.
+fn append_request(a: Allocator, inout out: Buf(u8), method: []u8, target: []u8, host: []u8, headers: []u8, body: []u8) void {
+    a.append_str(&out, method)
+    a.push(&out, ' ')
+    a.append_str(&out, target)
+    a.append_str(&out, " HTTP/1.1\r\nHost: ")
+    a.append_str(&out, host)
+    a.append_str(&out, "\r\n")
+    a.append_str(&out, headers)
+    if (@len(body) > 0 or method == "POST" or method == "PUT" or method == "PATCH") {
+        a.append_str(&out, "Content-Length: ")
+        a.append_int(&out, @len(body))
+        a.append_str(&out, "\r\n")
+    }
+    a.append_str(&out, "\r\n")
+    a.append_str(&out, body)
+}
+
+fn send_request(c: TcpConn, a: Allocator, method: []u8, target: []u8, host: []u8, headers: []u8, body: []u8) !void {
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    append_request(a, &out, method, target, host, headers, body)
+    try c.write(out)
+}
+
+// The status code of a status line ("HTTP/1.1 200 OK"), or -1.
+fn status_of(line: []u8) i64 {
+    if (@len(line) < 12 or !text.starts_with(line, "HTTP/1.") or line[8] != ' ' or (@len(line) > 12 and line[12] != ' ')) {
+        return -1
+    }
+    return digits(line[9..12]) orelse -1
+}
+
+// The next response at the start of inbox, taken out of it; null while
+// it has not all come. head_request: it answers a HEAD, so it has no body.
+// ended: the server has closed the connection, so a body without a
+// length ends where inbox does. Interim 1xx responses (100 Continue) are
+// passed over. Fails with error.BadResponse on what is not HTTP/1.x,
+// error.HeadTooLarge, and error.BodyTooLarge over max_body.
+fn parse_response(a: Allocator, inout inbox: Buf(u8), max_body: i64, head_request: bool, ended: bool) !?Response {
+    while (true) {
+        var body_from = 0
+        const head_to = end_of_head(inbox, 0, &body_from) catch |e| {
+            return if (e == error.BadRequest) error.BadResponse else e
+        }
+        if (head_to < 0) {
+            if (ended and @len(inbox) > 0) {
+                return error.BadResponse
+            }
+            return null
+        }
+        const first_nl = line_end(inbox, 0)
+        const status = status_of(inbox[0..line_to(inbox, 0, first_nl)])
+        if (status < 100 or status > 999) {
+            return error.BadResponse
+        }
+        if (status < 200 and status != 101) {
+            const rest = a.concat(inbox[body_from..], "")
+            a.free(@replace(&inbox, rest))
+            continue
+        }
+        const f = framing(inbox, 0, head_to) catch |e| {
+            return if (e == error.BadRequest) error.BadResponse else e
+        }
+        const bodiless_status = status < 200 or status == 204 or status == 304
+        var end = body_from
+        var until_close = false
+        if (!head_request and !bodiless_status) {
+            if (f.chunked or f.length >= 0) {
+                end = body_end(inbox, body_from, f, max_body) catch |e| {
+                    return if (e == error.BadRequest) error.BadResponse else e
+                }
+                if (end < 0) {
+                    if (ended) {
+                        return error.BadResponse
+                    }
+                    return null
+                }
+            } else {
+                // No length: the body is all that comes before the close.
+                if (@len(inbox) - body_from > max_body) {
+                    return error.BodyTooLarge
+                }
+                if (!ended) {
+                    return null
+                }
+                end = @len(inbox)
+                until_close = true
+            }
+        }
+        const headers = read_headers(a, inbox, first_nl + 1, head_to, 0) catch |e| {
+            return if (e == error.BadRequest) error.BadResponse else e
+        }
+        const head = a.concat(inbox[0..head_to], "")
+        const http11 = text.starts_with(head, "HTTP/1.1")
+        const close = head_lists(head, headers[0..], "Connection", "close")
+        const ask_keep = head_lists(head, headers[0..], "Connection", "keep-alive")
+        const resp = Response{
+            .status = status,
+            .head = head,
+            .headers = headers,
+            .body = if (f.chunked and end > body_from) dechunk(a, inbox, body_from) else a.concat(inbox[body_from..end], ""),
+            .keep = !until_close and !close and (http11 or ask_keep),
+        }
+        const rest = a.concat(inbox[end..], "")
+        a.free(@replace(&inbox, rest))
+        return resp
+    }
+    return null
+}
+
+// The next response on c, read into inbox (keep it for the life of the
+// connection). Fails as parse_response does, with error.BadResponse for a
+// response cut off, or with c's errors.
+fn read_response(c: TcpConn, a: Allocator, inout inbox: Buf(u8), max_body: i64, head_request: bool) !Response {
+    var chunk: Buf(u8) = .empty
+    defer a.free(chunk)
+    var ended = false
+    while (true) {
+        if (try parse_response(a, &inbox, max_body, head_request, ended)) |resp| {
+            return resp
+        }
+        if (ended) {
+            return error.BadResponse
+        }
+        const n = try c.read(a, &chunk, 65536)
+        if (n == 0) {
+            ended = true
+        } else {
+            a.append_str(&inbox, chunk)
+        }
+    }
+    return error.BadResponse
+}
+
+// One request on a connection of its own, closed after the response.
+fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options) !Response {
+    const u = try parse_url(url)
+    const c = try net.tcp_connect(url_host(url, u), u.port)
+    defer c.close()
+    try c.set_timeout(opts.timeout_ms)
+    const all = a.concat(headers, "Connection: close\r\n")
+    defer a.free(all)
+    try send_request(c, a, method, url_target(url, u), url[u.authority_lo..u.authority_hi], all, body)
+    var inbox: Buf(u8) = .empty
+    defer a.free(inbox)
+    return read_response(c, a, &inbox, opts.max_body, method == "HEAD")
+}
+
+// Where a redirect from base to location goes, as an absolute URL, or
+// null if it cannot be told.
+fn resolve(a: Allocator, base: []u8, location: []u8) ?Buf(u8) {
+    if (@len(location) >= 7 and (same(location[0..7], "http://") or (@len(location) >= 8 and same(location[0..8], "https://")))) {
+        return a.concat(location, "")
+    }
+    const u = parse_url(base) catch { return null }
+    if (text.starts_with(location, "//")) {
+        return a.concat("http:", location)
+    }
+    if (text.starts_with(location, "/")) {
+        return a.concat(base[0..u.authority_hi], location)
+    }
+    // A relative path: next to the last part of base's path.
+    const path_end = text.find_from(base[0..u.target_hi], "?", u.target_lo) orelse u.target_hi
+    var dir = u.target_lo
+    var i = u.target_lo
+    while (i < path_end) {
+        if (base[i] == '/') {
+            dir = i + 1
+        }
+        i = i + 1
+    }
+    if (dir == u.target_lo) {
+        return a.concat(base[0..u.authority_hi], "/", location)
+    }
+    return a.concat(base[0..dir], location)
+}
+
+fn choose(first: bool, x: []u8, y: []u8) []u8 {
+    if (first) {
+        return x
+    }
+    return y
+}
+
+fn is_redirect(status: i64) bool {
+    return status == 301 or status == 302 or status == 303 or status == 307 or status == 308
+}
+
+// method url (http:// only) with headers (each ending in \r\n; not Host,
+// Content-Length or Connection, which fetch writes) and body, on a
+// connection of its own. With opts.redirects above 0 it follows that
+// many redirects: a 303, or a 301 or 302 after a POST, as a GET without
+// the body; a 307 or 308 as it was. Fails as parse_url, net.tcp_connect
+// and read_response do.
+fn fetch(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options) !Response {
+    var current = a.concat(url, "")
+    defer a.free(current)
+    var get = false
+    var hops = 0
+    while (true) {
+        const resp = try fetch_once(net, a, choose(get, "GET", method), current, headers, choose(get, "", body), opts)
+        if (hops >= opts.redirects or !is_redirect(resp.status)) {
+            return resp
+        }
+        const next = resolve(a, current, resp.header("Location") orelse "") orelse { return resp }
+        get = get or resp.status == 303 or ((resp.status == 301 or resp.status == 302) and method == "POST")
+        resp.deinit(a)
+        a.free(@replace(&current, next))
+        hops = hops + 1
+    }
+    return error.BadResponse
 }
