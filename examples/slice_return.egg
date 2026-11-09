@@ -1,0 +1,109 @@
+// Functions that return slices: of their read-only parameters, which the
+// signature names (`from`) or the default rule picks (self for a method,
+// else each parameter that can hold such elements); ?[]T and ![]T too.
+// expect: example.com Host!
+// expect: example.com
+// expect: absent
+// expect: [hi]
+// expect: none
+// expect: [ab]
+// expect: 7
+// expect: 294 small big
+// expect: [v]
+uses io, alloc
+
+const Header = owned struct {
+    name: Buf(u8)
+    value: Buf(u8)
+
+    fn deinit(sink self: Header, a: Allocator) void {
+        a.free(self.name)
+        a.free(self.value)
+        @forget(self)
+    }
+
+    // A method lends from self by default.
+    fn shown(self: Header) []u8 {
+        return self.value[0..]
+    }
+}
+
+const Req = struct {
+    headers: Buf(Header)
+}
+
+fn trim(s: []u8) []u8 {
+    var lo = 0
+    var hi = @len(s)
+    while (lo < hi and s[lo] == ' ') {
+        lo = lo + 1
+    }
+    while (hi > lo and s[hi - 1] == ' ') {
+        hi = hi - 1
+    }
+    return s[lo..hi]
+}
+
+// Both are []u8; the result views only req.
+fn header(req: Req, name: []u8) ?[]u8 from req {
+    for (req.headers) |h| {
+        if (h.name == name) {
+            return h.value[0..]
+        }
+    }
+    return null
+}
+
+fn word(s: []u8) ![]u8 {
+    const t = trim(s)
+    if (@len(t) == 0) {
+        return error.Empty
+    }
+    return t
+}
+
+fn twice(s: []u8) []u8 {
+    return trim(trim(s)[1..])
+}
+
+fn first(comptime T: type, xs: []T) []T {
+    return xs[0..1]
+}
+
+fn label(n: i64) []u8 {
+    return if_small(n)
+}
+
+fn if_small(n: i64) []u8 {
+    if (n < 10) {
+        return "small"
+    }
+    return "big"
+}
+
+fn main(io: Io, a: Allocator) !void {
+    var req = Req{ .headers = .empty }
+    defer a.free(req.headers)
+    a.push(&req.headers, Header{ .name = a.concat("Host", ""), .value = a.concat("example.com", "") })
+    var key = a.concat("Host", "")
+    defer a.free(key)
+    const host = header(req, key) orelse ""
+    a.push(&key, '!')                  // key is not lent: `from req`
+    io.print(host, " ", key)
+    io.print(req.headers[0].shown())
+    io.print(header(req, "Nope") orelse "absent")
+    const w = try word("  hi  ")
+    io.print("[", w, "]")
+    const empty = word("   ") catch "none"
+    io.print(empty)
+    io.print("[", twice("  xab  "), "]")
+    const xs = [3]i64{ 7, 8, 9 }
+    io.print(first(i64, xs[0..])[0])
+    var n = 0
+    for (trim("  abc ")) |c| {
+        n = n + @as(i64, c)
+    }
+    io.print(n, " ", label(3), " ", label(30))
+    const f: fn([]u8) []u8 = trim
+    io.print("[", f(" v "), "]")
+}

@@ -1,0 +1,22 @@
+// error: E116 @14
+// error: E116 @19
+// error: E117 @21
+// error: E111 @19
+uses alloc, io
+
+fn trim(s: []u8) []u8 {
+    return s[1..]
+}
+fn fill(inout b: Buf(u8), s: []u8, a: Allocator) void {
+    a.append_str(&b, s)
+}
+const Holder = struct {
+    view: ?[]u8
+}
+fn main(io: Io, a: Allocator) void {
+    var line = a.concat("  hi", "")
+    defer a.free(line)
+    var v = trim(line)
+    io.print(v)
+    fill(&line, trim(line), a)
+}

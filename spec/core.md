@@ -138,7 +138,7 @@ fn main(io: Io) void {
 | enum `Name` | one of a fixed set of names | section 10 |
 | `union(enum)` `Name` | one member, maybe with a payload | section 10 |
 | `[N]T` | N values of type T, N >= 1 | value type; section 11 |
-| `[]T` | a view of consecutive T, read-only unless `inout` | parameters and local slices; section 11 |
+| `[]T` | a view of consecutive T, read-only unless `inout` | parameters, local slices and function results; section 11 |
 | `!T` | a T or an error | section 13 |
 | `anyerror` | an error: `error.Name` | compared with `==`, switched on, named with `@errorName`; section 13 |
 | `?T` | a T or `null` | section 13 |
@@ -929,11 +929,11 @@ bounds-checked; `@len(a)` is N.
 
 `[]T` is a **slice**: a read-only view of consecutive elements of an array,
 written `a[lo..hi]` or `a[lo..]` (an `inout` slice is writable; section 12). Slices are **second-class** (E116): a
-slice can be a parameter type, an argument, the subject of `for`, or a local
-`const` or `inout`, and nothing else. It cannot be stored in a `var` or a field, or
-returned. So a view can never outlive the array it looks into, without any
-lifetime annotations. An array is not implicitly a slice: pass `a[0..]`
-(E103).
+slice can be a parameter type, an argument, the subject of `for`, a local
+`const` or `inout`, or a function's result (below), and nothing else. It
+cannot be stored in a `var` or a field. So a view can never outlive the
+array it looks into, without lifetime annotations. An array is not
+implicitly a slice: pass `a[0..]` (E103).
 
 `const s = x[lo..hi]` names a part of a variable, or of a part of one (E116
 for a temporary, a view through a pointer, or a slice chosen by an `if`); `const t = s` names a
@@ -1044,6 +1044,102 @@ fn main(io: Io) void {
     const a = [3]i64{ 1, 2, 3 }
     var view = a[0..2]
     io.print(@len(view))
+}
+```
+
+**Slices as results.** A function may return `[]T`, `?[]T`, `![]T` or
+`!?[]T`: a view into what one of its plain (read-only) parameters points
+to, a string literal, or `null`. Its **signature** says which parameters
+the result views, and callers rely on that alone, never on the body:
+
+- `fn header(req: Request, name: []u8) ?[]u8 from req`: the parameters
+  named after `from`. `from` is a word only there.
+- Without `from`, a method's result views `self`, if `self` can hold
+  elements of the result's type; any other function's views every plain
+  parameter that can. A parameter can when such elements are behind a
+  pointer in it: a slice, a `Buf` or a `str` of them, or a struct, array
+  or optional holding one. So `fn trim(s: []u8) []u8` views `s`.
+
+The body is checked against the signature (E151): what it returns must
+view only those parameters, and not memory that ends with the call: a
+local, a `sink` or `inout` parameter, or an array inside a parameter (or a
+loop variable), which is the function's own copy. `from` must name plain
+parameters that can hold such elements (E152).
+
+At a call, the result views the arguments passed for those parameters
+(a literal or a constant: nothing). It is a local slice like
+`const s = x[lo..hi]` of each of them (E149), and can be named with
+`const`, unwrapped with `orelse` or `if (opt) |s|`, passed on, looped
+over or returned in turn. A function value's type has no parameter
+names, so a call through one views every plain parameter that can.
+
+```egg
+// expect: [hi there]
+// expect: example
+// expect: none
+uses io, alloc
+
+fn trim(s: []u8) []u8 {
+    var lo = 0
+    var hi = @len(s)
+    while (lo < hi and s[lo] == ' ') {
+        lo = lo + 1
+    }
+    while (hi > lo and s[hi - 1] == ' ') {
+        hi = hi - 1
+    }
+    return s[lo..hi]
+}
+
+// The value after "name=" in text; name is only compared.
+fn value(text: []u8, name: []u8) ?[]u8 from text {
+    if (@len(text) > @len(name) and text[0..@len(name)] == name and text[@len(name)] == '=') {
+        return text[@len(name) + 1..]
+    }
+    return null
+}
+
+fn main(io: Io, a: Allocator) void {
+    const line = a.concat("  hi there ", "")
+    defer a.free(line)
+    io.print("[", trim(line), "]")
+    var key = a.concat("host", "")
+    defer a.free(key)
+    const got = value("host=example", key) orelse "none"
+    a.push(&key, '!')           // not lent: `from text`
+    io.print(got)
+    io.print(value("port=1", key) orelse "none")
+}
+```
+
+```egg
+// error: E151
+uses alloc
+
+fn copy_of(a: Allocator, s: []u8) []u8 {
+    const b = a.concat(s, "")
+    defer a.free(b)
+    return b[0..]               // freed when the function returns
+}
+
+fn main() void {
+}
+```
+
+```egg
+// error: E149
+uses alloc, io
+
+fn trim(s: []u8) []u8 {
+    return s[1..]
+}
+
+fn main(io: Io, a: Allocator) void {
+    var line = a.concat(" x", "")
+    defer a.free(line)
+    const t = trim(line)
+    a.push(&line, '!')          // may move the bytes t looks at
+    io.print(t)
 }
 ```
 

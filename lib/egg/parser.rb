@@ -100,8 +100,24 @@ module Egg
       name = expect(:ident, "function name")
       params = parse_params
       ret = parse_type
+      from = parse_from
       body = parse_block
-      Func.new(name.text, params, ret, body, fn_tok.line, fn_tok.col, owner)
+      Func.new(name.text, params, ret, body, fn_tok.line, fn_tok.col, owner, nil, nil, from)
+    end
+
+    # `from p, q` after a result type: the parameters a slice result
+    # borrows. `from` is a word only here, so it stays a usable name.
+    def parse_from
+      return nil unless at?(:ident) && cur.text == "from"
+      advance
+      names = []
+      while true
+        t = expect(:ident, "parameter name")
+        names << [t.text, t.line, t.col]
+        break unless op?(",")
+        advance
+      end
+      names
     end
 
     def parse_params

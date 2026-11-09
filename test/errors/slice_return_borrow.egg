@@ -1,0 +1,44 @@
+// error: E149 @31
+// error: E149 @35
+// error: E149 @38
+// error: E137 @42
+uses alloc, io
+
+fn trim(s: []u8) []u8 {
+    return s[1..]
+}
+fn find(s: []u8, c: u8) ?[]u8 {
+    if (@len(s) > 0 and s[0] == c) {
+        return s
+    }
+    return null
+}
+fn either(x: []u8, y: []u8) []u8 {
+    return if_first(x, y)
+}
+fn if_first(x: []u8, y: []u8) []u8 {
+    if (@len(x) > 0) {
+        return x
+    }
+    return y
+}
+fn main(io: Io, a: Allocator) void {
+    var line = a.concat("  hi", "")
+    defer a.free(line)
+    var other = a.concat("x", "")
+    defer a.free(other)
+    const t = trim(line)
+    a.push(&line, '!')
+    io.print(t)
+    // Without `from`, both arguments are lent.
+    const e = either(line, other)
+    a.push(&other, '?')
+    io.print(e)
+    if (find(line, ' ')) |f| {
+        a.push(&line, '.')
+        io.print(f)
+    }
+    for (trim(line)) |c| {
+        a.push(&line, c)
+    }
+}

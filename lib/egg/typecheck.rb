@@ -17,8 +17,12 @@
 #   - `var` that is never reassigned     (E111)
 #   - a non-void result that is ignored  (E113)
 #   - shadowing an outer name            (E106)
-# Slices are second-class (E116): they exist only as parameters, so a
-# borrowed view can never outlive what it points into.
+# Slices are second-class (E116): they exist only as parameters, local
+# consts and function results, so a borrowed view can never outlive what it
+# points into. A function result may be a slice of its read-only
+# parameters; which ones its signature says (`from`, or the rule in
+# slice_borrows), and its body is checked against that (E151), so a caller
+# never looks into the body.
 #
 # Modules: the Loader has renamed every imported top-level name to
 # "m.name"; `@mod` is the module whose code is being checked, and
@@ -47,13 +51,18 @@
 # !T, must be unwrapped right away.
 
 module Egg
-  VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout)
+  # sink: a sink parameter; sources: for a local slice (or a loop or if
+  # capture), the variables it views, through other slices
+  VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout, :sink, :sources)
   # params: [[type, mode]] (comptime parameters removed); ret: type
   # direct: capability -> [line, col, what] for its first direct use
   # calls: [[Sig, line, col]] for every call in the body
   # unused: names of parameters the body never reads (Egg allows them; C
   # warns, so codegen marks them used)
-  Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls, :unused)
+  # borrows: for a slice result ([]T, ?[]T, ![]T, !?[]T), the indexes of the
+  # parameters it may view, from the signature alone (see slice_borrows)
+  # checked_from: false when its `from` names a parameter wrongly (E152)
+  Sig = Struct.new(:name, :params, :ret, :func, :c_name, :tenv, :this, :owner, :checked, :direct, :calls, :unused, :borrows, :checked_from)
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
   # mod: prefix of the module that declares the type (for #line marks)
   # resource: an `owned struct`; deinit: its deinit method's Sig, if any
@@ -670,12 +679,13 @@ module Egg
           sig.params << [t, p.mode]
         end
         r = resolve_type(f.ret, f.line, f.col)
-        if r.start_with?("[]")
-          err("E116", "a function cannot return a slice; slices exist only as parameters and local slices", f.line, f.col)
+        if !slice_in(r).nil? && !f.ext.nil?
+          err("E116", "an extern fn cannot return a slice; return a pointer and make the slice with @sliceFromPtr", f.line, f.col)
         elsif r == "type"
           err("E120", "only a type function (`fn Name(comptime T: type) type`) returns 'type'", f.line, f.col)
         end
         sig.ret = r
+        sig.borrows = slice_borrows(sig, r)
       end
     end
 
@@ -855,8 +865,8 @@ module Egg
         if t == "void" || t == "type"
           err("E108", "a field cannot have type #{t}", f.line, f.col)
           t = "error"
-        elsif t.start_with?("[]")
-          err("E116", "a struct cannot hold a slice; slices exist only as parameters and local slices", f.line, f.col)
+        elsif !slice_in(t).nil?
+          err("E116", "a struct cannot hold a slice (#{t}); slices exist only as parameters, local consts and results", f.line, f.col)
           t = "error"
         elsif owned_err?(t)
           err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
@@ -941,7 +951,7 @@ module Egg
       when ErrType
         inner = resolve_type(t.inner, line, col)
         return "error" if inner == "error"
-        if inner.start_with?("!") || inner.start_with?("[]") || inner == "type"
+        if inner.start_with?("!") || inner == "type"
           err("E108", "!#{inner} is not a valid error union", line, col)
           return "error"
         end
@@ -952,7 +962,7 @@ module Egg
       when OptType
         inner = resolve_type(t.inner, line, col)
         return "error" if inner == "error"
-        unless storable?(inner) && !inner.start_with?("!") && !inner.start_with?("?")
+        unless (storable?(inner) || inner.start_with?("[]")) && !inner.start_with?("!") && !inner.start_with?("?")
           err("E108", "?#{inner} is not a valid optional", line, col)
           return "error"
         end
@@ -979,7 +989,7 @@ module Egg
         return "error" if params.include?("error") || ret == "error"
         bad = params.find { |p| p == "void" || p == "type" }
         return value_type_error(bad, "a function parameter", line, col) unless bad.nil?
-        if ret.start_with?("[]") || ret == "type"
+        if ret == "type"
           err("E108", "a function type cannot return #{ret}", line, col)
           return "error"
         end
@@ -1056,7 +1066,7 @@ module Egg
     end
 
     def storable?(t)
-      !(t == "void" || t == "type" || t.start_with?("[]"))
+      !(t == "void" || t == "type" || !slice_in(t).nil?)
     end
 
     # Buf(T): an owned buffer of T. Its elements may be owned too.
@@ -1245,8 +1255,8 @@ module Egg
     end
 
     def value_type_error(t, what, line, col)
-      if t.start_with?("[]")
-        err("E116", "#{what} cannot be a slice; slices exist only as parameters and local slices", line, col)
+      if !slice_in(t).nil?
+        err("E116", "#{what} cannot be a slice (#{t}); slices exist only as parameters, local consts and results", line, col)
       else
         err("E108", "#{what} cannot have type #{t}", line, col)
       end
@@ -1335,7 +1345,7 @@ module Egg
         runtime = f.params.reject { |p| p.mode == "comptime" }
         runtime.each_with_index do |p, i|
           t, mode = sig.params[i]
-          declare(p.name, VarInfo.new(t, mode == "inout", false, false, p.line, p.col, true, mode == "inout"))
+          declare(p.name, VarInfo.new(t, mode == "inout", false, false, p.line, p.col, true, mode == "inout", mode == "sink"))
         end
         f.params.each do |p|
           next unless p.mode == "comptime"
@@ -1380,7 +1390,7 @@ module Egg
         expect_type(declared, ty, view) unless declared.nil?
         stmt.value = view
         stmt.ty = ty
-        declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true))
+        declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true, false, (src = place_sources(view.obj, false)).is_a?(Array) ? src : nil))
       in VarDecl[name:, value:, line:, col:, inout: true]
         check_expr(value)
         err("E116", "an inout local is a writable slice: `inout #{name} = &x[lo..hi]`, of a variable", line, col)
@@ -1397,15 +1407,16 @@ module Egg
         elsif ty == "type"
           err("E125", "'#{name}' would hold a type; types exist only at compile time", line, col)
           ty = "error"
-        elsif ty.start_with?("[]") && (mutable || !local_view?(value, vt))
-          err("E116", "'#{name}' cannot hold this slice; a local slice is `const #{name} = x[lo..hi]`, of a variable", line, col)
+        elsif !slice_in(ty).nil? && (mutable || !(local_view?(value, vt) || (!slice_in(vt).nil? && view_sources(value).is_a?(Array))))
+          why = mutable ? "a local slice is a const" : "a local slice views a variable"
+          err("E116", "'#{name}' cannot hold this slice (#{why}): `const #{name} = x[lo..hi]`, or the result of a call that lends one", line, col)
           ty = "error"
         elsif owned_err?(ty)
           err("E133", "'#{name}' cannot hold a #{ty}; unwrap it right away with #{unwrap_how(ty)}", line, col)
           ty = "error"
         end
         stmt.ty = ty
-        declare(name, VarInfo.new(ty, mutable, false, false, line, col, false, false))
+        declare(name, VarInfo.new(ty, mutable, false, false, line, col, false, false, false, slice_view_sources(ty, value)))
       in Assign[name:, value:, line:, col:, target:]
         if target.nil?
           info = lookup(name)
@@ -1436,7 +1447,7 @@ module Egg
         end
         inner = t != "error" && @types[t]&.kind == :opt ? @types[t].inner : "error"
         @scopes << {}
-        declare(name, VarInfo.new(inner, false, false, false, line, col, false, false))
+        declare(name, VarInfo.new(inner, false, false, false, line, col, false, false, false, slice_view_sources(inner, cond)))
         check_block(then_body)
         close_scope(@scopes.pop)
         case else_body
@@ -1472,7 +1483,7 @@ module Egg
         end
         @loop_depth += 1
         @scopes << {}
-        declare(var, VarInfo.new(elem || "error", false, false, false, line, col, false, false)) unless var == "_"
+        declare(var, VarInfo.new(elem || "error", false, false, false, line, col, false, false, false, element_sources(iter, it))) unless var == "_"
         declare(index_var, VarInfo.new("i64", false, false, false, line, col, false, false)) unless index_var.nil? || index_var == "_"
         check_block(body)
         close_scope(@scopes.pop)
@@ -1493,6 +1504,10 @@ module Egg
           if ret == "void"
             check_expr(value)
             err("E103", "function '#{@current.func.name}' returns void and cannot return a value", line, col)
+          elsif !slice_in(ret).nil?
+            vt = slice_expr?(value) ? check_slice_arg(value, ret) : check_expr(value, ret)
+            expect_type(ret, vt, value)
+            check_returned_slice(value) unless vt == "error" || ret == "error"
           else
             vt = check_expr(value, ret)
             expect_type(ret, vt, value)
@@ -2014,7 +2029,7 @@ module Egg
         expect_type(want, t1, first)
         expect_type(want, t2, second)
         t = want == "error" ? t2 : want
-        if t.start_with?("[]")
+        if !slice_in(t).nil?
           err("E103", "an if with a value cannot yield a slice (#{t}); #{IF_SLICE_HINT}", line, col)
           return "error"
         end
@@ -2351,6 +2366,7 @@ module Egg
         e.info[:params] = sig.params
         record_call(sig, line, col)
         check_args(sig, runtime_args, written, line, col)
+        note_borrows(e, sig, sig.params, runtime_args)
         return sig.ret
       end
       sig = @sigs[name]
@@ -2369,6 +2385,7 @@ module Egg
       e.info[:params] = sig.params
       record_call(sig, line, col)
       check_args(sig, args, written, line, col)
+      note_borrows(e, sig, sig.params, args)
       sig.ret
     end
 
@@ -2397,6 +2414,7 @@ module Egg
       e.info[:args] = args
       e.info[:params] = fn_params(ft)
       check_args(Sig.new(written, e.info[:params], ft.inner), args, written, line, col)
+      note_borrows(e, Sig.new(written, e.info[:params], ft.inner), e.info[:params], args)
       ft.inner
     end
 
@@ -2477,6 +2495,7 @@ module Egg
         e.info[:args] = args
         e.info[:params] = sig.params
         check_args(sig, args, "#{owner}.#{name}", line, col)
+        note_borrows(e, sig, sig.params, args)
         return sig.ret
       end
       sig = @sigs[method_key(t, name)]
@@ -2488,6 +2507,7 @@ module Egg
         e.info[:args] = args
         e.info[:params] = fn_params(ft)
         check_args(Sig.new(name, e.info[:params], ft.inner), args, name, line, col, [obj])
+        note_borrows(e, Sig.new(name, e.info[:params], ft.inner), e.info[:params], args)
         return ft.inner
       end
       if sig.nil?
@@ -2516,6 +2536,7 @@ module Egg
       e.info[:params] = sig.params.drop(1)
       rest = Sig.new(sig.name, sig.params.drop(1), sig.ret)
       check_args(rest, args, name, line, col, [obj], self_inout: self_mode == "inout")
+      note_borrows(e, sig, sig.params, [obj] + args)
       if self_mode == "inout"
         # The arguments are computed before the call, so reading plain
         # values of self is fine; a slice of it or a buffer moved out of it
@@ -2885,6 +2906,225 @@ module Egg
 
     def pointer_slice?(e)
       e.is_a?(Builtin) && e.name == "sliceFromPtr"
+    end
+
+    # ---- slices as results -------------------------------------------
+
+    # The slice type a result of type t carries ("[]u8" for "!?[]u8"), or
+    # nil if it carries none.
+    def slice_in(t)
+      return nil if t.nil?
+      t = t[1..] if t.start_with?("!")
+      t = t[1..] if t.start_with?("?")
+      t.start_with?("[]") ? t : nil
+    end
+
+    # Could a parameter of type t hold elements of type elem that outlive
+    # the call: behind a pointer (a slice, a Buf, a str), not in the
+    # parameter's own copy? An array's elements are in that copy, so only
+    # what they point to counts.
+    def can_supply?(t, elem, seen = {})
+      return false if seen[t]
+      seen[t] = true
+      return elem == "u8" if t == "str"
+      info = @types[t]
+      return false if info.nil?
+      case info.kind
+      when :slice, :buf then info.elem == elem || can_supply?(info.elem, elem, seen)
+      when :array then can_supply?(info.elem, elem, seen)
+      when :opt then can_supply?(info.inner, elem, seen)
+      when :struct, :union then (info.fields || []).any? { |_, ft, _| ft != "void" && can_supply?(ft, elem, seen) }
+      else false
+      end
+    end
+
+    # The parameters (indexes in sig.params) a slice result may view, from
+    # the signature alone: those named after `from`; for a method, self;
+    # else every read-only parameter that can hold elements of its type.
+    # nil if the result is not a slice.
+    def slice_borrows(sig, ret)
+      st = slice_in(ret)
+      f = sig.func
+      runtime = f.nil? ? [] : f.params.reject { |p| p.mode == "comptime" }
+      unless f.nil? || f.from.nil? || !st.nil?
+        name, line, col = f.from[0]
+        err("E152", "`from` says what a slice result borrows, but '#{f.name}' returns #{ret}", line, col)
+      end
+      return nil if st.nil?
+      elem = @types[st]&.elem
+      return [] if elem.nil?
+      unless f.nil? || f.from.nil?
+        return f.from.filter_map do |name, line, col|
+          i = runtime.index { |p| p.name == name }
+          if i.nil?
+            err("E152", "'#{name}' after `from` is not a parameter of '#{f.name}'", line, col)
+            sig.checked_from = false
+            next
+          end
+          t, mode = sig.params[i]
+          if !mode.nil?
+            err("E152", "a slice result cannot borrow '#{name}': it is #{article(mode)} parameter; only a plain (read-only) one lends for longer than the call", line, col)
+            sig.checked_from = false
+            next
+          end
+          unless t == "error" || can_supply?(t, elem)
+            err("E152", "a slice result cannot borrow '#{name}': #{article(t)} holds no #{elem} that outlives the call", line, col)
+            sig.checked_from = false
+            next
+          end
+          i
+        end.uniq
+      end
+      default_borrows(sig.params, elem, !f.nil? && !f.owner.nil? && runtime[0]&.name == "self")
+    end
+
+    # Without `from`: self for a method that can supply the elements, else
+    # every read-only parameter that can.
+    def default_borrows(params, elem, method = false)
+      can = params.each_index.select { |i| params[i][1].nil? && can_supply?(params[i][0], elem) }
+      method && can.include?(0) ? [0] : can
+    end
+
+    # A call of a function with a slice result: note the arguments it
+    # borrows (its result views them, in the checker and in own.rb).
+    def note_borrows(e, sig, params, args)
+      ret = sig.ret
+      return if slice_in(ret).nil?
+      idx = sig.borrows || default_borrows(params, @types[slice_in(ret)]&.elem)
+      e.info[:borrow_args] = idx.filter_map { |i| args[i] }
+    end
+
+    # What a slice-valued expression views: the variables whose storage it
+    # points into ([] for static text and null), or a String saying why it
+    # views nothing that lasts (a temporary). ret: it is being returned, so
+    # it must not point into a parameter's or a loop variable's own copy.
+    def view_sources(e, ret = false)
+      case e
+      in StrLit | NullLit | ErrorLit then []
+      in Var[name:]
+        info = lookup(name)
+        return "'#{name}' is not a variable" if info.nil?
+        return info.sources unless info.sources.nil?
+        place_sources(e, ret)
+      in SliceExpr[obj:]
+        return [] if pointer_slice?(e)
+        t = obj.ty
+        through = t == "str" || %i[slice buf].include?(@types[t]&.kind)
+        return "it views an array inside '#{root_name(obj) || 'a value'}' itself, which is a copy that ends with the function; return a slice of what a Buf or slice parameter points to" if ret && !through && !behind_pointer?(obj)
+        place_sources(obj, ret)
+      in Call | MethodCall
+        args = e.info&.dig(:borrow_args)
+        return "it is a temporary" if args.nil?
+        out = []
+        args.each do |a|
+          s = arg_sources(a, ret)
+          return s if s.is_a?(String)
+          out |= s
+        end
+        out
+      in Orelse | Catch
+        expr = e.expr
+        fallback = e.fallback
+        a = view_sources(expr, ret)
+        return a if a.is_a?(String)
+        fb = fallback.is_a?(Return) || fallback.is_a?(Break) || fallback.is_a?(Continue) ? nil : fallback_expr(fallback)
+        return a if fb.nil?
+        b = view_sources(fb, ret)
+        b.is_a?(String) ? b : a | b
+      in Try[expr:] then view_sources(expr, ret)
+      else "it is a temporary"
+      end
+    end
+
+    # What an argument lends to a slice result: a slice argument what it
+    # views, and any other the variable it is a part of.
+    def arg_sources(a, ret)
+      return view_sources(a, ret) if a.ty == "str" || !slice_in(a.ty).nil?
+      return [] if empty_value?(a)
+      place_sources(a, ret)
+    end
+
+    # Is e (a place) inside an element of a Buf or slice, so in memory that
+    # is not a variable's own?
+    def behind_pointer?(e)
+      case e
+      in Index[obj:] then %i[buf slice].include?(@types[obj.ty]&.kind) || behind_pointer?(obj)
+      in Field[obj:] then behind_pointer?(obj)
+      else false
+      end
+    end
+
+    # The variable a place (v, v.f, v[i], v.f[i].g) is part of, as sources.
+    def place_sources(e, ret)
+      root = e
+      root = root.obj while root.is_a?(Field) || root.is_a?(Index) || root.is_a?(SliceExpr)
+      # trim(s)[1..]: a part of a lent slice views what it does.
+      return view_sources(root, ret) if !root.is_a?(Var) && !slice_in(root.ty || "").nil?
+      return "it is a temporary" unless root.is_a?(Var)
+      info = lookup(root.name)
+      return "'#{root.name}' is not a variable" if info.nil?
+      return info.sources unless info.sources.nil?
+      if ret && !(info.param && !info.inout && !info.sink)
+        what = info.param ? "a#{info.sink ? ' sink' : 'n inout'} parameter" : "a local variable"
+        return "'#{root.name}' is #{what}, whose storage the function does not lend"
+      end
+      [root.name]
+    end
+
+    # Not a variable's name: a local slice's sources hold it when the slice
+    # views storage that ends with the function (a local, or an array in a
+    # parameter's own copy), so it cannot be returned.
+    LOCAL_STORAGE = "(local)"
+
+    # The sources of a local slice of type ty holding value, or nil.
+    def slice_view_sources(ty, value)
+      return nil if ty == "error" || slice_in(ty).nil?
+      r = view_sources(value, true)
+      return r if r.is_a?(Array)
+      l = view_sources(value)
+      l.is_a?(Array) ? l | [LOCAL_STORAGE] : nil
+    end
+
+    # What the variable of `for (iter) |x|` is part of: x is a copy of an
+    # element, so what its buffers point to is what iter views.
+    def element_sources(iter, it)
+      return nil if it == "error"
+      s = it == "str" || !slice_in(it).nil? ? view_sources(iter) : place_sources(iter, false)
+      s.is_a?(Array) ? s : nil
+    end
+
+    # return v from a function with a slice result: v may view only the
+    # parameters its signature lends.
+    def article(word)
+      "#{word.match?(/\A[aeiou]/i) ? 'an' : 'a'} #{word}"
+    end
+
+    def check_returned_slice(value)
+      return if @current.checked_from == false # its `from` is wrong (E152)
+      srcs = view_sources(value, true)
+      f = @current.func
+      runtime = f.params.reject { |p| p.mode == "comptime" }
+      allowed = (@current.borrows || []).map { |i| runtime[i].name }
+      if srcs.is_a?(String)
+        err("E151", "this slice cannot be returned: #{srcs}", value.line, value.col)
+        return
+      end
+      bad = srcs.find { |n| !allowed.include?(n) }
+      return if bad.nil?
+      if bad == LOCAL_STORAGE
+        err("E151", "this slice cannot be returned: it views storage that ends with the function (a local, or an array in a parameter's own copy)", value.line, value.col)
+        return
+      end
+      info = lookup(bad)
+      if info.nil? || !info.param
+        err("E151", "this slice cannot be returned: it views '#{bad}', which ends with the function", value.line, value.col)
+      elsif info.inout || info.sink
+        err("E151", "this slice cannot be returned: it views '#{bad}', a#{info.sink ? ' sink' : 'n inout'} parameter; a slice result can only borrow a plain (read-only) one", value.line, value.col)
+      else
+        lent = allowed.empty? ? "no parameter" : allowed.map { |n| "'#{n}'" }.join(", ")
+        how = f.from.nil? ? "; name what it views with `from #{(allowed + [bad]).uniq.join(', ')}` after the result type" : "; add '#{bad}' after `from`"
+        err("E151", "this slice views '#{bad}', but by its signature '#{f.name}' returns a view of #{lent}#{how}", value.line, value.col)
+      end
     end
 
     def local_view?(value, vt)
