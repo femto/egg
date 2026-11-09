@@ -2541,6 +2541,8 @@ module Egg
     # reaches is checked but not handed to the C compiler, so a program
     # pays for the parts of a module it uses. A library compiled on its own
     # would pass its exported functions as the roots instead.
+    attr_reader :skipped
+
     def generate(roots = [@checker.main_sig])
       @by_c_name = @checker.concrete.to_h { |sig| [sig.c_name, sig] }
       @wanted = []
@@ -2554,6 +2556,10 @@ module Egg
         @bodies[sig] = @out
       end
       emitted = @checker.concrete.select { |sig| @bodies.key?(sig) }
+      # By where they are declared: an instance of a generic function is a
+      # copy of its AST, and one emitted instance is enough.
+      kept = emitted.to_h { |sig| [[sig.func.mod, sig.func.line], true] }
+      @skipped = @checker.concrete.map { |sig| [sig.func.mod, sig.func.line] }.uniq.reject { |k| kept[k] }
       @out = emitted.map { |sig| @bodies[sig] }.join
       gen_entry
       body = @out

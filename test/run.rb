@@ -72,7 +72,7 @@ def check_program(name, src, dir, path = nil, debug: false, lib_dirs: [])
     return report(false, name, result.diagnostics.map { |d| d.to_text(name) }.join("\n"))
   end
   if debug
-    bad = bad_line_marks(result.c_source, src, File.expand_path(path))
+    bad = bad_line_marks(result.c_source, src, File.expand_path(path), result.skipped || [])
     return report(false, name, "#line marks missing or wrong on lines #{bad.inspect}") unless bad.empty?
   end
   base = File.join(dir, name.gsub(/[^A-Za-z0-9_.-]/, "_"))
@@ -111,7 +111,7 @@ end
 # files are not checked here.) Lines of only "}" or "} else {" start
 # nothing, and neither do continuation lines (after "," "(" "[" or an operator,
 # or a `.field = value` line of a struct literal).
-def bad_line_marks(c_source, src, path)
+def bad_line_marks(c_source, src, path, skipped = [])
   marked = c_source.scan(/^#line (\d+) "(.*)"$/).select { |_, f| f == path }.map { |m| m[0].to_i }.uniq
   texts = src.lines.map { |l| l.sub(%r{//.*}, "").strip }
   code = []
@@ -140,26 +140,20 @@ def bad_line_marks(c_source, src, path)
     code << i + 1 unless continued || declares || comptime || text.match?(/\A\}( else \{|\) orelse \{)?\z/)
     prev = text
   end
-  code -= unemitted_lines(c_source, src)
+  code -= unemitted_lines(skipped, src)
   (marked - code) + (code - marked)
 end
 
-# The lines of functions nothing reaches from main: they are checked, but
-# not emitted as C, so they have no #line marks. A function is `fn name(`
-# up to the brace that closes it at its indentation; it is emitted when
-# the C has fn_name( (fn_name_i64( for an instance of a generic one) or
-# fn_Type__name(. A type function (`) type {`) is never a C function.
-def unemitted_lines(c_source, src)
+# The lines of the functions the compiler checked but did not emit as C
+# (skipped: [module, line]; nil is this file), so they have no #line
+# marks: from `fn` to the brace that closes it at its indentation.
+def unemitted_lines(skipped, src)
   lines = src.lines
-  out = []
-  lines.each_with_index do |l, i|
-    m = l.match(/\A(\s*)fn (\w+)\(/)
-    next if m.nil? || l.include?("extern fn") || l.match?(/\)\s*type\s*\{\s*\z/)
-    next if c_source.match?(/\bfn_(?:\w*__)?#{m[2]}(?:_\w+)?\(/)
-    close = (i + 1...lines.length).find { |j| lines[j].match?(/\A#{m[1]}\}\s*\z/) }
-    out.concat(((i + 1)..((close || i) + 1)).to_a)
+  skipped.select { |mod, _| mod.nil? || mod.empty? }.flat_map do |_, line|
+    indent = lines[line - 1][/\A\s*/]
+    close = (line...lines.length).find { |j| lines[j].match?(/\A#{indent}\}\s*\z/) }
+    (line..((close || line - 1) + 1)).to_a
   end
-  out
 end
 
 # Compile and require the listed diagnostics. "CODE @LINE" checks the line

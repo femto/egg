@@ -15,7 +15,10 @@ module Egg
   # Exactly one of c_source / diagnostics is meaningful. links: the C
   # libraries the program's files name with `link`, each once, to pass
   # to the C compiler as -l<name>.
-  CompileResult = Struct.new(:c_source, :diagnostics, :links)
+  # skipped: [module, line] of each function checked but not emitted as C,
+  # since nothing reaches it from main (the debug build's #line check
+  # leaves those out)
+  CompileResult = Struct.new(:c_source, :diagnostics, :links, :skipped)
 
   # Result of checking: the checker (for codegen and tools), the capability
   # check, and every diagnostic.
@@ -42,7 +45,7 @@ module Egg
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
     gen = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil)
     c = gen.generate
-    CompileResult.new(c, [], links(r.program, gen.uses_net?, gen.uses_threads?, gen.uses_random?))
+    CompileResult.new(c, [], links(r.program, gen.uses_net?, gen.uses_threads?, gen.uses_random?), gen.skipped)
   rescue CompileError => e
     CompileResult.new(nil, [e.diagnostic])
   end
