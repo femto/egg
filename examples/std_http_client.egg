@@ -144,11 +144,7 @@ fn canned(a: Allocator, req: http.Request) Buf(u8) {
     if (p == "/echo") {
         const body = a.concat(req.method, " [", req.body, "]")
         defer a.free(body)
-        var out = a.concat("HTTP/1.1 200 OK\r\nContent-Length: ", "")
-        a.append_int(&out, @len(body))
-        a.append_str(&out, "\r\n\r\n")
-        a.append_str(&out, body)
-        return out
+        return reply(a, body)
     }
     // HTTP/1.0 without a length: the body ends when the server closes.
     return a.concat("HTTP/1.0 200 OK\r\n\r\nuntil close", "")
