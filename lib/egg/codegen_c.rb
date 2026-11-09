@@ -2546,7 +2546,9 @@ module Egg
     def generate(roots = [@checker.main_sig])
       @by_c_name = @checker.concrete.to_h { |sig| [sig.c_name, sig] }
       @wanted = []
-      @bodies = {}
+      # By identity: a Sig is a Struct, whose hash and == would walk its
+      # whole function, AST and all, on every lookup.
+      @bodies = {}.compare_by_identity
       roots.each { |sig| want(sig.c_name) }
       # Function bodies first, so we know which helpers and tables they use.
       until @wanted.empty?
@@ -3667,7 +3669,7 @@ module Egg
     # The function called c_name is needed: emit it (once).
     def want(c_name)
       sig = @by_c_name[c_name]
-      return if sig.nil? || @bodies.key?(sig) || @wanted.include?(sig)
+      return if sig.nil? || @bodies.key?(sig)
       @bodies[sig] = nil
       @wanted << sig
     end
