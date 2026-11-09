@@ -4117,7 +4117,10 @@ module Egg
                line("#{p}->ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(#{p}->ptr, #{n}, sizeof(#{c_type(elem)}));")
                line("#{p}->cap = #{n};")
                i = tmp
-               line("for (int64_t #{i} = #{p}->len; #{i} < #{n}; #{i}++) #{p}->ptr[#{i}] = #{v};")
+               # len is never negative, but GCC cannot know: from a len it
+               # thinks may be, it warns that resizing to 0 writes before the
+               # 1 byte egg_buf_resize keeps (-Warray-bounds).
+               line("for (int64_t #{i} = #{p}->len < 0 ? 0 : #{p}->len; #{i} < #{n}; #{i}++) #{p}->ptr[#{i}] = #{v};")
                line("#{p}->len = #{n};")
                "((void)0)"
              when "Allocator.push"
