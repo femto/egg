@@ -587,7 +587,8 @@ fn main(io: Io) void {
 
 ### Integer arithmetic is checked
 
-Egg has no undefined behaviour. Every arithmetic operation, in every
+Outside `allow unsafe` code (section 18, the one place it can arise), Egg
+has no undefined behaviour. Every arithmetic operation, in every
 integer type, either produces the mathematically correct result or stops
 the program with a panic; bitwise operations work on the value's bits in
 two's complement and are defined for every input except a shift amount
@@ -2104,7 +2105,10 @@ Without `allow unsafe` these are E131 (and `&x` outside an inout argument
 stays E121). The compiler cannot check what pointers point to: a pointer
 can outlive the variable it points into, and `@ptrAdd` can leave the
 object. The one check is that `p.*` on `null` panics with
-`null pointer dereference`.
+`null pointer dereference`. Nor can it see a pointer into a value passed
+as `inout`: while the call runs, the inout parameter must be the only way
+to that value, so reading or writing it through a pointer taken earlier
+is undefined.
 
 `allow unsafe` is local to its file: a file that imports an unsafe module
 does not need it, so an unsafe module can offer a safe API. Unlike a

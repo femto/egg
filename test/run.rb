@@ -838,6 +838,38 @@ def check_http_server(dir)
   end
 end
 
+# inout parameters passed by pointer are restrict in the C (E117 makes them
+# the only way to their value during the call); slices and plain ones not.
+def check_restrict
+  src = <<~EGG
+    uses alloc
+    const S = struct {
+        n: i64
+    }
+    fn bump(inout s: S, by: i64) void {
+        s.n = s.n + by
+    }
+    fn fill(a: Allocator, inout out: Buf(u8), inout xs: []i64, s: []u8) void {
+        for (s) |c| {
+            a.push(&out, c)
+        }
+        xs[0] = 1
+    }
+    fn main(a: Allocator) void {
+        var s = S{ .n = 0 }
+        bump(&s, 2)
+        var b: Buf(u8) = .empty
+        defer a.free(b)
+        var x = [1]i64{ 0 }
+        fill(a, &b, &x[0..], "hi")
+    }
+  EGG
+  c = Egg.compile_to_c(src).c_source.to_s
+  ok = c.include?("void fn_bump(ty_S *EGG_RESTRICT v_s, int64_t v_by)") &&
+       c.include?("void fn_fill(egg_allocator v_a, ty_Buf_u8 *EGG_RESTRICT v_out, ty__i64 v_xs, ty__u8 v_s)")
+  report(ok, "inout parameters by pointer are restrict", c.lines.grep(/^void fn_(bump|fill)\(/).join)
+end
+
 # What a program sees on its command line, and the order of its two output
 # streams: eprint must not overtake what print wrote before it.
 def check_args(dir)
@@ -1471,6 +1503,7 @@ Dir.mktmpdir do |dir|
   check_rendezvous(dir)
   check_http_server(dir)
   check_args(dir)
+  check_restrict
   check_stdin(dir)
   check_utf8(dir)
   check_lsp_char
