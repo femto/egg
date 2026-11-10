@@ -141,7 +141,7 @@ module Egg
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
-                      egg_chan egg_chan_wait egg_chan_put egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_take egg_chan_recv egg_chan_recv_for
+                      egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
@@ -1153,25 +1153,43 @@ module Egg
         }
       C
       # A fixed ring of values, shared by its receivers and senders; the
-      # last of them to close frees it. Threads blocked in send or recv
-      # wait in line, first come first served.
+      # last of them to close frees it. Threads blocked in send or recv, and
+      # the arms of a select waiting, wait in line, first come first served.
+      # Lock order: a channel, then selects by address.
       "egg_chan" => <<~C,
         #ifndef _WIN32
         #include <time.h>
         #endif
-        /* A thread blocked in send or recv, in its channel's line. The
-           other side does its part for it (state 1): copies v into the
-           ring or out of it, or hands it over, so none can cut in.
-           State 2: the other side closed first. */
+        /* One select waiting: what a channel tells it, under its own lock.
+           done: it has an outcome, went (an arm, -1 timeout, -2 closed),
+           decided by its own thread or by one that served an arm of it. */
+        typedef struct {
+        #ifdef _WIN32
+            CRITICAL_SECTION lock;
+            CONDITION_VARIABLE changed;
+        #else
+            pthread_mutex_t lock;
+            pthread_cond_t changed;
+        #endif
+            bool fired, done;
+            int64_t went;
+        } egg_sel;
+        /* Waiting in a channel's line: a thread blocked in send or recv (sel
+           NULL), or an arm of a select. The other side does its part for
+           it (state 1): copies v into the ring or out of it, or hands it
+           over, so none can cut in. State 2: the other side closed first. */
         typedef struct egg_chan_waiter {
         #ifdef _WIN32
             CONDITION_VARIABLE woken;
         #else
             pthread_cond_t woken;
         #endif
-            struct egg_chan_waiter *next;
+            struct egg_chan_waiter *prev, *next;
             void *v;
+            egg_sel *sel;
+            int64_t index;
             int state;
+            bool queued;
         } egg_chan_waiter;
         typedef struct {
             egg_chan_waiter *head, *tail;
@@ -1190,8 +1208,6 @@ module Egg
             /* Who waits: senders only while the ring is full (with cap 0,
                while no receiver waits), receivers only while it is empty. */
             egg_chan_line sending, receiving;
-            /* the selects waiting on it, told of every change */
-            struct egg_sel_node *selects;
             bool open;
         } egg_chan;
         #ifdef _WIN32
@@ -1199,66 +1215,176 @@ module Egg
         #define EGG_CHAN_UNLOCK(c) LeaveCriticalSection(&(c)->lock)
         #define EGG_CHAN_WAIT(c, w) SleepConditionVariableCS(&(w)->woken, &(c)->lock, INFINITE)
         #define EGG_CHAN_WAKE(w) WakeConditionVariable(&(w)->woken)
+        #define EGG_SEL_LOCK(s) EnterCriticalSection(&(s)->lock)
+        #define EGG_SEL_UNLOCK(s) LeaveCriticalSection(&(s)->lock)
+        #define EGG_SEL_WAKE(s) WakeConditionVariable(&(s)->changed)
         #else
         #define EGG_CHAN_LOCK(c) pthread_mutex_lock(&(c)->lock)
         #define EGG_CHAN_UNLOCK(c) pthread_mutex_unlock(&(c)->lock)
         #define EGG_CHAN_WAIT(c, w) pthread_cond_wait(&(w)->woken, &(c)->lock)
         #define EGG_CHAN_WAKE(w) pthread_cond_signal(&(w)->woken)
-        #endif
-        /* One select waiting: what a channel tells it, under its own lock.
-           done: it has an outcome, went (an arm, -1 timeout, -2 closed); a
-           select sending with cap 0 may decide it, handing the value over. */
-        typedef struct {
-        #ifdef _WIN32
-            CRITICAL_SECTION lock;
-            CONDITION_VARIABLE changed;
-        #else
-            pthread_mutex_t lock;
-            pthread_cond_t changed;
-        #endif
-            bool fired, done;
-            int64_t went;
-        } egg_sel;
-        /* An arm of a select, in the list of its channel. */
-        typedef struct egg_sel_node {
-            egg_sel *s;
-            struct egg_sel_node *next;
-            void *v;
-            int64_t index;
-            bool send;
-        } egg_sel_node;
-        #ifdef _WIN32
-        #define EGG_SEL_LOCK(s) EnterCriticalSection(&(s)->lock)
-        #define EGG_SEL_UNLOCK(s) LeaveCriticalSection(&(s)->lock)
-        #define EGG_SEL_WAKE(s) WakeConditionVariable(&(s)->changed)
-        #else
         #define EGG_SEL_LOCK(s) pthread_mutex_lock(&(s)->lock)
         #define EGG_SEL_UNLOCK(s) pthread_mutex_unlock(&(s)->lock)
         #define EGG_SEL_WAKE(s) pthread_cond_signal(&(s)->changed)
         #endif
-        /* With the channel locked: something changed, so its selects look again. */
-        static inline void egg_chan_notify(egg_chan *c) {
-            for (egg_sel_node *n = c->selects; n != NULL; n = n->next) {
-                EGG_SEL_LOCK(n->s);
-                n->s->fired = true;
-                EGG_SEL_WAKE(n->s);
-                EGG_SEL_UNLOCK(n->s);
+      C
+      # Joining and leaving a line.
+      "egg_chan_queue" => <<~C,
+        static void egg_chan_line_push(egg_chan_line *l, egg_chan_waiter *w) {
+            w->prev = l->tail;
+            w->next = NULL;
+            if (l->tail != NULL) {
+                l->tail->next = w;
+            } else {
+                l->head = w;
             }
+            l->tail = w;
+            w->queued = true;
         }
-        static inline egg_chan_waiter *egg_chan_line_pop(egg_chan_line *l) {
-            egg_chan_waiter *w = l->head;
-            if (w != NULL) {
+        static void egg_chan_line_drop(egg_chan_line *l, egg_chan_waiter *w) {
+            if (!w->queued) return;
+            if (w->prev != NULL) {
+                w->prev->next = w->next;
+            } else {
                 l->head = w->next;
-                if (l->head == NULL) l->tail = NULL;
             }
-            return w;
+            if (w->next != NULL) {
+                w->next->prev = w->prev;
+            } else {
+                l->tail = w->prev;
+            }
+            w->queued = false;
         }
-        /* Wakes every waiter of l: the other side closed. */
-        static inline void egg_chan_line_close(egg_chan_line *l) {
-            egg_chan_waiter *w;
-            while ((w = egg_chan_line_pop(l)) != NULL) {
-                w->state = 2;
-                EGG_CHAN_WAKE(w);
+      C
+      # Serving the lines: who goes next, decided at once with a select.
+      "egg_chan_line" => <<~C,
+        /* Decides s's outcome, unless something else already has. */
+        static bool egg_sel_claim(egg_sel *s, int64_t went) {
+            EGG_SEL_LOCK(s);
+            bool ok = !s->done;
+            if (ok) {
+                s->done = true;
+                s->went = went;
+            }
+            EGG_SEL_UNLOCK(s);
+            return ok;
+        }
+        /* Decides the select of w, and me (a select, or NULL) with arm mi,
+           both at once. 0: done; 1: w's select was decided already, so w
+           is stale; 2: me was. w's select, woken, leaves its lines only
+           under this channel's lock, so its v stays good until it is unlocked. */
+        static int egg_sel_match(egg_sel *me, int64_t mi, egg_chan_waiter *w) {
+            egg_sel *t = w->sel;
+            egg_sel *first = me != NULL && (uintptr_t)me < (uintptr_t)t ? me : t;
+            egg_sel *second = me == NULL ? NULL : first == me ? t : me;
+            EGG_SEL_LOCK(first);
+            if (second != NULL) EGG_SEL_LOCK(second);
+            int r = me != NULL && me->done ? 2 : t->done ? 1 : 0;
+            if (r == 0) {
+                if (me != NULL) {
+                    me->done = true;
+                    me->went = mi;
+                }
+                t->done = true;
+                t->went = w->index;
+                t->fired = true;
+                EGG_SEL_WAKE(t);
+            }
+            if (second != NULL) EGG_SEL_UNLOCK(second);
+            EGG_SEL_UNLOCK(first);
+            return r;
+        }
+        /* The first in line l that can go now, out of line and decided
+           together with me (a select, or NULL), or NULL. Stale arms are
+           dropped and me's own skipped. *lost: me was decided meanwhile. */
+        static egg_chan_waiter *egg_chan_line_next(egg_chan_line *l, egg_sel *me, int64_t mi, bool *lost) {
+            egg_chan_waiter *w = l->head;
+            while (w != NULL) {
+                egg_chan_waiter *next = w->next;
+                if (w->sel == NULL) {
+                    if (me != NULL && !egg_sel_claim(me, mi)) {
+                        *lost = true;
+                        return NULL;
+                    }
+                    egg_chan_line_drop(l, w);
+                    return w;
+                }
+                if (w->sel != me) {
+                    int r = egg_sel_match(me, mi, w);
+                    if (r == 2) {
+                        *lost = true;
+                        return NULL;
+                    }
+                    egg_chan_line_drop(l, w);
+                    if (r == 0) return w;
+                }
+                w = next;
+            }
+            return NULL;
+        }
+        /* w was served: a thread is woken here, a select by egg_sel_match. */
+        static void egg_chan_served(egg_chan_waiter *w) {
+            if (w->sel != NULL) return;
+            w->state = 1;
+            EGG_CHAN_WAKE(w);
+        }
+      C
+      "egg_chan_get" => <<~C,
+        /* With c locked: the next value into out, for me (a select, or NULL)
+           with arm mi. The first sender in line moves into the room it leaves,
+           or with cap 0 its value is the one taken. 1: got one; 0: none
+           now; 3: me was decided meanwhile. */
+        static int egg_chan_get(egg_chan *c, void *out, egg_sel *me, int64_t mi) {
+            bool lost = false;
+            if (c->count > 0) {
+                if (me != NULL && !egg_sel_claim(me, mi)) return 3;
+                memcpy(out, c->items + (size_t)c->head * c->size, c->size);
+                c->head = (c->head + 1) % c->slots;
+                egg_chan_waiter *w = egg_chan_line_next(&c->sending, NULL, 0, &lost);
+                if (w != NULL) {
+                    int64_t tail = (c->head + c->count - 1) % c->slots;
+                    memcpy(c->items + (size_t)tail * c->size, w->v, c->size);
+                    egg_chan_served(w);
+                } else {
+                    c->count -= 1;
+                }
+                return 1;
+            }
+            egg_chan_waiter *w = egg_chan_line_next(&c->sending, me, mi, &lost);
+            if (lost) return 3;
+            if (w == NULL) return 0;
+            memcpy(out, w->v, c->size);
+            egg_chan_served(w);
+            return 1;
+        }
+      C
+      "egg_chan_line_close" => <<~C,
+        /* The other side closed: threads in line leave it (state 2), and
+           selects look again, staying in line until they leave. */
+        static void egg_chan_line_close(egg_chan_line *l) {
+            egg_chan_waiter *w = l->head;
+            l->head = l->tail = NULL;
+            while (w != NULL) {
+                egg_chan_waiter *next = w->next;
+                if (w->sel == NULL) {
+                    w->queued = false;
+                    w->state = 2;
+                    EGG_CHAN_WAKE(w);
+                } else {
+                    w->prev = l->tail;
+                    w->next = NULL;
+                    if (l->tail != NULL) {
+                        l->tail->next = w;
+                    } else {
+                        l->head = w;
+                    }
+                    l->tail = w;
+                    EGG_SEL_LOCK(w->sel);
+                    w->sel->fired = true;
+                    EGG_SEL_WAKE(w->sel);
+                    EGG_SEL_UNLOCK(w->sel);
+                }
+                w = next;
             }
         }
       C
@@ -1268,9 +1394,11 @@ module Egg
            clock does not move its deadline. macOS cannot set the clock of a
            condition: there it waits for a relative time. */
         static void egg_chan_waiter_init(egg_chan_waiter *w, void *v) {
-            w->next = NULL;
             w->v = v;
+            w->sel = NULL;
+            w->index = 0;
             w->state = 0;
+            w->queued = false;
         #ifdef _WIN32
             InitializeConditionVariable(&w->woken);
         #else
@@ -1290,35 +1418,26 @@ module Egg
             (void)w;
         #endif
         }
-        static void egg_chan_line_push(egg_chan_line *l, egg_chan_waiter *w) {
-            w->next = NULL;
-            if (l->tail != NULL) {
-                l->tail->next = w;
-            } else {
-                l->head = w;
-            }
-            l->tail = w;
-        }
       C
+      # With c locked: value goes to the first receiver in line that can
+      # take it, or into the ring, for me (a select, or NULL) with arm mi.
+      # 1: it went; 0: no room now; 3: me was decided meanwhile.
       "egg_chan_put" => <<~C,
-        /* With the channel locked: true if there is somewhere for a value now,
-           the first receiver in line or room in the ring. */
-        static bool egg_chan_room(egg_chan *c) {
-            return c->receiving.head != NULL || c->count < c->cap;
-        }
-        /* With room: the value goes to the first receiver in line, or into the ring. */
-        static void egg_chan_put(egg_chan *c, const void *value) {
-            egg_chan_waiter *w = egg_chan_line_pop(&c->receiving);
+        static int egg_chan_put(egg_chan *c, const void *value, egg_sel *me, int64_t mi) {
+            bool lost = false;
+            egg_chan_waiter *w = egg_chan_line_next(&c->receiving, me, mi, &lost);
+            if (lost) return 3;
             if (w != NULL) {
                 memcpy(w->v, value, c->size);
-                w->state = 1;
-                EGG_CHAN_WAKE(w);
-                return;
+                egg_chan_served(w);
+                return 1;
             }
+            if (c->count == c->cap) return 0;
+            if (me != NULL && !egg_sel_claim(me, mi)) return 3;
             int64_t tail = (c->head + c->count) % c->slots;
             memcpy(c->items + (size_t)tail * c->size, value, c->size);
             c->count += 1;
-            egg_chan_notify(c);
+            return 1;
         }
       C
       "egg_chan_new" => <<~C,
@@ -1340,7 +1459,6 @@ module Egg
             c->receivers = 1;
             c->sending.head = c->sending.tail = NULL;
             c->receiving.head = c->receiving.tail = NULL;
-            c->selects = NULL;
             c->open = true;
             return c;
         }
@@ -1382,8 +1500,7 @@ module Egg
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("send on a closed channel");
             }
-            if (egg_chan_room(c)) {
-                egg_chan_put(c, value);
+            if (egg_chan_put(c, value, NULL, 0) == 1) {
                 EGG_CHAN_UNLOCK(c);
                 return;
             }
@@ -1392,7 +1509,6 @@ module Egg
             egg_chan_waiter w;
             egg_chan_waiter_init(&w, (void *)value);
             egg_chan_line_push(&c->sending, &w);
-            if (c->cap == 0) egg_chan_notify(c);
             while (w.state == 0) EGG_CHAN_WAIT(c, &w);
             EGG_CHAN_UNLOCK(c);
             egg_chan_waiter_free(&w);
@@ -1403,12 +1519,14 @@ module Egg
         static bool egg_chan_recv(void *v, void *out) {
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
-            if (c->count > 0 || c->sending.head != NULL || c->senders == 0) return egg_chan_take(c, out);
+            int got = egg_chan_get(c, out, NULL, 0);
+            if (got == 1 || c->senders == 0) {
+                EGG_CHAN_UNLOCK(c);
+                return got == 1;
+            }
             egg_chan_waiter w;
             egg_chan_waiter_init(&w, out);
             egg_chan_line_push(&c->receiving, &w);
-            /* A select sending with cap 0 may now hand it a value. */
-            if (c->cap == 0) egg_chan_notify(c);
             while (w.state == 0) EGG_CHAN_WAIT(c, &w);
             EGG_CHAN_UNLOCK(c);
             egg_chan_waiter_free(&w);
@@ -1417,20 +1535,6 @@ module Egg
       C
       # Waits up to ms milliseconds; 0 takes a value only if one is there.
       "egg_chan_recv_for" => <<~C,
-        /* Takes w out of line (a recv_timeout whose time ran out). */
-        static void egg_chan_line_drop(egg_chan_line *l, egg_chan_waiter *w) {
-            egg_chan_waiter *prev = NULL;
-            for (egg_chan_waiter *x = l->head; x != NULL; prev = x, x = x->next) {
-                if (x != w) continue;
-                if (prev != NULL) {
-                    prev->next = w->next;
-                } else {
-                    l->head = w->next;
-                }
-                if (l->tail == w) l->tail = prev;
-                return;
-            }
-        }
         static bool egg_chan_recv_for(void *v, void *out, int64_t ms) {
             if (ms < 0) egg_panic("negative timeout");
             egg_chan *c = (egg_chan *)v;
@@ -1447,11 +1551,14 @@ module Egg
             }
         #endif
             EGG_CHAN_LOCK(c);
-            if (c->count > 0 || c->sending.head != NULL || c->senders == 0 || ms == 0) return egg_chan_take(c, out);
+            int got = egg_chan_get(c, out, NULL, 0);
+            if (got == 1 || c->senders == 0 || ms == 0) {
+                EGG_CHAN_UNLOCK(c);
+                return got == 1;
+            }
             egg_chan_waiter w;
             egg_chan_waiter_init(&w, out);
             egg_chan_line_push(&c->receiving, &w);
-            if (c->cap == 0) egg_chan_notify(c);
             while (w.state == 0) {
         #ifdef _WIN32
                 ULONGLONG now = GetTickCount64();
@@ -1475,38 +1582,10 @@ module Egg
         #endif
             }
             /* Still in line when time ran out: no sender can hand it anything now. */
-            if (w.state == 0) egg_chan_line_drop(&c->receiving, &w);
+            egg_chan_line_drop(&c->receiving, &w);
             EGG_CHAN_UNLOCK(c);
             egg_chan_waiter_free(&w);
             return w.state == 1;
-        }
-      C
-      # The next value into out, if there is one, and unlocks the channel.
-      # The first sender in line moves into the room it leaves, or with cap
-      # 0 its value is the one taken.
-      "egg_chan_take" => <<~C,
-        static bool egg_chan_take(egg_chan *c, void *out) {
-            egg_chan_waiter *w = egg_chan_line_pop(&c->sending);
-            bool got = c->count > 0 || w != NULL;
-            if (c->count > 0) {
-                memcpy(out, c->items + (size_t)c->head * c->size, c->size);
-                c->head = (c->head + 1) % c->slots;
-                if (w != NULL) {
-                    int64_t tail = (c->head + c->count - 1) % c->slots;
-                    memcpy(c->items + (size_t)tail * c->size, w->v, c->size);
-                } else {
-                    c->count -= 1;
-                }
-            } else if (w != NULL) {
-                memcpy(out, w->v, c->size);
-            }
-            if (w != NULL) {
-                w->state = 1;
-                EGG_CHAN_WAKE(w);
-            }
-            if (got) egg_chan_notify(c);
-            EGG_CHAN_UNLOCK(c);
-            return got;
         }
       C
       "egg_chan_tx_close" => <<~C,
@@ -1515,10 +1594,7 @@ module Egg
             EGG_CHAN_LOCK(c);
             c->senders -= 1;
             bool last = c->senders == 0 && !c->open;
-            if (c->senders == 0) {
-                egg_chan_line_close(&c->receiving);
-                egg_chan_notify(c);
-            }
+            if (c->senders == 0) egg_chan_line_close(&c->receiving);
             EGG_CHAN_UNLOCK(c);
             if (last) egg_chan_free(c);
         }
@@ -1533,7 +1609,10 @@ module Egg
                 EGG_CHAN_UNLOCK(c);
                 return;
             }
-            if (owned && (c->count > 0 || c->sending.head != NULL)) {
+            /* A thread blocked in send has given its value; a select has not. */
+            bool left = c->count > 0;
+            for (egg_chan_waiter *w = c->sending.head; w != NULL && !left; w = w->next) left = w->sel == NULL;
+            if (owned && left) {
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("a channel closed with values left in it");
             }
@@ -1541,7 +1620,6 @@ module Egg
             c->open = false;
             bool last = c->senders == 0;
             egg_chan_line_close(&c->sending);
-            egg_chan_notify(c);
             EGG_CHAN_UNLOCK(c);
             if (last) egg_chan_free(c);
         }
@@ -1549,101 +1627,43 @@ module Egg
       # select: arms[i] receives into its node's v, or sends what v points
       # at. Returns the arm that went, -1 when ms (timed) passed first, -2
       # when every arm receives and each channel is closed and empty
-      # (closable). Lock order: a channel, then selects by address.
+      # (closable). Waiting, each arm is in its channel's line.
       "egg_select" => <<~C,
         typedef struct {
             egg_chan *c;
-            egg_sel_node node;
+            egg_chan_waiter node;
+            bool send;
             int64_t pick;
         } egg_sel_arm;
-        /* Decides s's outcome, unless something else already has. */
-        static bool egg_sel_claim(egg_sel *s, int64_t went) {
-            EGG_SEL_LOCK(s);
-            bool ok = !s->done;
-            if (ok) {
-                s->done = true;
-                s->went = went;
-            }
-            EGG_SEL_UNLOCK(s);
-            return ok;
-        }
-        /* With cap 0, hands v straight to a select receiving on c: both are
-           decided at once. 1: given; 3: s was decided meanwhile; 0: none. */
-        static int egg_sel_give(egg_chan *c, egg_sel *s, int64_t i, const void *v) {
-            for (egg_sel_node *n = c->selects; n != NULL; n = n->next) {
-                egg_sel *t = n->s;
-                if (n->send || t == s) continue;
-                egg_sel *first = (uintptr_t)s < (uintptr_t)t ? s : t;
-                egg_sel *second = first == s ? t : s;
-                EGG_SEL_LOCK(first);
-                EGG_SEL_LOCK(second);
-                int r = s->done ? 3 : 0;
-                if (r == 0 && !t->done) {
-                    s->done = true;
-                    s->went = i;
-                    t->done = true;
-                    t->went = n->index;
-                    memcpy(n->v, v, c->size);
-                    t->fired = true;
-                    EGG_SEL_WAKE(t);
-                    r = 1;
-                }
-                EGG_SEL_UNLOCK(second);
-                EGG_SEL_UNLOCK(first);
-                if (r != 0) return r;
-            }
-            return 0;
-        }
         /* 1: arm i went; 2: it receives from a closed, empty channel; 3: s was
            decided by another thread; 0: not now. */
         static int egg_sel_try(egg_sel_arm *a, egg_sel *s) {
             egg_chan *c = a->c;
             int64_t i = a->node.index;
             EGG_CHAN_LOCK(c);
-            if (!a->node.send) {
-                if (c->count > 0 || c->sending.head != NULL) {
-                    if (!egg_sel_claim(s, i)) {
-                        EGG_CHAN_UNLOCK(c);
-                        return 3;
-                    }
-                    egg_chan_take(c, a->node.v);
-                    return 1;
-                }
-                bool closed = c->senders == 0;
+            if (!a->send) {
+                int r = egg_chan_get(c, a->node.v, s, i);
+                if (r == 0 && c->senders == 0) r = 2;
                 EGG_CHAN_UNLOCK(c);
-                return closed ? 2 : 0;
+                return r;
             }
             if (!c->open) {
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("send on a closed channel");
             }
-            /* With cap 0, room is a receiver waiting in recv. */
-            if (!egg_chan_room(c)) {
-                int r = c->cap == 0 ? egg_sel_give(c, s, i, a->node.v) : 0;
-                EGG_CHAN_UNLOCK(c);
-                return r;
-            }
-            if (!egg_sel_claim(s, i)) {
-                EGG_CHAN_UNLOCK(c);
-                return 3;
-            }
-            egg_chan_put(c, a->node.v);
+            int r = egg_chan_put(c, a->node.v, s, i);
             EGG_CHAN_UNLOCK(c);
-            return 1;
+            return r;
         }
         static void egg_sel_enter(egg_sel_arm *arms, int64_t n, bool on) {
             for (int64_t i = 0; i < n; i++) {
                 egg_chan *c = arms[i].c;
+                egg_chan_line *l = arms[i].send ? &c->sending : &c->receiving;
                 EGG_CHAN_LOCK(c);
                 if (on) {
-                    arms[i].node.next = c->selects;
-                    c->selects = &arms[i].node;
-                    /* A select sending with cap 0 may now hand it a value. */
-                    if (!arms[i].node.send && c->cap == 0) egg_chan_notify(c);
+                    egg_chan_line_push(l, &arms[i].node);
                 } else {
-                    egg_sel_node **p = &c->selects;
-                    while (*p != &arms[i].node) p = &(*p)->next;
-                    *p = arms[i].node.next;
+                    egg_chan_line_drop(l, &arms[i].node);
                 }
                 EGG_CHAN_UNLOCK(c);
             }
@@ -1685,7 +1705,8 @@ module Egg
             /* The arms are tried in a random order, so that each one ready
                is as likely to go as any other. */
             for (int64_t i = 0; i < n; i++) {
-                arms[i].node.s = &s;
+                arms[i].node.sel = &s;
+                arms[i].node.queued = false;
                 arms[i].node.index = i;
                 arms[i].pick = i;
             }
@@ -1700,7 +1721,8 @@ module Egg
             }
             bool registered = false;
             for (;;) {
-                /* A change from here on makes the wait below return at once. */
+                /* A change from here on makes the wait below return at once; once
+                   another thread has served an arm, done says so even if fired was reset. */
                 EGG_SEL_LOCK(&s);
                 s.fired = false;
                 EGG_SEL_UNLOCK(&s);
@@ -1726,7 +1748,7 @@ module Egg
                 }
                 bool late = false;
                 EGG_SEL_LOCK(&s);
-                while (!s.fired && !late) {
+                while (!s.fired && !s.done && !late) {
                     if (!timed) {
         #ifdef _WIN32
                         SleepConditionVariableCS(&s.changed, &s.lock, INFINITE);
@@ -2861,9 +2883,9 @@ module Egg
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
-                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_wait" => ["egg_chan"], "egg_chan_put" => ["egg_chan"], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_recv" => %w[egg_chan_take egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_take egg_chan_wait], "egg_chan_take" => ["egg_chan"],
-                    "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free],
-                    "egg_select" => %w[egg_chan_take egg_chan_put], "egg_net_recv" => ["egg_net_base"],
+                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_queue" => ["egg_chan"], "egg_chan_line" => %w[egg_chan egg_chan_queue], "egg_chan_get" => ["egg_chan_line"], "egg_chan_put" => ["egg_chan_line"], "egg_chan_line_close" => ["egg_chan"], "egg_chan_wait" => %w[egg_chan egg_chan_queue], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_recv" => %w[egg_chan_get egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_get egg_chan_wait],
+                    "egg_chan_tx_close" => %w[egg_chan_line_close egg_chan_free], "egg_chan_rx_close" => %w[egg_chan_line_close egg_chan_free],
+                    "egg_select" => %w[egg_chan_get egg_chan_put egg_chan_queue], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
                     "egg_print_addr" => ["egg_net_base"], "egg_net_resolve" => ["egg_net_addrinfo"],
@@ -2894,7 +2916,7 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
-                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take
+                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_queue egg_chan_line egg_chan_get egg_chan_line_close
                   egg_chan_tx_close
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -3808,14 +3830,14 @@ module Egg
           v = tmp
           line("#{c_type(elem)} #{v};")
           took[arm] = [entries.length, v, elem]
-          entries << "{ .c = (egg_chan *)#{c}.c, .node = { .v = &#{v}, .send = false } }"
+          entries << "{ .c = (egg_chan *)#{c}.c, .node = { .v = &#{v} }, .send = false }"
         when :send
           call = arm.call
           elem = @types[call.obj.ty].elem
           c = hoist(expr(call.obj), call.obj.ty)
           v = hoist(coerce(expr(call.args[0]), call.args[0].ty, elem), elem)
           took[arm] = [entries.length]
-          entries << "{ .c = (egg_chan *)#{c}.c, .node = { .v = &#{v}, .send = true } }"
+          entries << "{ .c = (egg_chan *)#{c}.c, .node = { .v = &#{v} }, .send = true }"
         when :timeout
           ms = hoist(expr(arm.value), "i64")
         end
