@@ -14,7 +14,8 @@
 # manager, clutch) makes `@import("http")` DIR/http.egg and
 # `@import("http/client")` DIR/client.egg, with DIR as the package's root,
 # the way std is lib/std. The names come from the command line only, so
-# eggc reads no manifest.
+# eggc reads no manifest. The names hold for the whole program: a package
+# imports the packages it needs from the same list.
 #
 # Every module gets a prefix: "" for the root file, the file's base name
 # for the others ("m", or "m_2" if two files share a name). The top-level
@@ -93,6 +94,11 @@ module Egg
       else
         abs, root, file = module_path(mod, imp)
       end
+      # A file under a package's directory belongs to that package, however
+      # it was reached: its root is the deepest package (or std) directory
+      # holding it, so a package nested in another one's directory keeps
+      # its own boundary.
+      root = owning_root(abs, root)
       found = @by_path[abs]
       return found unless found.nil?
       unless File.file?(abs)
@@ -165,6 +171,17 @@ module Egg
       rest = parts.length == 1 ? [name] : parts.drop(1)
       abs = File.join(dir, *rest) + ".egg"
       [abs, dir, abs]
+    end
+
+    # root, or a module directory under it that holds abs.
+    def owning_root(abs, root)
+      best = root
+      ([STD_ROOT] + @pkgs.values).each do |dir|
+        if inside?(abs, dir) && dir.length > best.length && inside?(dir, best)
+          best = dir
+        end
+      end
+      best
     end
 
     def inside?(abs, root)

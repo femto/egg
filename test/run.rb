@@ -1470,6 +1470,18 @@ def check_packages(dir)
   r = Egg.compile_to_c(src, File.join(pkg, "app", "x.egg"), pkgs: { "escape" => File.join(pkg, "escape") })
   d = r.diagnostics.first
   report(d && d.code == "E129" && d.message.include?("outside this module's root"), "a package's file import stays in its directory", d&.to_text("x.egg"))
+  # outer's directory holds the package inner: inner's files keep inner's
+  # root even when outer reaches them by a file import.
+  nest = File.join(dir, "nest")
+  FileUtils.mkdir_p(File.join(nest, "inner"))
+  File.write(File.join(nest, "secret.egg"), "fn f() void {\n}\n")
+  File.write(File.join(nest, "outer.egg"), "const i = @import(\"inner/inner.egg\")\n")
+  File.write(File.join(nest, "inner", "inner.egg"), "const s = @import(\"../secret.egg\")\n")
+  src = "const o = @import(\"outer\")\nfn main() void {\n}\n"
+  r = Egg.compile_to_c(src, File.join(dir, "x.egg"), pkgs: { "outer" => nest, "inner" => File.join(nest, "inner") })
+  d = r.diagnostics.first
+  ok = d && d.code == "E129" && d.message.include?("outside this module's root (#{File.join(nest, "inner")})")
+  report(ok, "a package inside another's directory keeps its own root", d&.to_text("x.egg"))
   [
     [["--pkg", "std=#{pkg}"], "cannot name a package std"],
     [["--pkg", "greet=#{File.join(pkg, "nope")}"], "no such directory"],
