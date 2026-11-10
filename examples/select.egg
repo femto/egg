@@ -1,0 +1,89 @@
+// select waits on several channels at once and runs the one arm that can
+// go: a receive (rx => |v|), a send (tx.send(v)), or timeout(ms) when none
+// could in time. A closed channel is skipped; closed runs once all are.
+// expect: tick
+// expect: 1
+// expect: sent 1
+// expect: 7
+// expect: egg
+// expect: done
+uses alloc, io, thread
+
+fn numbers(sink tx: Sender(i64)) void {
+    defer tx.close()
+    tx.send(7)
+}
+
+fn words(sink tx: Sender(Buf(u8)), a: Allocator) void {
+    defer tx.close()
+    tx.send(a.concat("e", "gg"))
+}
+
+fn take(io: Io, sink out: Receiver(i64)) void {
+    defer out.close()
+    while (out.recv()) |v| {
+        io.print(v)
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const nums = threads.channel(i64, 0)
+    defer nums.close()
+    const strs = threads.channel(Buf(u8), 1)
+    defer strs.close()
+    const n = nums.sender()
+    const s = strs.sender()
+    select {
+        nums => |v| {
+            io.print(v)
+        }
+        strs => |w| {
+            a.free(w)
+        }
+        timeout(10) => {
+            io.print("tick")
+        }
+        closed => {
+            io.print("closed")
+        }
+    }
+    const t1 = threads.spawn(words, s, a)
+    t1.join()
+    const t2 = threads.spawn(numbers, n)
+    var got = 0
+    var text: Buf(u8) = .empty
+    defer a.free(text)
+    while (true) {
+        select {
+            nums => |v| {
+                got = got + v
+            }
+            strs => |w| {
+                a.free(text)
+                text = w
+            }
+            closed => {
+                break
+            }
+        }
+    }
+    t2.join()
+    const out = threads.channel(i64, 0)
+    const tx = out.sender()
+    const t3 = threads.spawn(take, io, out.clone())
+    out.close()
+    var sent = "nobody took it"
+    select {
+        tx.send(1) => {
+            sent = "sent 1"
+        }
+        timeout(10000) => {
+        }
+    }
+    tx.close()
+    t3.join()
+    io.print(sent)
+    io.print(got)
+    io.print(text)
+    io.print("done")
+}

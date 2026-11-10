@@ -76,7 +76,7 @@
       "patterns": [
         {
           "name": "keyword.control.egg",
-          "match": "\\b(if|else|while|for|switch|return|break|continue|try|catch|defer|errdefer|orelse|unreachable)\\b"
+          "match": "\\b(if|else|while|for|switch|select|return|break|continue|try|catch|defer|errdefer|orelse|unreachable)\\b"
         },
         {
           "name": "storage.modifier.egg",

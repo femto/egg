@@ -314,6 +314,7 @@ module Egg
       in While[cond:] then cond
       in For[iter:] then iter
       in Switch[subject:] then subject
+      in Select[arms:] then arms.flat_map { |a| [a.chan, a.call, a.value].compact }
       in Defer then nil
       else s
       end
@@ -559,6 +560,28 @@ module Egg
           @st
         end
         merge(ends, line, col, "this switch")
+      in Select[arms:, line:, col:]
+        # Every head is evaluated before waiting; a sent value moves only
+        # in its own arm, so the other arms still have it.
+        arms.each do |arm|
+          walk(arm.chan, true) unless arm.chan.nil?
+          walk(arm.call.obj, true) unless arm.call.nil?
+          walk(arm.value) unless arm.value.nil?
+        end
+        start = @st
+        ends = arms.map do |arm|
+          @st = dup(start)
+          pre = nil
+          if arm.kind == :send
+            pre = -> { walk(arm.call) }
+          elsif arm.kind == :recv && !arm.capture.nil?
+            elem = @types[arm.chan.ty]&.elem
+            pre = -> { declare(arm.capture, :local, arm.line, arm.col, elem) } if !elem.nil? && owned?(elem)
+          end
+          walk_block(arm.body, pre)
+          @st
+        end
+        merge(ends, line, col, "this select")
       in Break[line:, col:]
         loop_exit(line, col, "break")
       in Continue[line:, col:]

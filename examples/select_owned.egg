@@ -1,0 +1,42 @@
+// An owned value in a send arm moves only if that arm runs; when another
+// arm runs instead, it is still the sender's to give away.
+// expect: kept 3
+// expect: sent 3
+uses alloc, io, thread
+
+fn offer(io: Io, a: Allocator, tx: Sender(Buf(u8)), sink b: Buf(u8)) void {
+    select {
+        tx.send(b) => {
+            io.print("sent anyway")
+        }
+        timeout(0) => {
+            io.print("kept ", @len(b))
+            a.free(b)
+        }
+    }
+}
+
+// Only the send can go here, so it always goes.
+fn hand(io: Io, tx: Sender(Buf(u8)), sink b: Buf(u8)) void {
+    select {
+        tx.send(b) => {
+            io.print("sent ", 3)
+        }
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 1)
+    defer rx.close()
+    const tx = rx.sender()
+    defer tx.close()
+    tx.send(a.alloc(1, 0))
+    offer(io, a, tx, a.alloc(3, 0))
+    if (rx.recv()) |b| {
+        a.free(b)
+    }
+    hand(io, tx, a.alloc(3, 0))
+    if (rx.recv()) |b| {
+        a.free(b)
+    }
+}

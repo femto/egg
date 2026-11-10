@@ -1490,6 +1490,8 @@ module Egg
         @loop_depth -= 1
       in Switch[subject:, arms:, line:, col:]
         check_switch(stmt, subject, arms, line, col)
+      in Select[arms:, line:, col:]
+        check_select(arms, line, col)
       in Break[line:, col:]
         err("E126", "'break' outside a loop", line, col) if @loop_depth.zero?
       in Continue[line:, col:]
@@ -1615,6 +1617,68 @@ module Egg
       end
       stmt_info = { kind: info.kind, members: members }
       stmt.subject.info[:switch] = stmt_info
+    end
+
+    # select: waits until one arm can go, and runs it. Each arm head is
+    # evaluated once, before waiting.
+    def check_select(arms, line, col)
+      @current.direct["thread"] ||= [line, col, "select"]
+      count = Hash.new(0)
+      arms.each do |arm|
+        count[arm.kind] += 1
+        heads = [arm.chan, arm.call, arm.value].compact
+        if heads.any? { |h| contains_try?(h) }
+          err("E153", "a select arm's head is evaluated before waiting, so it cannot leave with try, orelse return or catch return", arm.line, arm.col)
+        end
+        payload = nil
+        case arm.kind
+        when :recv
+          t = check_expr(arm.chan)
+          if t != "error" && !t.start_with?("Receiver(")
+            err("E153", "a select arm receives from a Receiver(T), or sends with tx.send(v); found #{t}", arm.chan.line, arm.chan.col)
+          elsif t != "error"
+            payload = @types[t].elem
+            if arm.capture.nil? && owned?(payload)
+              err("E153", "this arm receives a #{payload}, which must be given away: name it with => |v|", arm.line, arm.col)
+            end
+          end
+        when :send
+          call = arm.call
+          check_expr(call)
+          t = call.obj.ty.to_s
+          if t != "error" && !t.start_with?("Sender(")
+            err("E153", "a select arm sends with tx.send(v) on a Sender(T); found #{t}", call.line, call.col)
+          elsif t.start_with?("Sender(") && call.args.length == 1 && owned?(@types[t].elem) && !path_place?(call.args[0])
+            v = call.args[0]
+            err("E153", "a select arm sends an owned value only from a variable or a field, which keeps it when another arm runs", v.line, v.col)
+          end
+        when :timeout
+          expect_type("i64", check_expr(arm.value, "i64"), arm.value)
+        end
+        @scopes << {}
+        declare(arm.capture, VarInfo.new(payload || "error", false, false, false, arm.line, arm.col, false, false)) unless arm.capture.nil?
+        check_block(arm.body)
+        close_scope(@scopes.pop)
+      end
+      count.each do |k, n|
+        err("E153", "a select has more than one #{k} arm", line, col) if %i[timeout closed].include?(k) && n > 1
+      end
+      if count[:recv] + count[:send] == 0
+        err("E153", "a select needs an arm that receives or sends", line, col)
+      elsif count[:send] == 0 && count[:closed] == 0
+        err("E153", "a select of only receiving arms needs a `closed => { ... }` arm, for when every channel in it is closed", line, col)
+      elsif count[:send] > 0 && count[:closed] > 0
+        err("E153", "a select with a sending arm can never run its closed arm: a send goes out or panics", line, col)
+      end
+    end
+
+    # x, x.f, x.f.g: a place that stays when it is not moved.
+    def path_place?(e)
+      case e
+      in Var then true
+      in Field[obj:] then path_place?(obj)
+      else false
+      end
     end
 
     # switch over an error (e in catch |e|): arms name errors; since error
@@ -3506,6 +3570,7 @@ module Egg
       in ExprStmt[expr: Builtin[name: "compileError"]] then true
       in If[cond: BoolLit[value: true], then_body:, else_body: nil] then block_leaves?(then_body)
       in Switch[arms:] then arms.all? { |a| block_leaves?(a.body) }
+      in Select[arms:] then arms.all? { |a| block_leaves?(a.body) }
       in If[then_body:, else_body:]
         case else_body
         in nil then false
@@ -3527,6 +3592,7 @@ module Egg
         in While[cond:, body:] then contains_try?(cond) || block_has_return?(body)
         in For[iter:, body:] then contains_try?(iter) || block_has_return?(body)
         in Switch[subject:, arms:] then contains_try?(subject) || arms.any? { |a| block_jumps?(a.body) }
+        in Select[arms:] then arms.any? { |a| block_jumps?(a.body) }
         in VarDecl[value:] then contains_try?(value)
         in Assign[value:] then contains_try?(value)
         in ExprStmt[expr:] then contains_try?(expr)
@@ -3545,6 +3611,7 @@ module Egg
         in While[cond:, body:] then contains_try?(cond, true) || block_has_return?(body)
         in For[iter:, body:] then contains_try?(iter, true) || block_has_return?(body)
         in Switch[subject:, arms:] then contains_try?(subject, true) || arms.any? { |a| block_has_return?(a.body) }
+        in Select[arms:] then arms.any? { |a| block_has_return?(a.body) }
         in VarDecl[value:] then contains_try?(value, true)
         in Assign[value:] then contains_try?(value, true)
         in ExprStmt[expr:] then contains_try?(expr, true)
@@ -3937,6 +4004,7 @@ module Egg
       in ExprStmt[expr: Builtin[name: "compileError"]] then true
       in If[cond: BoolLit[value: true], then_body:, else_body: nil] then block_returns?(then_body)
       in Switch[arms:] then arms.all? { |a| block_returns?(a.body) }
+      in Select[arms:] then arms.all? { |a| block_returns?(a.body) }
       in If[then_body:, else_body:]
         case else_body
         in nil then false

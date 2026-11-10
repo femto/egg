@@ -68,6 +68,11 @@ module Egg
   Switch    = Struct.new(:subject, :arms, :line, :col)
   # names: member names, nil for `else`; capture: payload name or nil
   SwitchArm = Struct.new(:names, :capture, :body, :line, :col)
+  # select { rx => |v| { } tx.send(v) => { } timeout(ms) => { } closed => { } }
+  Select    = Struct.new(:arms, :line, :col)
+  # kind: :recv (chan: the Receiver), :send (call: the tx.send(v) MethodCall),
+  # :timeout (value: the milliseconds) or :closed; capture: |v| of a :recv
+  SelectArm = Struct.new(:kind, :chan, :call, :value, :capture, :body, :line, :col)
   Break    = Struct.new(:line, :col)
   Continue = Struct.new(:line, :col)
   Return   = Struct.new(:value, :line, :col)                              # value may be nil

@@ -2028,6 +2028,83 @@ fn main(io: Io, threads: Threads) void {
 }
 ```
 
+**Select.** `select` waits on several channels at once, then runs one arm:
+
+```
+select {
+    jobs => |j| { ... }       // received j from the Receiver jobs
+    done.send(n) => { ... }   // n went out on the Sender done
+    timeout(100) => { ... }   // nothing could go within 100 ms
+    closed => { ... }         // every channel received from is closed
+}
+```
+
+It runs once, like `switch`: a loop goes around it, and `break` and
+`continue` in an arm act on that loop. First the head of every arm is
+evaluated, in order (each channel, each value to send, the milliseconds),
+then it waits until some arm can go: a receive when a value is there, a
+send when there is room. With n of 0 a send needs a receiver waiting: to
+another select waiting to receive, the value is handed over at once; to a
+thread waiting in `recv`, the select goes on once it has taken the value, as
+with `send`. When several arms can go, each is as likely as any other (they are
+tried in a random order). A channel whose
+senders have all closed and that is empty is skipped; once every channel it
+receives from is like that, the `closed` arm runs. A select of only receiving
+arms must have one, so a loop around it ends; beside a sending arm it could
+never run, since a send goes out or panics (`send on a closed channel`). Without
+`timeout`, a select waits for as long as it takes; `timeout(ms)` follows the
+rules of `recv_timeout` (0 does not wait; a negative ms panics).
+
+A receiving arm whose values are owned must name the value (`=> |v|`) and give
+it away in the arm. A sent value moves only if its arm runs: in the other arms
+it is still yours, so an owned one is sent from a variable or a field, and the
+other arms give it away themselves (E134 otherwise). A head cannot `try`
+(E153). Inside `select`'s braces, `timeout(...)` and `closed` name these arms.
+
+```egg
+// expect: 7
+// expect: kept 2
+uses alloc, io, thread
+
+fn give(sink tx: Sender(i64)) void {
+    defer tx.close()
+    tx.send(7)
+}
+
+fn offer(io: Io, a: Allocator, tx: Sender(Buf(u8)), sink b: Buf(u8)) void {
+    select {
+        tx.send(b) => {
+        }
+        timeout(0) => {
+            io.print("kept ", @len(b))
+            a.free(b)
+        }
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const nums = threads.channel(i64, 0)
+    defer nums.close()
+    const t = threads.spawn(give, nums.sender())
+    while (true) {
+        select {
+            nums => |n| {
+                io.print(n)
+            }
+            closed => {
+                break
+            }
+        }
+    }
+    t.join()
+    const full = threads.channel(Buf(u8), 0)
+    defer full.close()
+    const tx = full.sender()
+    defer tx.close()
+    offer(io, a, tx, a.alloc(2, 0))
+}
+```
+
 Capability values cannot be created or compared. `main` receives them
 from the runtime, and other code gets them as arguments; they may be
 stored in locals and struct fields like any value.

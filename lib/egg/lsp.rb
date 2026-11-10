@@ -288,6 +288,17 @@ module Egg
             walk_block(arm.body)
             @scopes.pop
           end
+        in Select[arms:]
+          arms.each { |arm| [arm.chan, arm.call, arm.value].compact.each { |h| walk_expr(h) } }
+          arms.each do |arm|
+            @scopes << {}
+            unless arm.capture.nil?
+              tok = binding_tokens(arm.line, arm.col)[0]
+              declare(Decl.new(:local, arm.capture, tok.line, tok.col, "#{arm.capture}  (received)", nil, nil))
+            end
+            walk_block(arm.body)
+            @scopes.pop
+          end
         in If[cond:, then_body:, else_body:, capture:, line:, col:]
           walk_expr(cond)
           @scopes << {}

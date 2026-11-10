@@ -1,0 +1,85 @@
+// Many values through selects on both sides: two threads hand values over
+// 0-capacity channels with selects of their own, another sends plainly into
+// a small one; a relay selects among all three, giving up now and then,
+// and passes each on. None is lost: a select handing a value over with
+// capacity 0 gives it to a receiver that takes it.
+// expect: 3000 values, total 1501000
+uses io, thread
+
+fn hand_over(sink tx: Sender(i64)) void {
+    defer tx.close()
+    var i = 1
+    while (i <= 1000) {
+        select {
+            tx.send(i) => {
+                i = i + 1
+            }
+            timeout(1) => {
+            }
+        }
+    }
+}
+
+fn plain(sink tx: Sender(i64)) void {
+    defer tx.close()
+    var i = 0
+    while (i < 1000) {
+        tx.send(500)
+        i = i + 1
+    }
+}
+
+fn relay(sink a: Receiver(i64), sink b: Receiver(i64), sink c: Receiver(i64), sink out: Sender(i64)) void {
+    defer a.close()
+    defer c.close()
+    defer b.close()
+    defer out.close()
+    while (true) {
+        select {
+            a => |v| {
+                out.send(v)
+            }
+            b => |v| {
+                out.send(v)
+            }
+            c => |v| {
+                out.send(v)
+            }
+            timeout(1) => {
+            }
+            closed => {
+                break
+            }
+        }
+    }
+}
+
+fn main(io: Io, threads: Threads) void {
+    const a = threads.channel(i64, 0)
+    const b = threads.channel(i64, 3)
+    const c = threads.channel(i64, 0)
+    const out = threads.channel(i64, 0)
+    defer out.close()
+    const t1 = threads.spawn(hand_over, a.sender())
+    const t2 = threads.spawn(plain, b.sender())
+    const t4 = threads.spawn(hand_over, c.sender())
+    const t3 = threads.spawn(relay, a, b, c, out.sender())
+    var count = 0
+    var total = 0
+    while (true) {
+        select {
+            out => |v| {
+                count = count + 1
+                total = total + v
+            }
+            closed => {
+                break
+            }
+        }
+    }
+    t1.join()
+    t2.join()
+    t3.join()
+    t4.join()
+    io.print(count, " values, total ", total)
+}

@@ -398,6 +398,8 @@ module Egg
         parse_for
       elsif kw?("switch")
         parse_switch
+      elsif kw?("select")
+        parse_select
       elsif kw?("break")
         advance
         Break.new(t.line, t.col)
@@ -547,6 +549,57 @@ module Egg
       end
       expect_op("}")
       Switch.new(subject, arms, t.line, t.col)
+    end
+
+    # select {
+    #     rx => |v| { ... }
+    #     tx.send(v) => { ... }
+    #     timeout(ms) => { ... }
+    #     closed => { ... }
+    # }
+    # In an arm's place, `closed` and `timeout(...)` name those arms.
+    def parse_select
+      t = expect_kw("select")
+      expect_op("{")
+      arms = []
+      skip_nl
+      until op?("}")
+        at = cur
+        arm = SelectArm.new(:recv, nil, nil, nil, nil, nil, at.line, at.col)
+        if cur.kind == :ident && cur.text == "closed" && @tokens[@pos + 1]&.text == "=>"
+          advance
+          arm.kind = :closed
+        elsif cur.kind == :ident && cur.text == "timeout" && @tokens[@pos + 1]&.text == "("
+          advance
+          expect_op("(")
+          arm.kind = :timeout
+          arm.value = parse_expr
+          expect_op(")")
+        else
+          e = parse_expr
+          if e.is_a?(MethodCall) && e.name == "send"
+            arm.kind = :send
+            arm.call = e
+          else
+            arm.chan = e
+          end
+        end
+        expect_op("=>")
+        if op?("|")
+          advance
+          name = expect(:ident, "name for the value")
+          error_at(name, "only a receiving arm has a value to capture") unless arm.kind == :recv
+          error_at(name, "a capture needs a name, to use the value; leave it out to drop a plain value") if name.text == "_"
+          arm.capture = name.text
+          expect_op("|")
+        end
+        arm.body = parse_block
+        arms << arm
+        advance if op?(",")
+        skip_nl
+      end
+      expect_op("}")
+      Select.new(arms, t.line, t.col)
     end
 
     # ---- expressions --------------------------------------------------
