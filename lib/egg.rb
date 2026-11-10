@@ -28,8 +28,9 @@ module Egg
   # current directory when path is nil), type-check it and check its
   # capabilities and who owns each buffer. Raises CompileError on a lexing, parsing or import error.
   # root: src already parsed, for tools that read the annotated AST.
-  def self.check(src, path = nil, root = nil)
-    program = Loader.new(src, path, root).load
+  # pkgs: package name -> directory, as eggc's --pkg gives them.
+  def self.check(src, path = nil, root = nil, pkgs = {})
+    program = Loader.new(src, path, root, pkgs).load
     checker = TypeChecker.new(program)
     diags = checker.check
     caps = CapChecker.new(checker)
@@ -40,8 +41,8 @@ module Egg
 
   # With debug, the C carries #line directives pointing at the .egg files
   # (for debug builds); it needs the path, and is ignored without one.
-  def self.compile_to_c(src, path = nil, debug: false)
-    r = check(src, path)
+  def self.compile_to_c(src, path = nil, debug: false, pkgs: {})
+    r = check(src, path, nil, pkgs)
     return CompileResult.new(nil, r.diagnostics) unless r.diagnostics.empty?
     gen = CodegenC.new(r.program, r.checker, debug && !path.nil? ? File.expand_path(path) : nil)
     c = gen.generate

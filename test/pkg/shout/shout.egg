@@ -1,0 +1,4 @@
+// The package shout, imported by greet.
+fn loud() str {
+    return "HEY"
+}

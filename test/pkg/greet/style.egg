@@ -1,0 +1,12 @@
+// A part of greet: @import("greet/style"), or "style.egg" inside greet.
+const Mark = enum {
+    bang
+    dot
+}
+
+fn end(m: Mark) str {
+    if (m == Mark.bang) {
+        return "!"
+    }
+    return "."
+}

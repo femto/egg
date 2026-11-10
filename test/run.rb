@@ -20,6 +20,8 @@
 #                      installed.
 # test/link/        -- `link` and eggc's -l/-L against a C library built
 #                      here (linktest.c).
+# test/pkg/         -- packages given with eggc --pkg NAME=DIR: app/ uses
+#                      greet/ and shout/ (escape/ must stay in its root).
 # eggc lsp          -- the language server answers definition, hover,
 #                      outline and diagnostics requests. EGGC=path tests
 #                      another eggc, such as a Spinel-built one.
@@ -66,8 +68,8 @@ end
 # path: the file, so imports resolve (nil for a spec block). With debug,
 # build in debug mode and also check the #line directives. lib_dirs: where
 # the C compiler looks for the libraries the program links.
-def check_program(name, src, dir, path = nil, debug: false, lib_dirs: [])
-  result = Egg.compile_to_c(src, path, debug: debug)
+def check_program(name, src, dir, path = nil, debug: false, lib_dirs: [], pkgs: {})
+  result = Egg.compile_to_c(src, path, debug: debug, pkgs: pkgs)
   unless result.diagnostics.empty?
     return report(false, name, result.diagnostics.map { |d| d.to_text(name) }.join("\n"))
   end
@@ -1449,6 +1451,38 @@ def check_link(dir)
   report(!st.success?, "eggc run without -l fails to link", "status #{st.exitstatus}")
 end
 
+# Packages through eggc --pkg: a package's entry and its parts, a package
+# importing another, its root, and the flag's mistakes.
+def check_packages(dir)
+  pkg = File.join(ROOT, "test", "pkg")
+  main = File.join(pkg, "app", "main.egg")
+  pkgs = { "greet" => File.join(pkg, "greet"), "shout" => File.join(pkg, "shout") }
+  check_program("pkg/app/main.egg", File.read(main), dir, main, pkgs: pkgs)
+  check_program("pkg/app/main.egg -g", File.read(main), dir, main, debug: true, pkgs: pkgs)
+  eggc = eggc_command
+  out, err, st = Open3.capture3(*eggc, "run", main, "--pkg", "greet=#{pkgs["greet"]}", "--pkg=shout=#{pkgs["shout"]}")
+  report(st.success? && out.lines.first == "hello\n", "eggc run --pkg NAME=DIR and --pkg=NAME=DIR", "#{out}#{err}")
+  r = Egg.compile_to_c(File.read(main), main, pkgs: { "greet" => pkgs["greet"] })
+  d = r.diagnostics.first
+  ok = d && d.code == "E129" && d.message.include?("unknown module 'shout'") && d.message.include?("clutch add shout") && d.file == File.join(pkgs["greet"], "greet.egg")
+  report(ok, "a package missing its own dependency is E129 in its file", d&.to_text("main.egg"))
+  src = "const e = @import(\"escape\")\nfn main() void {\n}\n"
+  r = Egg.compile_to_c(src, File.join(pkg, "app", "x.egg"), pkgs: { "escape" => File.join(pkg, "escape") })
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("outside this module's root"), "a package's file import stays in its directory", d&.to_text("x.egg"))
+  [
+    [["--pkg", "std=#{pkg}"], "cannot name a package std"],
+    [["--pkg", "greet=#{File.join(pkg, "nope")}"], "no such directory"],
+    [["--pkg", "1x=#{pkg}"], "NAME a plain name"],
+    [["--pkg", "greet"], "NAME a plain name"],
+    [["--pkg", "a=#{pkg}", "--pkg", "a=#{pkg}"], "the package a twice"],
+    [["--pkg"], "usage:"]
+  ].each do |flags, want|
+    _, err, st = Open3.capture3(*eggc, "check", main, *flags)
+    report(st.exitstatus == 2 && err.include?(want), "eggc #{flags.join(" ")} is refused", err)
+  end
+end
+
 Dir.mktmpdir do |dir|
   puts "examples"
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
@@ -1488,6 +1522,9 @@ Dir.mktmpdir do |dir|
 
   puts "link"
   check_link(dir)
+
+  puts "packages"
+  check_packages(dir)
 
   puts "lsp"
   check_lsp

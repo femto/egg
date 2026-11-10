@@ -1,0 +1,15 @@
+// The package greet: @import("greet") is this file.
+uses io
+
+const style = @import("style.egg")
+const shout = @import("shout")
+
+fn hello(io: Io, name: str) void {
+    io.print("hello")
+    io.print(name)
+    io.print(style.end(style.Mark.bang))
+}
+
+fn shout_hey() str {
+    return shout.loud()
+}

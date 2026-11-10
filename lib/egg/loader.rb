@@ -10,6 +10,12 @@
 # and imports may form cycles (names are resolved after everything is
 # loaded, as in Zig).
 #
+# A package is a module too: `eggc --pkg http=DIR` (passed by the package
+# manager, clutch) makes `@import("http")` DIR/http.egg and
+# `@import("http/client")` DIR/client.egg, with DIR as the package's root,
+# the way std is lib/std. The names come from the command line only, so
+# eggc reads no manifest.
+#
 # Every module gets a prefix: "" for the root file, the file's base name
 # for the others ("m", or "m_2" if two files share a name). The top-level
 # functions and types of an imported module are renamed to "m.f" and
@@ -37,9 +43,11 @@ module Egg
 
   class Loader
     # root: the root file already parsed (by a tool that also needs its
-    # AST), or nil to parse src here
-    def initialize(src, path, root = nil)
+    # AST), or nil to parse src here; pkgs: package name -> its directory
+    def initialize(src, path, root = nil, pkgs = {})
       @src = src
+      @pkgs = {}
+      pkgs.each { |name, dir| @pkgs[name] = File.expand_path(dir) }
       @root = root
       @path = path.nil? ? nil : File.expand_path(path)
       @display = path
@@ -139,19 +147,24 @@ module Egg
 
     # "std/map" -> the file map.egg of the library, its root, and the
     # path shown in diagnostics (the file's own, so it can be opened);
-    # "std/a/b" is a/b.egg and "std" alone is std.egg. Only std is known
-    # so far.
+    # "std/a/b" is a/b.egg and "std" alone is std.egg. A package given
+    # with --pkg is found the same way in its own directory.
     def module_path(mod, imp)
       parts = imp.path.split("/", -1)
       if parts.empty? || parts.any? { |p| !p.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) }
         fail_at(mod, imp, "E129", "\"#{imp.path}\" is neither a file (name.egg) nor a module name such as \"std/map\"")
       end
-      unless parts[0] == "std"
-        fail_at(mod, imp, "E129", "unknown module '#{parts[0]}': the modules are std and its parts (\"std/map\"); a file of this program ends in .egg")
+      name = parts[0]
+      if name == "std"
+        dir = STD_ROOT
+      elsif @pkgs.key?(name)
+        dir = @pkgs[name]
+      else
+        fail_at(mod, imp, "E129", "unknown module '#{name}': the modules are std, its parts (\"std/map\") and the packages given with --pkg (clutch passes those of clutch.toml: `clutch add #{name}`); a file of this program ends in .egg")
       end
-      rest = parts.length == 1 ? ["std"] : parts.drop(1)
-      abs = File.join(STD_ROOT, *rest) + ".egg"
-      [abs, STD_ROOT, abs]
+      rest = parts.length == 1 ? [name] : parts.drop(1)
+      abs = File.join(dir, *rest) + ".egg"
+      [abs, dir, abs]
     end
 
     def inside?(abs, root)
