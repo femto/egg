@@ -22,6 +22,9 @@
 #                      here (linktest.c).
 # test/pkg/         -- packages given with eggc --pkg NAME=DIR: app/ uses
 #                      greet/ and shout/ (escape/ must stay in its root).
+# clutch            -- the package manager on packages made here: path, git
+#                      and index dependencies, the lock, and its errors
+#                      (skipped without git).
 # eggc lsp          -- the language server answers definition, hover,
 #                      outline and diagnostics requests. EGGC=path tests
 #                      another eggc, such as a Spinel-built one.
@@ -31,6 +34,7 @@
 require "json"
 require "rbconfig"
 require "open3"
+require "shellwords"
 require "socket"
 require "timeout"
 require "tmpdir"
@@ -1495,6 +1499,110 @@ def check_packages(dir)
   end
 end
 
+# clutch in dir/clutch, with its own cache and index there.
+def check_clutch(dir)
+  have_git = begin
+    Open3.capture3("git", "--version")[2].success?
+  rescue SystemCallError
+    false
+  end
+  return puts("  skip  clutch (no git)") unless have_git
+  root = File.join(dir, "clutch")
+  FileUtils.rm_rf(root)
+  FileUtils.mkdir_p(root)
+  env = { "CLUTCH_CACHE" => File.join(root, "cache"), "CLUTCH_INDEX" => File.join(root, "index"), "CLUTCH_OFFLINE" => nil,
+          "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t", "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
+  clutch = ->(at, *args, extra: {}) { Open3.capture3(env.merge(extra), RbConfig.ruby, File.join(ROOT, "bin", "clutch"), *args, chdir: File.join(root, at)) }
+  git = ->(at, *args) { Open3.capture3(env, "git", *args, chdir: File.join(root, at)) }
+  edit = ->(file, from, to) { f = File.join(root, file); File.write(f, File.read(f).sub(from, to)) }
+
+  out, err, st = clutch.(".", "new", "app")
+  report(st.success? && File.file?(File.join(root, "app", "src", "main.egg")), "clutch new makes a program", "#{out}#{err}")
+  out, err, st = clutch.("app", "run")
+  report(st.success? && out == "hello from app\n", "clutch run runs a new program", "#{out}#{err}")
+
+  # shout: a library in a git repository with three tagged releases, and
+  # an index listing them.
+  clutch.(".", "new", "--lib", "shout")
+  git.("shout", "init", "-q")
+  shas = {}
+  %w[0.1.0 0.2.0 0.3.0].each do |v|
+    edit.("shout/clutch.toml", /^version = .*$/, "version = \"#{v}\"")
+    File.write(File.join(root, "shout", "src", "shout.egg"), "fn loud() str {\n    return \"v#{v}\"\n}\n")
+    git.("shout", "add", "-A")
+    git.("shout", "commit", "-qm", v)
+    git.("shout", "tag", "v#{v}")
+    shas[v] = git.("shout", "rev-parse", "HEAD")[0].strip
+  end
+  FileUtils.mkdir_p(File.join(root, "index", "packages"))
+  repo = File.join(root, "shout")
+  File.write(File.join(root, "index", "packages", "shout.toml"),
+             "name = \"shout\"\nrepo = #{repo.inspect}\n" + shas.map { |v, sha| "\n[[release]]\nversion = \"#{v}\"\nref = \"#{sha}\"\n" }.join)
+  File.write(File.join(root, "app", "src", "main.egg"), "uses io\n\nconst shout = @import(\"shout\")\n\nfn main(io: Io) void {\n    io.print(shout.loud())\n}\n")
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("unknown module 'shout'") && err.include?("clutch add shout"), "an undeclared package points at clutch add", err)
+  out, err, st = clutch.("app", "add", "shout")
+  toml = File.read(File.join(root, "app", "clutch.toml"))
+  report(st.success? && toml.include?("shout = \"~> 0.3\"") && out.include?("added shout 0.3.0"), "clutch add takes the newest release's ~>", "#{out}#{err}#{toml}")
+  out, err, st = clutch.("app", "run")
+  report(st.success? && out == "v0.3.0\n", "clutch run builds with an index package", "#{out}#{err}")
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = \">= 0.2\"")
+  out, err, st = clutch.("app", "run")
+  report(st.success? && out == "v0.3.0\n", "the lock keeps a pin the manifest still accepts", "#{out}#{err}")
+  out, err, st = clutch.("app", "update")
+  report(st.success? && out == "shout 0.2.0\n", "clutch update chooses the lowest accepted release", "#{out}#{err}")
+  # With no index to read: the lock and the cache are enough.
+  out, err, st = clutch.("app", "run", extra: { "CLUTCH_OFFLINE" => "1", "CLUTCH_INDEX" => File.join(root, "no-index") })
+  report(st.success? && out == "v0.2.0\n", "a locked build runs offline from the cache", "#{out}#{err}")
+  _, err, st = clutch.("app", "update", "shuot")
+  report(!st.success? && err.include?("shuot is not a package of app"), "clutch update of an unknown name", err)
+  _, err, st = clutch.("app", "lock", "extra")
+  report(st.exitstatus == 2 && err.include?("usage:"), "clutch lock takes no names", err)
+  lock_file = File.join(root, "app", "clutch.lock")
+  good_lock = File.read(lock_file)
+  File.write(lock_file, good_lock.sub(/^ref = .*$/, "ref = \"abc\""))
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("needs git and a full commit SHA"), "a damaged clutch.lock is refused", err)
+  File.write(lock_file, good_lock)
+  lock = File.read(File.join(root, "app", "clutch.lock"))
+  report(lock.include?("ref = \"#{shas["0.2.0"]}\"") && lock.include?("source = \"index\""), "clutch.lock pins the full SHA", lock)
+  out, err, st = clutch.("app", "flags")
+  want = ["--pkg", "shout=#{File.join(root, "cache", "git", "src", "shout-#{shas["0.2.0"][0, 12]}", "src")}"]
+  report(st.success? && Shellwords.split(out) == want, "clutch flags gives eggc --pkg", "#{out}#{err}")
+
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = { git = #{repo.inspect}, ref = \"v0.1.0\" }")
+  out, err, st = clutch.("app", "run")
+  report(st.success? && out == "v0.1.0\n", "a git dependency at a tag", "#{out}#{err}")
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = { git = #{repo.inspect} }")
+  out, err, st = clutch.("app", "run")
+  report(st.success? && out == "v0.3.0\n", "a git dependency at its default branch", "#{out}#{err}")
+
+  # greet: a library by path that needs shout = 0.1.0 itself.
+  clutch.(".", "new", "--lib", "greet")
+  File.write(File.join(root, "greet", "clutch.toml"), File.read(File.join(root, "greet", "clutch.toml")) + "shout = \"= 0.1.0\"\n")
+  File.write(File.join(root, "greet", "src", "greet.egg"), "const shout = @import(\"shout\")\n\nfn hi() str {\n    return shout.loud()\n}\n")
+  out, err, st = clutch.("greet", "check")
+  report(st.success?, "clutch check checks a library with its dependencies", "#{out}#{err}")
+  edit.("app/clutch.toml", /^shout = .*$/, "greet = { path = \"../greet\" }")
+  File.write(File.join(root, "app", "src", "main.egg"), "uses io\n\nconst greet = @import(\"greet\")\n\nfn main(io: Io) void {\n    io.print(greet.hi())\n}\n")
+  out, err, st = clutch.("app", "run")
+  report(st.success? && out == "v0.1.0\n", "a path package's own dependency comes along", "#{out}#{err}")
+  edit.("app/clutch.toml", /^greet = .*$/, "shout = \"~> 0.2\"\ngreet = { path = \"../greet\" }")
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("greet needs shout = 0.1.0, but shout is already 0.2.0"), "two versions of one package are refused", err)
+  _, err, st = clutch.("app", "add", "zzz")
+  report(!st.success? && err.include?("zzz is not in the index"), "clutch add of an unknown package", err)
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = \"~> 9.0\"")
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("no release it accepts (0.1.0, 0.2.0, 0.3.0)"), "a constraint no release meets", err)
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = 1")
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("clutch.toml: dependency shout: give a version"), "a malformed dependency", err)
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = \"\"")
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("an empty version constraint"), "an empty constraint is refused", err)
+end
+
 Dir.mktmpdir do |dir|
   puts "examples"
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
@@ -1537,6 +1645,7 @@ Dir.mktmpdir do |dir|
 
   puts "packages"
   check_packages(dir)
+  check_clutch(dir)
 
   puts "lsp"
   check_lsp

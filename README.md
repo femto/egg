@@ -176,6 +176,7 @@ More in [examples/](examples), including an [HTTP server](examples/http_server/s
 - [Language spec](spec/core.md), with tested examples
 - [Every error code](spec/diagnostics.md)
 - Design doc: [English](docs/design.md) · [中文](docs/design.zh.md)
+- [clutch](docs/clutch.md), the package manager
 - [Editor support](#editor-support) and [debugging](#debugging)
 
 ## Commands
@@ -193,6 +194,14 @@ bin/eggc run app.egg --pkg http=../egg-http/src   # @import("http") is ../egg-ht
 bin/eggc spec                        # whole spec, for pasting into an AI
 bin/eggc lsp                         # language server for editors (stdin/stdout)
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
+```
+
+Packages are built with **clutch**, the package manager ([docs/clutch.md](docs/clutch.md)):
+
+```bash
+bin/clutch new chat && cd chat       # a program: clutch.toml and src/main.egg
+../bin/clutch add http               # a dependency from the index (or --git URL, --path DIR)
+../bin/clutch run                    # resolve, write clutch.lock, build and run
 ```
 
 ## Status
@@ -447,6 +456,7 @@ Design choices worth knowing:
 
 ```
 bin/eggc               command-line driver
+bin/clutch             the package manager (lib/clutch/, docs/clutch.md)
 bench/                 benchmarks against other languages
 docs/design.md         design doc (English; Chinese in design.zh.md)
 editors/vscode/        VS Code syntax highlighting (install the .vsix)

@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+# clutch: Egg's package manager (`clutch help` lists the commands).
+
+if RUBY_VERSION < "3.0"
+  warn "clutch: needs Ruby 3.0 or newer, but #{RUBY_VERSION} is running (#{RbConfig.ruby})"
+  exit 2
+end
+
+require_relative "../lib/clutch"
+
+exit Clutch::CLI.new(ARGV).run
