@@ -1501,8 +1501,12 @@ end
 
 # clutch in dir/clutch, with its own cache and index there.
 def check_clutch(dir)
-  _, _, st = Open3.capture3("git", "--version")
-  return puts("  skip  clutch (no git)") unless st.success?
+  have_git = begin
+    Open3.capture3("git", "--version")[2].success?
+  rescue SystemCallError
+    false
+  end
+  return puts("  skip  clutch (no git)") unless have_git
   root = File.join(dir, "clutch")
   FileUtils.rm_rf(root)
   FileUtils.mkdir_p(root)
@@ -1547,8 +1551,19 @@ def check_clutch(dir)
   report(st.success? && out == "v0.3.0\n", "the lock keeps a pin the manifest still accepts", "#{out}#{err}")
   out, err, st = clutch.("app", "update")
   report(st.success? && out == "shout 0.2.0\n", "clutch update chooses the lowest accepted release", "#{out}#{err}")
-  out, err, st = clutch.("app", "run", extra: { "CLUTCH_OFFLINE" => "1" })
+  # With no index to read: the lock and the cache are enough.
+  out, err, st = clutch.("app", "run", extra: { "CLUTCH_OFFLINE" => "1", "CLUTCH_INDEX" => File.join(root, "no-index") })
   report(st.success? && out == "v0.2.0\n", "a locked build runs offline from the cache", "#{out}#{err}")
+  _, err, st = clutch.("app", "update", "shuot")
+  report(!st.success? && err.include?("shuot is not a package of app"), "clutch update of an unknown name", err)
+  _, err, st = clutch.("app", "lock", "extra")
+  report(st.exitstatus == 2 && err.include?("usage:"), "clutch lock takes no names", err)
+  lock_file = File.join(root, "app", "clutch.lock")
+  good_lock = File.read(lock_file)
+  File.write(lock_file, good_lock.sub(/^ref = .*$/, "ref = \"abc\""))
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("needs git and a full commit SHA"), "a damaged clutch.lock is refused", err)
+  File.write(lock_file, good_lock)
   lock = File.read(File.join(root, "app", "clutch.lock"))
   report(lock.include?("ref = \"#{shas["0.2.0"]}\"") && lock.include?("source = \"index\""), "clutch.lock pins the full SHA", lock)
   out, err, st = clutch.("app", "flags")
@@ -1583,6 +1598,9 @@ def check_clutch(dir)
   edit.("app/clutch.toml", /^shout = .*$/, "shout = 1")
   _, err, st = clutch.("app", "build")
   report(!st.success? && err.include?("clutch.toml: dependency shout: give a version"), "a malformed dependency", err)
+  edit.("app/clutch.toml", /^shout = .*$/, "shout = \"\"")
+  _, err, st = clutch.("app", "build")
+  report(!st.success? && err.include?("an empty version constraint"), "an empty constraint is refused", err)
 end
 
 Dir.mktmpdir do |dir|

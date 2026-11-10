@@ -165,6 +165,7 @@ module Clutch
       doc = Toml.parse(text, file)
       raise Error, "#{file}: name is #{doc["name"].inspect}, not #{name.inspect}" unless doc["name"] == name
       raise Error, "#{file}: repo is missing" unless doc["repo"].is_a?(String) && !doc["repo"].empty?
+      raise Error, "#{file}: release is a list of [[release]] tables" unless doc["release"].nil? || doc["release"].is_a?(Array)
       releases = (doc["release"] || []).map do |r|
         raise Error, "#{file}: a [[release]] needs version and a full commit SHA as ref" unless r.is_a?(Hash) && r["ref"].is_a?(String) && r["ref"].match?(Git::SHA)
         begin

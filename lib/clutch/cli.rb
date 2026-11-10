@@ -50,7 +50,7 @@ module Clutch
       when "build" then cmd_eggc("build")
       when "run" then cmd_eggc("run")
       when "flags" then cmd_flags
-      when "lock" then cmd_lock([])
+      when "lock" then @argv.empty? ? cmd_lock([]) : usage
       when "update" then cmd_lock(@argv.empty? ? true : @argv)
       when "help", "-h", "--help"
         @out.print USAGE
@@ -246,10 +246,16 @@ module Clutch
     end
 
     # Resolves dir's package and writes the lock; the resolved packages.
+    # unlock: names to choose afresh, each a package of the program
+    # (or true for all).
     def resolve(dir, unlock: [], manifest: nil)
       m = manifest || Manifest.load(dir)
       git = Git.new
       pkgs = Resolver.new(m, git, Index.new(git), lock: Lock.read(dir), unlock: unlock).resolve
+      if unlock.is_a?(Array)
+        missing = unlock.reject { |n| pkgs.any? { |p| p.name == n } }
+        raise Error, "#{missing[0]} is not a package of #{m.name} (clutch update takes the names of its packages)" unless missing.empty?
+      end
       @err.puts "clutch: wrote clutch.lock" if Lock.write(dir, pkgs)
       pkgs
     end

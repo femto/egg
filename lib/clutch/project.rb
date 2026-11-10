@@ -121,10 +121,24 @@ module Clutch
       path = File.join(dir, "clutch.lock")
       return {} unless File.file?(path)
       doc = Toml.parse(File.read(path), path)
+      bad = ->(why) { raise Error, "#{path}: #{why}; delete the file and clutch writes it again" }
+      bad.("[lock] holds one table per package") unless doc["lock"].nil? || doc["lock"].is_a?(Hash)
       out = {}
       (doc["lock"] || {}).each do |name, e|
-        next unless e.is_a?(Hash)
-        out[name] = Locked.new(name, e["version"], e["source"], e["git"], e["ref"], e["requested"], e["path"])
+        bad.("[lock.#{name}] is not a table") unless e.is_a?(Hash)
+        str = ->(k) { e[k].nil? || e[k].is_a?(String) ? e[k] : bad.("[lock.#{name}] #{k} is not a string") }
+        version = str.("version")
+        source = str.("source")
+        bad.("[lock.#{name}] has no version") if version.nil?
+        case source
+        when "index", "git"
+          bad.("[lock.#{name}] needs git and a full commit SHA as ref") unless str.("git") && str.("ref").to_s.match?(/\A\h{40}\z/)
+        when "path"
+          bad.("[lock.#{name}] needs path") if str.("path").nil?
+        else
+          bad.("[lock.#{name}] source is index, git or path, not #{source.inspect}")
+        end
+        out[name] = Locked.new(name, version, source, str.("git"), str.("ref"), str.("requested"), str.("path"))
       end
       out
     end

@@ -47,6 +47,7 @@ module Clutch
       end
       @text = text.strip
       @tests = []
+      raise VersionError, "an empty version constraint (\"*\" accepts any version)" if @text.empty?
       return if @text == "*"
       @text.split(",").each do |part|
         m = part.strip.match(/\A(~>|>=|<=|>|<|=)?\s*(\S+)\z/)

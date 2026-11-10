@@ -200,8 +200,8 @@ Packages are built with **clutch**, the package manager ([docs/clutch.md](docs/c
 
 ```bash
 bin/clutch new chat && cd chat       # a program: clutch.toml and src/main.egg
-bin/clutch add http                  # a dependency from the index (or --git URL, --path DIR)
-bin/clutch run                       # resolve, write clutch.lock, build and run
+../bin/clutch add http               # a dependency from the index (or --git URL, --path DIR)
+../bin/clutch run                    # resolve, write clutch.lock, build and run
 ```
 
 ## Status

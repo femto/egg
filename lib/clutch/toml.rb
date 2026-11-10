@@ -32,7 +32,7 @@ module Clutch
         @file = file
         @i = 0
         @line = 1
-        @headers = {}
+        @headers = {}.compare_by_identity   # tables a [header] has defined
       end
 
       def parse
@@ -87,11 +87,10 @@ module Clutch
           t[last] << {}
           t[last].last
         else
-          name = path.join(".")
-          fail "[#{name}] is given twice" if @headers.key?(name)
-          @headers[name] = true
           t[last] ||= {}
           fail "'#{last}' is not a table" unless t[last].is_a?(Hash)
+          fail "[#{path.join(".")}] is given twice" if @headers.key?(t[last])
+          @headers[t[last]] = true
           t[last]
         end
       end
@@ -138,7 +137,11 @@ module Clutch
                      hex = @s[@i, n]
                      fail "bad \\#{e} escape" unless hex&.match?(/\A\h{#{n}}\z/)
                      @i += n
-                     hex.to_i(16).chr(Encoding::UTF_8)
+                     begin
+                       hex.to_i(16).chr(Encoding::UTF_8)
+                     rescue RangeError
+                       fail "bad \\#{e} escape: #{hex} is not a Unicode scalar value"
+                     end
                    else fail "unknown escape \\#{e}"
                    end
           else

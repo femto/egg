@@ -52,13 +52,17 @@ package's own `clutch.toml`. Constraints: `"1.2.0"` (exactly), `">= 1.2"`,
   and a later requirement that does not accept that choice is an error
   (there is no solver).
 - **The lowest release a constraint accepts** (minimal version selection).
-  A build never moves to a newer release by itself, and without a lock the
-  result is still the same every time.
+  A build never moves to a newer release by itself: an index dependency
+  resolves the same way until the index gains or loses a release its
+  constraint accepts. A git dependency on a branch follows the branch, and
+  a path dependency is whatever its directory holds, so a repeatable build
+  needs the lock.
 - **The lock comes first.** A package pinned in `clutch.lock` keeps its pin
-  while the manifest still accepts it, without reading the index or the
-  network. `clutch update [NAME...]` chooses afresh. A git dependency is
-  pinned to a full commit SHA; a path dependency is read where it is and
-  never pinned.
+  while the manifest still accepts it, and choosing it reads neither the
+  index nor the repository. Its files still come from the cache, fetched
+  if that commit is not there yet. `clutch update [NAME...]` chooses afresh.
+  A git dependency is pinned to a full commit SHA; a path dependency is
+  read where it is and never pinned.
 
 ## The index
 
@@ -78,7 +82,8 @@ git/src/<name>-<sha12>    a package's files at one commit, extracted once
 ```
 
 Each repository is fetched at most once a run. With `CLUTCH_OFFLINE=1`
-clutch never fetches, so a locked build works from the cache alone.
+clutch never fetches: a locked build then works when the cache already
+holds every pinned commit, and fails naming what is missing otherwise.
 
 ## Commands
 
