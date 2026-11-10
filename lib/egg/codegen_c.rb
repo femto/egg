@@ -141,7 +141,7 @@ module Egg
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
-                      egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_take egg_chan_recv egg_chan_recv_for
+                      egg_chan egg_chan_wait egg_chan_put egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_take egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
@@ -1153,27 +1153,43 @@ module Egg
         }
       C
       # A fixed ring of values, shared by its receivers and senders; the
-      # last of them to close frees it.
+      # last of them to close frees it. Threads blocked in send or recv
+      # wait in line, first come first served.
       "egg_chan" => <<~C,
         #ifndef _WIN32
         #include <time.h>
         #endif
+        /* A thread blocked in send or recv, in its channel's line. The
+           other side does its part for it (state 1): copies v into the
+           ring or out of it, or hands it over, so none can cut in.
+           State 2: the other side closed first. */
+        typedef struct egg_chan_waiter {
+        #ifdef _WIN32
+            CONDITION_VARIABLE woken;
+        #else
+            pthread_cond_t woken;
+        #endif
+            struct egg_chan_waiter *next;
+            void *v;
+            int state;
+        } egg_chan_waiter;
+        typedef struct {
+            egg_chan_waiter *head, *tail;
+        } egg_chan_line;
         typedef struct {
         #ifdef _WIN32
             CRITICAL_SECTION lock;
-            CONDITION_VARIABLE readable, writable;
         #else
             pthread_mutex_t lock;
-            pthread_cond_t readable, writable;
         #endif
             uint8_t *items;
             size_t size;
-            /* cap 0 hands each value over: it waits in the one slot, and its
-               sender waits until received has counted it. */
-            int64_t cap, slots, head, count, senders, receivers, sent, received;
-            /* waiting: receivers blocked in recv or recv_timeout; with cap
-               0 a select's send goes only to one of them or to a select. */
-            int64_t waiting;
+            /* cap 0 has no ring: a value goes from a sender to a receiver,
+               one of them waiting in line for the other. */
+            int64_t cap, slots, head, count, senders, receivers;
+            /* Who waits: senders only while the ring is full (with cap 0,
+               while no receiver waits), receivers only while it is empty. */
+            egg_chan_line sending, receiving;
             /* the selects waiting on it, told of every change */
             struct egg_sel_node *selects;
             bool open;
@@ -1181,15 +1197,13 @@ module Egg
         #ifdef _WIN32
         #define EGG_CHAN_LOCK(c) EnterCriticalSection(&(c)->lock)
         #define EGG_CHAN_UNLOCK(c) LeaveCriticalSection(&(c)->lock)
-        #define EGG_CHAN_WAIT(c, on) SleepConditionVariableCS(&(c)->on, &(c)->lock, INFINITE)
-        #define EGG_CHAN_WAKE(c, on) WakeConditionVariable(&(c)->on)
-        #define EGG_CHAN_WAKE_ALL(c, on) WakeAllConditionVariable(&(c)->on)
+        #define EGG_CHAN_WAIT(c, w) SleepConditionVariableCS(&(w)->woken, &(c)->lock, INFINITE)
+        #define EGG_CHAN_WAKE(w) WakeConditionVariable(&(w)->woken)
         #else
         #define EGG_CHAN_LOCK(c) pthread_mutex_lock(&(c)->lock)
         #define EGG_CHAN_UNLOCK(c) pthread_mutex_unlock(&(c)->lock)
-        #define EGG_CHAN_WAIT(c, on) pthread_cond_wait(&(c)->on, &(c)->lock)
-        #define EGG_CHAN_WAKE(c, on) pthread_cond_signal(&(c)->on)
-        #define EGG_CHAN_WAKE_ALL(c, on) pthread_cond_broadcast(&(c)->on)
+        #define EGG_CHAN_WAIT(c, w) pthread_cond_wait(&(w)->woken, &(c)->lock)
+        #define EGG_CHAN_WAKE(w) pthread_cond_signal(&(w)->woken)
         #endif
         /* One select waiting: what a channel tells it, under its own lock.
            done: it has an outcome, went (an arm, -1 timeout, -2 closed); a
@@ -1231,6 +1245,81 @@ module Egg
                 EGG_SEL_UNLOCK(n->s);
             }
         }
+        static inline egg_chan_waiter *egg_chan_line_pop(egg_chan_line *l) {
+            egg_chan_waiter *w = l->head;
+            if (w != NULL) {
+                l->head = w->next;
+                if (l->head == NULL) l->tail = NULL;
+            }
+            return w;
+        }
+        /* Wakes every waiter of l: the other side closed. */
+        static inline void egg_chan_line_close(egg_chan_line *l) {
+            egg_chan_waiter *w;
+            while ((w = egg_chan_line_pop(l)) != NULL) {
+                w->state = 2;
+                EGG_CHAN_WAKE(w);
+            }
+        }
+      C
+      # A blocked send or recv: its place in line, and its own condition.
+      "egg_chan_wait" => <<~C,
+        /* recv_timeout counts on the monotonic clock, so setting the system
+           clock does not move its deadline. macOS cannot set the clock of a
+           condition: there it waits for a relative time. */
+        static void egg_chan_waiter_init(egg_chan_waiter *w, void *v) {
+            w->next = NULL;
+            w->v = v;
+            w->state = 0;
+        #ifdef _WIN32
+            InitializeConditionVariable(&w->woken);
+        #else
+            pthread_condattr_t attr;
+            if (pthread_condattr_init(&attr) != 0) egg_panic("cannot wait on a channel");
+        #ifndef __APPLE__
+            if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) egg_panic("cannot wait on a channel");
+        #endif
+            if (pthread_cond_init(&w->woken, &attr) != 0) egg_panic("cannot wait on a channel");
+            pthread_condattr_destroy(&attr);
+        #endif
+        }
+        static void egg_chan_waiter_free(egg_chan_waiter *w) {
+        #ifndef _WIN32
+            pthread_cond_destroy(&w->woken);
+        #else
+            (void)w;
+        #endif
+        }
+        static void egg_chan_line_push(egg_chan_line *l, egg_chan_waiter *w) {
+            w->next = NULL;
+            if (l->tail != NULL) {
+                l->tail->next = w;
+            } else {
+                l->head = w;
+            }
+            l->tail = w;
+        }
+      C
+      "egg_chan_put" => <<~C,
+        /* With the channel locked: true if there is somewhere for a value now,
+           the first receiver in line or room in the ring. */
+        static bool egg_chan_room(egg_chan *c) {
+            return c->receiving.head != NULL || c->count < c->cap;
+        }
+        /* With room: the value goes to the first receiver in line, or into the ring. */
+        static void egg_chan_put(egg_chan *c, const void *value) {
+            egg_chan_waiter *w = egg_chan_line_pop(&c->receiving);
+            if (w != NULL) {
+                memcpy(w->v, value, c->size);
+                w->state = 1;
+                EGG_CHAN_WAKE(w);
+                return;
+            }
+            int64_t tail = (c->head + c->count) % c->slots;
+            memcpy(c->items + (size_t)tail * c->size, value, c->size);
+            c->count += 1;
+            egg_chan_notify(c);
+        }
       C
       "egg_chan_new" => <<~C,
         static void *egg_chan_new(size_t size, int64_t cap) {
@@ -1238,34 +1327,19 @@ module Egg
             egg_chan *c = (egg_chan *)egg_buf_resize(NULL, 1, sizeof(egg_chan));
         #ifdef _WIN32
             InitializeCriticalSection(&c->lock);
-            InitializeConditionVariable(&c->readable);
-            InitializeConditionVariable(&c->writable);
         #else
-            /* recv_timeout counts on the monotonic clock, so setting the
-               system clock does not move its deadline. macOS cannot set
-               the clock of a condition: there it waits for a relative time. */
-            pthread_condattr_t attr;
-            if (pthread_condattr_init(&attr) != 0) egg_panic("cannot make a channel");
-        #ifndef __APPLE__
-            if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) egg_panic("cannot make a channel");
-        #endif
-            if (pthread_mutex_init(&c->lock, NULL) != 0 || pthread_cond_init(&c->readable, &attr) != 0 ||
-                pthread_cond_init(&c->writable, NULL) != 0) {
-                egg_panic("cannot make a channel");
-            }
-            pthread_condattr_destroy(&attr);
+            if (pthread_mutex_init(&c->lock, NULL) != 0) egg_panic("cannot make a channel");
         #endif
             c->slots = cap > 0 ? cap : 1;
             c->items = (uint8_t *)egg_buf_resize(NULL, c->slots, size > 0 ? size : 1);
             c->size = size;
             c->cap = cap;
-            c->sent = 0;
-            c->received = 0;
             c->head = 0;
             c->count = 0;
             c->senders = 0;
             c->receivers = 1;
-            c->waiting = 0;
+            c->sending.head = c->sending.tail = NULL;
+            c->receiving.head = c->receiving.tail = NULL;
             c->selects = NULL;
             c->open = true;
             return c;
@@ -1277,8 +1351,6 @@ module Egg
             DeleteCriticalSection(&c->lock);
         #else
             pthread_mutex_destroy(&c->lock);
-            pthread_cond_destroy(&c->readable);
-            pthread_cond_destroy(&c->writable);
         #endif
             free(c->items);
             free(c);
@@ -1306,43 +1378,59 @@ module Egg
         static void egg_chan_send(void *v, const void *value) {
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
-            while (c->count == c->slots && c->open) EGG_CHAN_WAIT(c, writable);
             if (!c->open) {
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("send on a closed channel");
             }
-            int64_t tail = (c->head + c->count) % c->slots;
-            memcpy(c->items + (size_t)tail * c->size, value, c->size);
-            c->count += 1;
-            c->sent += 1;
-            int64_t mine = c->sent;
-            EGG_CHAN_WAKE(c, readable);
-            egg_chan_notify(c);
-            if (c->cap == 0) {
-                while (c->received < mine && c->open) EGG_CHAN_WAIT(c, writable);
-                if (c->received < mine) {
-                    EGG_CHAN_UNLOCK(c);
-                    egg_panic("send on a closed channel");
-                }
+            if (egg_chan_room(c)) {
+                egg_chan_put(c, value);
+                EGG_CHAN_UNLOCK(c);
+                return;
             }
+            /* In line until a receiver takes the value: into the ring, or
+               (cap 0) straight out of here. */
+            egg_chan_waiter w;
+            egg_chan_waiter_init(&w, (void *)value);
+            egg_chan_line_push(&c->sending, &w);
+            if (c->cap == 0) egg_chan_notify(c);
+            while (w.state == 0) EGG_CHAN_WAIT(c, &w);
             EGG_CHAN_UNLOCK(c);
+            egg_chan_waiter_free(&w);
+            if (w.state == 2) egg_panic("send on a closed channel");
         }
       C
       "egg_chan_recv" => <<~C,
         static bool egg_chan_recv(void *v, void *out) {
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
-            if (c->count == 0 && c->senders > 0) {
-                c->waiting += 1;
-                if (c->cap == 0) egg_chan_notify(c);
-                while (c->count == 0 && c->senders > 0) EGG_CHAN_WAIT(c, readable);
-                c->waiting -= 1;
-            }
-            return egg_chan_take(c, out);
+            if (c->count > 0 || c->sending.head != NULL || c->senders == 0) return egg_chan_take(c, out);
+            egg_chan_waiter w;
+            egg_chan_waiter_init(&w, out);
+            egg_chan_line_push(&c->receiving, &w);
+            /* A select sending with cap 0 may now hand it a value. */
+            if (c->cap == 0) egg_chan_notify(c);
+            while (w.state == 0) EGG_CHAN_WAIT(c, &w);
+            EGG_CHAN_UNLOCK(c);
+            egg_chan_waiter_free(&w);
+            return w.state == 1;
         }
       C
       # Waits up to ms milliseconds; 0 takes a value only if one is there.
       "egg_chan_recv_for" => <<~C,
+        /* Takes w out of line (a recv_timeout whose time ran out). */
+        static void egg_chan_line_drop(egg_chan_line *l, egg_chan_waiter *w) {
+            egg_chan_waiter *prev = NULL;
+            for (egg_chan_waiter *x = l->head; x != NULL; prev = x, x = x->next) {
+                if (x != w) continue;
+                if (prev != NULL) {
+                    prev->next = w->next;
+                } else {
+                    l->head = w->next;
+                }
+                if (l->tail == w) l->tail = prev;
+                return;
+            }
+        }
         static bool egg_chan_recv_for(void *v, void *out, int64_t ms) {
             if (ms < 0) egg_panic("negative timeout");
             egg_chan *c = (egg_chan *)v;
@@ -1359,14 +1447,17 @@ module Egg
             }
         #endif
             EGG_CHAN_LOCK(c);
-            c->waiting += 1;
-            if (c->cap == 0 && c->count == 0 && ms > 0) egg_chan_notify(c);
-            while (c->count == 0 && c->senders > 0) {
+            if (c->count > 0 || c->sending.head != NULL || c->senders == 0 || ms == 0) return egg_chan_take(c, out);
+            egg_chan_waiter w;
+            egg_chan_waiter_init(&w, out);
+            egg_chan_line_push(&c->receiving, &w);
+            if (c->cap == 0) egg_chan_notify(c);
+            while (w.state == 0) {
         #ifdef _WIN32
                 ULONGLONG now = GetTickCount64();
                 if (now >= end) break;
                 ULONGLONG left = end - now;
-                SleepConditionVariableCS(&c->readable, &c->lock, left > 0xFFFFFFFEu ? 0xFFFFFFFEu : (DWORD)left);
+                SleepConditionVariableCS(&w.woken, &c->lock, left > 0xFFFFFFFEu ? 0xFFFFFFFEu : (DWORD)left);
         #elif defined(__APPLE__)
                 struct timespec now, left;
                 clock_gettime(CLOCK_MONOTONIC, &now);
@@ -1378,32 +1469,42 @@ module Egg
                 }
                 if (left.tv_sec < 0) break;
                 /* ETIMEDOUT, or a failure: either way, stop waiting. */
-                if (pthread_cond_timedwait_relative_np(&c->readable, &c->lock, &left) != 0) break;
+                if (pthread_cond_timedwait_relative_np(&w.woken, &c->lock, &left) != 0) break;
         #else
-                if (pthread_cond_timedwait(&c->readable, &c->lock, &end) != 0) break;
+                if (pthread_cond_timedwait(&w.woken, &c->lock, &end) != 0) break;
         #endif
             }
-            c->waiting -= 1;
-            return egg_chan_take(c, out);
+            /* Still in line when time ran out: no sender can hand it anything now. */
+            if (w.state == 0) egg_chan_line_drop(&c->receiving, &w);
+            EGG_CHAN_UNLOCK(c);
+            egg_chan_waiter_free(&w);
+            return w.state == 1;
         }
       C
       # The next value into out, if there is one, and unlocks the channel.
+      # The first sender in line moves into the room it leaves, or with cap
+      # 0 its value is the one taken.
       "egg_chan_take" => <<~C,
         static bool egg_chan_take(egg_chan *c, void *out) {
-            bool got = c->count > 0;
-            if (got) {
+            egg_chan_waiter *w = egg_chan_line_pop(&c->sending);
+            bool got = c->count > 0 || w != NULL;
+            if (c->count > 0) {
                 memcpy(out, c->items + (size_t)c->head * c->size, c->size);
                 c->head = (c->head + 1) % c->slots;
-                c->count -= 1;
-                c->received += 1;
-                /* With cap 0 the waiters want different things. */
-                if (c->cap == 0) {
-                    EGG_CHAN_WAKE_ALL(c, writable);
+                if (w != NULL) {
+                    int64_t tail = (c->head + c->count - 1) % c->slots;
+                    memcpy(c->items + (size_t)tail * c->size, w->v, c->size);
                 } else {
-                    EGG_CHAN_WAKE(c, writable);
+                    c->count -= 1;
                 }
-                egg_chan_notify(c);
+            } else if (w != NULL) {
+                memcpy(out, w->v, c->size);
             }
+            if (w != NULL) {
+                w->state = 1;
+                EGG_CHAN_WAKE(w);
+            }
+            if (got) egg_chan_notify(c);
             EGG_CHAN_UNLOCK(c);
             return got;
         }
@@ -1415,7 +1516,7 @@ module Egg
             c->senders -= 1;
             bool last = c->senders == 0 && !c->open;
             if (c->senders == 0) {
-                EGG_CHAN_WAKE_ALL(c, readable);
+                egg_chan_line_close(&c->receiving);
                 egg_chan_notify(c);
             }
             EGG_CHAN_UNLOCK(c);
@@ -1432,14 +1533,14 @@ module Egg
                 EGG_CHAN_UNLOCK(c);
                 return;
             }
-            if (owned && c->count > 0) {
+            if (owned && (c->count > 0 || c->sending.head != NULL)) {
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("a channel closed with values left in it");
             }
             c->receivers = 0;
             c->open = false;
             bool last = c->senders == 0;
-            EGG_CHAN_WAKE_ALL(c, writable);
+            egg_chan_line_close(&c->sending);
             egg_chan_notify(c);
             EGG_CHAN_UNLOCK(c);
             if (last) egg_chan_free(c);
@@ -1500,7 +1601,7 @@ module Egg
             int64_t i = a->node.index;
             EGG_CHAN_LOCK(c);
             if (!a->node.send) {
-                if (c->count > 0) {
+                if (c->count > 0 || c->sending.head != NULL) {
                     if (!egg_sel_claim(s, i)) {
                         EGG_CHAN_UNLOCK(c);
                         return 3;
@@ -1516,9 +1617,8 @@ module Egg
                 EGG_CHAN_UNLOCK(c);
                 egg_panic("send on a closed channel");
             }
-            /* With cap 0, the slot is for a receiver blocked in recv now. */
-            bool room = c->cap > 0 ? c->count < c->slots : c->count == 0 && c->waiting > 0;
-            if (!room) {
+            /* With cap 0, room is a receiver waiting in recv. */
+            if (!egg_chan_room(c)) {
                 int r = c->cap == 0 ? egg_sel_give(c, s, i, a->node.v) : 0;
                 EGG_CHAN_UNLOCK(c);
                 return r;
@@ -1527,20 +1627,7 @@ module Egg
                 EGG_CHAN_UNLOCK(c);
                 return 3;
             }
-            int64_t tail = (c->head + c->count) % c->slots;
-            memcpy(c->items + (size_t)tail * c->size, a->node.v, c->size);
-            c->count += 1;
-            c->sent += 1;
-            int64_t sent = c->sent;
-            EGG_CHAN_WAKE(c, readable);
-            egg_chan_notify(c);
-            if (c->cap == 0) {
-                while (c->received < sent && c->open) EGG_CHAN_WAIT(c, writable);
-                if (c->received < sent) {
-                    EGG_CHAN_UNLOCK(c);
-                    egg_panic("send on a closed channel");
-                }
-            }
+            egg_chan_put(c, a->node.v);
             EGG_CHAN_UNLOCK(c);
             return 1;
         }
@@ -2774,9 +2861,9 @@ module Egg
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
-                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan_take"], "egg_chan_recv_for" => ["egg_chan_take"], "egg_chan_take" => ["egg_chan"],
+                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_wait" => ["egg_chan"], "egg_chan_put" => ["egg_chan"], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_recv" => %w[egg_chan_take egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_take egg_chan_wait], "egg_chan_take" => ["egg_chan"],
                     "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free],
-                    "egg_select" => %w[egg_chan_take], "egg_net_recv" => ["egg_net_base"],
+                    "egg_select" => %w[egg_chan_take egg_chan_put], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
                     "egg_print_addr" => ["egg_net_base"], "egg_net_resolve" => ["egg_net_addrinfo"],
@@ -2807,7 +2894,7 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
-                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take egg_chan_recv
+                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_take
                   egg_chan_tx_close
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
