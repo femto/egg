@@ -1323,14 +1323,18 @@ a pointer (which can already be null), `!U` or `?U` (E108).
   to the block, which must free or move it (E135), so these work on an
   owned `?T`: `while (a.pop(&bufs)) |b| { ... }`. They are statements; an
   `if` with a value has no capture.
-- A `?T` cannot be printed or compared, and a `?T` result cannot be
-  ignored (E113). An owned one (`?Buf(u8)`, `?Db`) must be unwrapped
-  right away, like an owned `!T` (E133).
+- `e == null` and `e != null` ask whether `e: ?T` holds a value, for any
+  T, slices too (`null == e` as well). Otherwise a `?T` cannot be printed
+  or compared: not with a `T` (`opt == 3` is E103; unwrap it first), nor
+  with another `?T`. A `?T` result cannot be ignored (E113). An owned one
+  (`?Buf(u8)`, `?Db`) must be unwrapped right away, like an owned `!T`
+  (E133), so it cannot be compared with null either.
 
 ```egg
 // expect: 4
 // expect: -1
 // expect: 9
+// expect: true false
 uses io
 
 fn first(xs: []i64) ?i64 {
@@ -1346,6 +1350,7 @@ fn main(io: Io) void {
     io.print(best orelse -1)
     best = 9
     io.print(best orelse -1)
+    io.print(best != null, " ", first([1]i64{ 3 }[1..]) != null)
 }
 ```
 
