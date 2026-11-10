@@ -2263,6 +2263,12 @@ module Egg
             # Buf(u8) is only looked at.
             check_borrowed(lhs, lt)
             check_borrowed(rhs, rt)
+          elsif (lhs.is_a?(NullLit) || rhs.is_a?(NullLit)) && @types[lt]&.kind == :opt
+            # opt == null asks only whether there is a value. An owned one
+            # must be unwrapped where it is made: nothing could free it.
+            if owned?(@types[lt].inner)
+              err("E133", "a #{lt} must be unwrapped where it is made (orelse, or if (x) |v| { ... }): compared with null, nothing would free its value", line, col)
+            end
           elsif lt != rt
             err("E103", "cannot compare #{lt} with #{rt}", line, col)
           elsif owned?(lt)

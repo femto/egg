@@ -1,0 +1,18 @@
+// An owned optional cannot wait to be compared; an optional is compared
+// only with null.
+// error: E133 @15
+// error: E103 @17
+uses io, alloc
+
+fn make(a: Allocator, ok: bool) ?Buf(u8) {
+    if (ok) {
+        return a.concat("x", "")
+    }
+    return null
+}
+
+fn main(io: Io, a: Allocator) void {
+    io.print(make(a, true) == null)
+    const n: ?i64 = 3
+    io.print(n == 3)
+}

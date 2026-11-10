@@ -4208,6 +4208,11 @@ module Egg
         line("}")
         return r
       end
+      if (op == "==" || op == "!=") && (lhs.is_a?(NullLit) || rhs.is_a?(NullLit)) && @types[lhs.ty]&.kind == :opt
+        # Whether an optional holds a value.
+        code = expr(lhs.is_a?(NullLit) ? rhs : lhs)
+        return op == "==" ? "(!(#{code}).has)" : "((#{code}).has)"
+      end
       a = in_order(expr(lhs), lhs, [rhs])
       b = expr(rhs)
       if text_type?(lhs.ty) && op != "==" && op != "!="
