@@ -137,7 +137,7 @@ module Egg
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
-                      egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
+                      egg_append egg_append_int egg_append_uint egg_append_float egg_parse_f64 egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
@@ -431,6 +431,68 @@ module Egg
             if (lo < 0 || hi < lo || hi > len) egg_panic("slice out of bounds");
         }
       C
+      # The decimal number that is all of p[0..n] ([+-]digits[.digits][e[+-]digits],
+      # with a digit before or after the point) into *out, rounded by strtod
+      # (inf when too big); false for anything else, as strtod also takes
+      # spaces, hex, inf and nan. strtod reads the locale's decimal point:
+      # if C code set one that is not '.', it is put in place of the '.'
+      # (found from printf, so that no locale header is included).
+      "egg_parse_f64" => <<~C,
+        static bool egg_parse_f64(const uint8_t *p, int64_t n, double *out) {
+            int64_t i = 0, digits = 0, point = -1;
+            if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+            while (i < n && p[i] >= '0' && p[i] <= '9') { i++; digits++; }
+            if (i < n && p[i] == '.') {
+                point = i;
+                i++;
+                while (i < n && p[i] >= '0' && p[i] <= '9') { i++; digits++; }
+            }
+            if (digits == 0) return false;
+            if (i < n && (p[i] == 'e' || p[i] == 'E')) {
+                int64_t exp_digits = 0;
+                i++;
+                if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+                while (i < n && p[i] >= '0' && p[i] <= '9') { i++; exp_digits++; }
+                if (exp_digits == 0) return false;
+            }
+            if (i != n) return false;
+            char small[64];
+            char *buf = NULL;
+            bool all = false;
+            /* With '.' first; if strtod stops at it, the locale's decimal
+               point (as printf writes it in "0.5") goes in its place. */
+            for (int round = 0; round < 2 && !all; round++) {
+                char dp[16] = ".";
+                size_t dp_len = 1;
+                if (round == 1) {
+                    char half[32];
+                    int w = snprintf(half, sizeof half, "%.1f", 0.5);
+                    if (point < 0 || w < 3 || w >= (int)sizeof half || half[0] != '0' || half[w - 1] != '5' || (size_t)(w - 2) >= sizeof dp) break;
+                    dp_len = (size_t)(w - 2);
+                    memcpy(dp, half + 1, dp_len);
+                }
+                size_t size = (size_t)n + dp_len;
+                buf = size <= sizeof small ? small : (char *)malloc(size);
+                if (buf == NULL) egg_panic("out of memory");
+                size_t k = 0;
+                for (int64_t j = 0; j < n; j++) {
+                    if (j == point) {
+                        memcpy(buf + k, dp, dp_len);
+                        k += dp_len;
+                    } else {
+                        buf[k++] = (char)p[j];
+                    }
+                }
+                buf[k] = 0;
+                char *end;
+                *out = strtod(buf, &end);
+                all = end == buf + k;
+                if (buf != small) free(buf);
+            }
+            if (!all) egg_panic("strtod did not read a whole number");
+            return true;
+        }
+      C
       "egg_str_eq" => <<~C,
         static bool egg_str_eq(egg_str a, egg_str b) {
             return a.len == b.len && (a.len == 0 || memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
@@ -498,6 +560,22 @@ module Egg
             snprintf(buf, 40, "%.*e", p - 1, x);
             int exp = atoi(strchr(buf, 'e') + 1);
             if (exp >= -4 && exp < 16) snprintf(buf, 40, "%.*f", p - 1 - exp < 1 ? 1 : p - 1 - exp, x);
+            /* printf wrote the locale's decimal point: if C code set one
+               that is not '.', it becomes a '.' again. */
+            if (strchr(buf, '.') != NULL) return;
+            char half[32];
+            int w = snprintf(half, sizeof half, "%.1f", 0.5);
+            if (w > 3 && w < (int)sizeof half && half[0] == '0' && half[w - 1] == '5') {
+                half[w - 1] = 0;
+                char *at = strstr(buf, half + 1);
+                if (at != NULL) {
+                    *at = '.';
+                    memmove(at + 1, at + (w - 2), strlen(at + (w - 2)) + 1);
+                }
+            } else if (w == 3 && half[1] != '.') {
+                char *at = strchr(buf, half[1]);
+                if (at != NULL) *at = '.';
+            }
         }
       C
       "egg_print_float" => <<~C,
@@ -4749,6 +4827,12 @@ module Egg
         line("#{helper('egg_slice_check')}(0, #{n}, #{n});")
         "((#{c_type(e.ty)}){ #{p}, #{n} })"
       when "intFromPtr" then "((size_t)(uintptr_t)#{expr(a)})"
+      when "parseF64"
+        t = hoist(expr(a), a.ty)
+        x = tmp
+        line("double #{x} = 0;")
+        opt = c_type(e.ty)
+        "(#{helper('egg_parse_f64')}((const uint8_t *)#{t}.ptr, #{t}.len, &#{x}) ? (#{opt}){ .value = #{x}, .has = true } : (#{opt}){ .has = false })"
       when "ptrFromInt" then "((#{c_type(e.ty)})(uintptr_t)#{expr(args[1])})"
       when "as"
         x = args[1]

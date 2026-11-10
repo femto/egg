@@ -1603,6 +1603,45 @@ def check_clutch(dir)
   report(!st.success? && err.include?("an empty version constraint"), "an empty constraint is refused", err)
 end
 
+# A locale whose decimal point is a comma, set by C code: parse_float and
+# printing floats still use '.'. Skipped where no such locale is installed.
+def check_locale(dir)
+  numeric = RUBY_PLATFORM.include?("linux") ? 1 : 4  # LC_NUMERIC: glibc 1; macOS and Windows 4
+  src = <<~EGG
+    uses io, alloc
+    allow unsafe
+
+    const text = @import("std/text")
+
+    extern fn setlocale(category: i32, name: *u8) *u8
+
+    fn main(io: Io, a: Allocator) void {
+        const names = [_]str{ "de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de-DE", "German" }
+        for (names) |n| {
+            if (@intFromPtr(setlocale(#{numeric}, a.cstr(n))) != 0) {
+                io.print(text.parse_float("1.5") orelse -1)
+                io.print(text.parse_float("-2.25e2") orelse -1)
+                var b: Buf(u8) = .empty
+                defer a.free(b)
+                a.append_float(&b, 0.1 + 0.2)
+                io.print(b)
+                return
+            }
+        }
+        io.print("skip")
+    }
+  EGG
+  r = Egg.compile_to_c(src, nil)
+  return report(false, "locale", r.diagnostics.map { |d| d.to_text("locale.egg") }.join("\n")) unless r.diagnostics.empty?
+  base = File.join(dir, "locale")
+  File.write("#{base}.c", r.c_source)
+  _, err, st = Open3.capture3(CC, *CFLAGS, "-o", base, "#{base}.c")
+  return report(false, "locale", err) unless st.success?
+  out, err, st = Open3.capture3(base)
+  return puts("  skip  a comma decimal point (no such locale)") if out == "skip\n"
+  report(st.success? && out == "1.5\n-225.0\n0.30000000000000004\n", "a comma decimal point leaves parse_float and printing alone", "#{out}#{err}")
+end
+
 Dir.mktmpdir do |dir|
   puts "examples"
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
@@ -1662,6 +1701,7 @@ Dir.mktmpdir do |dir|
   check_http_server(dir)
   check_args(dir)
   check_restrict
+  check_locale(dir)
   check_stdin(dir)
   check_utf8(dir)
   check_lsp_char

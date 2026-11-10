@@ -247,7 +247,7 @@ v3 (memory without GC, and what realistic programs needed):
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
   `std/text` searches and takes text apart (`find`, `find_from`, `contains`,
   `starts_with`, `ends_with`, `trim`, `strip` (a part, not a copy), `split`,
-  `parse_int`).
+  `parse_int`, `parse_float` (rounded to the nearest f64; inf when too big)).
   `std/sort` sorts, reverses and checks a mutable slice in place, also of
   elements that own buffers
   (`sort.sort(i64, &b[0..])`, numbers or text; `sort.sort_by(Row,

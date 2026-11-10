@@ -1,0 +1,7 @@
+// @parseF64 is std/text's; a program calls text.parse_float.
+// error: E112 @6
+uses io
+
+fn main(io: Io) void {
+    io.print(@parseF64("1.5") orelse 0)
+}

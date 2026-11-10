@@ -2,6 +2,7 @@
 // []u8 or a Buf(u8), and nothing here keeps what it is given.
 // const text = @import("std/text")
 // text.find("a=b", "=") is 1; text.parse_int("-12") is -12;
+// text.parse_float("2.5e3") is 2500.0;
 // text.strip(" a ") is "a", a part of what it was given;
 // text.split(a, "a,b", ",") is a Buf(Buf(u8)) to free with a.free.
 uses alloc
@@ -118,4 +119,13 @@ fn parse_int(s: []u8) ?i64 {
         return n
     }
     return if (n == limit) null else -n
+}
+
+// The decimal number that is all of s, as an f64: an optional sign, digits
+// with an optional point (a digit before or after it), and an optional
+// exponent ("-1.5", "2e10", ".5", "3."). It is rounded to the nearest f64:
+// too big is inf (or -inf), too small 0. null for anything else, such as
+// "", "1e", " 1", "inf", "nan" or "0x1p3".
+fn parse_float(s: []u8) ?f64 {
+    return @parseF64(s)
 }
