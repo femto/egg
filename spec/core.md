@@ -1944,8 +1944,8 @@ sender comes from it. Both ends are owned, and only `Threads` makes them.
 A value sent moves, so an owned one still has one owner. Values from one
 sender arrive in order. Threads waiting in `send` take their turns in the order
 they came, and so do threads waiting in `recv` or `recv_timeout`: none can be
-passed over forever. A `select` does not wait in these lines, so its arms can
-be passed over. A channel with no sender yet gives null, so make
+passed over forever. A waiting `select` stands in the same lines, each arm in
+the line of its channel. A channel with no sender yet gives null, so make
 the senders before receiving, and a thread that keeps a sender it never
 closes makes `recv` wait forever.
 
@@ -2050,11 +2050,11 @@ send when there is room. With n of 0 a send needs a receiver waiting: to
 another select waiting to receive, the value is handed over at once; to a
 thread waiting in `recv`, the select goes on once it has taken the value, as
 with `send`. When several arms can go, each is as likely as any other (they are
-tried in a random order). A channel whose
-senders have all closed and that is empty is skipped; once every channel it
-receives from is like that, the `closed` arm runs. A select of only receiving
-arms must have one, so a loop around it ends; beside a sending arm it could
-never run, since a send goes out or panics (`send on a closed channel`). Without
+tried in a random order); once it waits, the first of its arms to be served
+goes. A channel whose senders have all closed and that is empty is skipped;
+once every channel it receives from is like that, the `closed` arm runs. A
+select of only receiving arms must have one, so a loop around it ends; beside
+a sending arm it could never run, since a send goes out or panics (`send on a closed channel`). Without
 `timeout`, a select waits for as long as it takes; `timeout(ms)` follows the
 rules of `recv_timeout` (0 does not wait; a negative ms panics).
 

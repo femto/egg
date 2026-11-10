@@ -1,0 +1,74 @@
+// Selects on both sides of 0-capacity channels, many at once: four threads
+// send each value by a select of two arms, four take them by selects that
+// give up after a millisecond now and then. Each select waits in the line
+// of every channel it names; once one arm is served the others are stale,
+// skipped by whoever meets them, and none is lost or served twice.
+// expect: 8004000
+uses alloc, io, thread
+
+const Worker = owned struct {
+    t: Thread
+
+    fn deinit(sink self: Worker) void {
+        self.t.join()
+        @forget(self)
+    }
+}
+
+fn pump(sink a: Sender(i64), sink b: Sender(i64)) void {
+    defer a.close()
+    defer b.close()
+    var i = 1
+    while (i <= 2000) {
+        select {
+            a.send(i) => {}
+            b.send(i) => {}
+        }
+        i = i + 1
+    }
+}
+
+fn drain(sink a: Receiver(i64), sink b: Receiver(i64), sink out: Sender(i64)) void {
+    defer a.close()
+    defer b.close()
+    defer out.close()
+    var total = 0
+    var going = true
+    while (going) {
+        select {
+            a => |v| {
+                total = total + v
+            }
+            b => |v| {
+                total = total + v
+            }
+            timeout(1) => {}
+            closed => {
+                going = false
+            }
+        }
+    }
+    out.send(total)
+}
+
+fn main(io: Io, al: Allocator, threads: Threads) void {
+    const a = threads.channel(i64, 0)
+    const b = threads.channel(i64, 0)
+    const sums = threads.channel(i64, 8)
+    defer sums.close()
+    var pool: Buf(Worker) = .empty
+    defer al.free(pool)
+    var i = 0
+    while (i < 4) {
+        al.push(&pool, Worker{ .t = threads.spawn(pump, a.sender(), b.sender()) })
+        al.push(&pool, Worker{ .t = threads.spawn(drain, a.clone(), b.clone(), sums.sender()) })
+        i = i + 1
+    }
+    a.close()
+    b.close()
+    var total = 0
+    while (sums.recv()) |s| {
+        total = total + s
+    }
+    io.print(total)
+}
