@@ -589,6 +589,7 @@ module Egg
           advance
           name = expect(:ident, "name for the value")
           error_at(name, "only a receiving arm has a value to capture") unless arm.kind == :recv
+          error_at(name, "a capture needs a name, to use the value; leave it out to drop a plain value") if name.text == "_"
           arm.capture = name.text
           expect_op("|")
         end

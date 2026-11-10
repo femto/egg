@@ -1,0 +1,13 @@
+// error: E002 @6
+// |_| names nothing: leave the capture out to drop a plain value.
+uses thread
+fn f(rx: Receiver(i64)) void {
+    select {
+        rx => |_| {
+        }
+        closed => {
+        }
+    }
+}
+fn main() void {
+}

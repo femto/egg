@@ -67,10 +67,10 @@ arm         = ( member , { "," , member } | "else" ) , "=>" ,
               [ "|" , IDENT , "|" ] , block ;
 member      = "." , IDENT | "error" , "." , IDENT ;   (* error.Name: in a switch on an anyerror *)
 select_stmt = "select" , "{" , { NL } , { select_arm , [ "," ] , { NL } } , "}" ;
-select_arm  = ( expr , "=>" , [ "|" , IDENT , "|" ]  (* receive from a Receiver(T); the name cannot be _ *)
-              | expr , "." , "send" , "(" , expr , ")" , "=>"
-              | "timeout" , "(" , expr , ")" , "=>"  (* here timeout and closed name these arms *)
-              | "closed" , "=>" ) , block ;
+select_arm  = ( "closed" , "=>"                     (* here closed and timeout(...) name these arms *)
+              | "timeout" , "(" , expr , ")" , "=>"
+              | expr , "." , "send" , "(" , expr , ")" , "=>"  (* a send: the head is a call of a method send *)
+              | expr , "=>" , [ "|" , IDENT , "|" ] ) , block ;  (* a receive: any other head; the name cannot be _ *)
 return_stmt = "return" , [ expr ] ;
 
 expr        = or_expr , { "catch" , nl , [ "|" , IDENT , "|" , nl ] , fallback | "orelse" , nl , fallback } ;

@@ -325,7 +325,8 @@ v3 (memory without GC, and what realistic programs needed):
   also gives null when ms milliseconds pass first. `rx.clone()` gives a
   pool of threads one queue: each value goes to one receiver. `select { rx
   => |v| { } tx.send(v) => { } timeout(ms) => { } closed => { } }` waits on
-  several channels and runs the one arm that can go
+  several channels and runs one arm that can go, picked at random when
+  several can
 - Network: `uses net` gives a `Net` value; `net.tcp_connect(host, port)`,
   `net.tcp_listen(host, port)`, `net.udp_bind(host, port)` and
   `net.resolve(host, port)`. Sockets are owned and must be closed; everything

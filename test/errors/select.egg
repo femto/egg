@@ -1,10 +1,11 @@
-// error: E153 @12
-// error: E153 @21
-// error: E153 @29
-// error: E153 @42
-// error: E153 @51
-// error: E153 @57
-// error: E153 @68
+// error: E153 @13
+// error: E153 @22
+// error: E153 @30
+// error: E153 @43
+// error: E153 @52
+// error: E153 @58
+// error: E153 @69
+// error: E153 @85
 uses alloc, thread
 
 fn no_closed(rx: Receiver(i64)) void {
@@ -67,6 +68,21 @@ fn two_timeouts(tx: Sender(i64)) void {
 fn only_timeout() void {
     select {
         timeout(1) => {
+        }
+    }
+}
+
+const Conn = struct {
+    n: i64
+
+    fn send(self: Conn, v: i64) void {
+        _ = self.n + v
+    }
+}
+
+fn not_a_sender(c: Conn) void {
+    select {
+        c.send(1) => {
         }
     }
 }

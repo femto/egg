@@ -2043,9 +2043,10 @@ It runs once, like `switch`: a loop goes around it, and `break` and
 `continue` in an arm act on that loop. First the head of every arm is
 evaluated, in order (each channel, each value to send, the milliseconds),
 then it waits until some arm can go: a receive when a value is there, a
-send when there is room (with n of 0, when a receiver is waiting; the
-select then waits for the value to be received, as `send` does). When several
-can, it picks one at random, so none is passed over for ever. A channel whose
+send when there is room (with n of 0, when a receiver is waiting: a select
+then hands the value straight to it, and a `recv` takes it before the select
+goes on, as with `send`). When several
+can, each is as likely to go as any other (it tries them in a random order). A channel whose
 senders have all closed and that is empty is skipped; once every channel it
 receives from is like that, the `closed` arm runs. A select of only receiving
 arms must have one, so a loop around it ends; beside a sending arm it could

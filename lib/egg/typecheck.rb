@@ -1645,8 +1645,10 @@ module Egg
         when :send
           call = arm.call
           check_expr(call)
-          t = call.obj.ty
-          if t.start_with?("Sender(") && call.args.length == 1 && owned?(@types[t].elem) && !path_place?(call.args[0])
+          t = call.obj.ty.to_s
+          if t != "error" && !t.start_with?("Sender(")
+            err("E153", "a select arm sends with tx.send(v) on a Sender(T); found #{t}", call.line, call.col)
+          elsif t.start_with?("Sender(") && call.args.length == 1 && owned?(@types[t].elem) && !path_place?(call.args[0])
             v = call.args[0]
             err("E153", "a select arm sends an owned value only from a variable or a field, which keeps it when another arm runs", v.line, v.col)
           end
