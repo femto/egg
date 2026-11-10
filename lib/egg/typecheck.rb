@@ -164,7 +164,10 @@ module Egg
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
                       "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
-                      "bufPtr" => 1, "sliceFromPtr" => 2 }.freeze
+                      "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1 }.freeze
+    # Builtins only the standard library may call: std/text's parse_float
+    # is @parseF64, which the C library's strtod rounds.
+    STD_BUILTINS = %w[parseF64].freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr bufPtr sliceFromPtr].freeze
     BUILTINS = BUILTIN_ARITY.keys.freeze
@@ -3733,8 +3736,8 @@ module Egg
         err("E129", "@import is only allowed as a top-level `const name = @import(\"file.egg\")`", line, col)
         return check_all_error(args)
       end
-      unless BUILTINS.include?(name)
-        err("E112", "unknown builtin '@#{name}' (builtins: #{BUILTINS.map { |b| "@#{b}" }.join(', ')}, and @This, @import)", line, col)
+      unless BUILTINS.include?(name) && (!STD_BUILTINS.include?(name) || @mod.root == STD_ROOT)
+        err("E112", "unknown builtin '@#{name}' (builtins: #{(BUILTINS - STD_BUILTINS).map { |b| "@#{b}" }.join(', ')}, and @This, @import)", line, col)
         return check_all_error(args)
       end
       arity = BUILTIN_ARITY[name]
@@ -3765,6 +3768,15 @@ module Egg
           return "error"
         end
         t
+      when "parseF64"
+        # @parseF64(t): the decimal number that is all of the text t,
+        # rounded to the nearest f64 (inf when too big), or null.
+        t = slice_expr?(a) ? check_slice_arg(a, nil) : check_expr(a, "str")
+        unless t == "error" || t == "str" || t == "[]u8" || t == "Buf(u8)"
+          err("E103", "@parseF64 needs text (a str, a []u8 or a Buf(u8)), found #{t}", a.line, a.col)
+        end
+        check_borrowed(a, t)
+        opt_type("f64")
       when "strPtr"
         # @strPtr(t): a pointer to the bytes of the text t, for C (not
         # 0-terminated): a str, a []u8 or a Buf(u8).

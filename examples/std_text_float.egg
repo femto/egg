@@ -1,0 +1,70 @@
+// std/text's parse_float: decimal text to the nearest f64. Too big is inf,
+// too small 0; anything that is not a decimal number is null.
+// expect: -1.5
+// expect: 20000000000.0
+// expect: 0.5
+// expect: 3.0
+// expect: 0.1
+// expect: 0.30000000000000004
+// expect: inf
+// expect: -inf
+// expect: 0.0
+// expect: 5e-324
+// expect: 2.2250738585072014e-308
+// expect: 1e-101
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+// expect: null
+uses io, alloc
+
+const text = @import("std/text")
+
+fn show(io: Io, s: []u8) void {
+    if (text.parse_float(s)) |x| {
+        io.print(x)
+    } else {
+        io.print("null")
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    show(io, "-1.5")
+    show(io, "2e10")
+    show(io, ".5")
+    show(io, "3.")
+    show(io, "0.1")
+    show(io, "0.30000000000000004")
+    show(io, "1e400")
+    show(io, "-1E+400")
+    show(io, "1e-400")
+    show(io, "4.9e-324")
+    show(io, "2.2250738585072014e-308")
+    // Longer than the helper's buffer on the stack.
+    var long = a.concat("0.", "")
+    defer a.free(long)
+    var i = 0
+    while (i < 100) {
+        a.append_str(&long, "0")
+        i = i + 1
+    }
+    a.append_str(&long, "1")
+    show(io, long)
+
+    show(io, "")
+    show(io, "1e")
+    show(io, "1e+")
+    show(io, " 1")
+    show(io, "1 ")
+    show(io, "inf")
+    show(io, "nan")
+    show(io, "0x1p3")
+    show(io, ".")
+    show(io, "-")
+}

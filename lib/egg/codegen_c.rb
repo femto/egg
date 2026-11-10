@@ -137,7 +137,7 @@ module Egg
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
-                      egg_append egg_append_int egg_append_uint egg_append_float egg_append_cstr
+                      egg_append egg_append_int egg_append_uint egg_append_float egg_parse_f64 egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
@@ -429,6 +429,38 @@ module Egg
       "egg_slice_check" => <<~C,
         static void egg_slice_check(int64_t lo, int64_t hi, int64_t len) {
             if (lo < 0 || hi < lo || hi > len) egg_panic("slice out of bounds");
+        }
+      C
+      # The decimal number that is all of p[0..n] ([+-]digits[.digits][e[+-]digits],
+      # with a digit before or after the point) into *out, rounded by strtod
+      # (inf when too big); false for anything else, as strtod also takes
+      # spaces, hex, inf and nan.
+      "egg_parse_f64" => <<~C,
+        static bool egg_parse_f64(const uint8_t *p, int64_t n, double *out) {
+            int64_t i = 0, digits = 0;
+            if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+            while (i < n && p[i] >= '0' && p[i] <= '9') { i++; digits++; }
+            if (i < n && p[i] == '.') {
+                i++;
+                while (i < n && p[i] >= '0' && p[i] <= '9') { i++; digits++; }
+            }
+            if (digits == 0) return false;
+            if (i < n && (p[i] == 'e' || p[i] == 'E')) {
+                int64_t exp_digits = 0;
+                i++;
+                if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+                while (i < n && p[i] >= '0' && p[i] <= '9') { i++; exp_digits++; }
+                if (exp_digits == 0) return false;
+            }
+            if (i != n) return false;
+            char small[64];
+            char *buf = n < (int64_t)sizeof small ? small : (char *)malloc((size_t)n + 1);
+            if (buf == NULL) egg_panic("out of memory");
+            memcpy(buf, p, (size_t)n);
+            buf[n] = 0;
+            *out = strtod(buf, NULL);
+            if (buf != small) free(buf);
+            return true;
         }
       C
       "egg_str_eq" => <<~C,
@@ -4749,6 +4781,12 @@ module Egg
         line("#{helper('egg_slice_check')}(0, #{n}, #{n});")
         "((#{c_type(e.ty)}){ #{p}, #{n} })"
       when "intFromPtr" then "((size_t)(uintptr_t)#{expr(a)})"
+      when "parseF64"
+        t = hoist(expr(a), a.ty)
+        x = tmp
+        line("double #{x} = 0;")
+        opt = c_type(e.ty)
+        "(#{helper('egg_parse_f64')}((const uint8_t *)#{t}.ptr, #{t}.len, &#{x}) ? (#{opt}){ .value = #{x}, .has = true } : (#{opt}){ .has = false })"
       when "ptrFromInt" then "((#{c_type(e.ty)})(uintptr_t)#{expr(args[1])})"
       when "as"
         x = args[1]
