@@ -1942,7 +1942,9 @@ sender comes from it. Both ends are owned, and only `Threads` makes them.
 | `Sender(T)` | `tx.send(v)`: takes v, waiting while the channel is full (and for the receiver, with n of 0); `tx.clone() Sender(T)`; `tx.close()` |
 
 A value sent moves, so an owned one still has one owner. Values from one
-sender arrive in order. A channel with no sender yet gives null, so make
+sender arrive in order. Threads waiting in `send` take their turns in the order
+they came, and so do threads waiting in `recv` or `recv_timeout`: none can be
+passed over forever. A channel with no sender yet gives null, so make
 the senders before receiving, and a thread that keeps a sender it never
 closes makes `recv` wait forever.
 
