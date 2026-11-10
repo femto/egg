@@ -1,6 +1,6 @@
 // Many values through selects on both sides: two threads hand values over
 // 0-capacity channels with selects of their own, another sends plainly into
-// a small one; a relay selects between the two, giving up now and then,
+// a small one; a relay selects among all three, giving up now and then,
 // and passes each on. None is lost: a select handing a value over with
 // capacity 0 gives it to a receiver that takes it.
 // expect: 3000 values, total 1501000
