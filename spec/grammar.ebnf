@@ -48,7 +48,7 @@ union_body  = "union" , "(" , "enum" , ")" , "{" , { NL } ,
 
 block       = "{" , { NL } , { stmt , ( NL | (* before *) "}" ) , { NL } } , "}" ;
 
-stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt
+stmt        = var_decl | assign | if_stmt | while_stmt | for_stmt | switch_stmt | select_stmt
             | "break" | "continue" | return_stmt | defer_stmt | expr ;
                                                      (* an expr statement does not start with "if":
                                                         a leading if is always if_stmt *)
@@ -66,6 +66,11 @@ switch_stmt = "switch" , "(" , expr , ")" , "{" , { NL } , { arm , [ "," ] , { N
 arm         = ( member , { "," , member } | "else" ) , "=>" ,
               [ "|" , IDENT , "|" ] , block ;
 member      = "." , IDENT | "error" , "." , IDENT ;   (* error.Name: in a switch on an anyerror *)
+select_stmt = "select" , "{" , { NL } , { select_arm , [ "," ] , { NL } } , "}" ;
+select_arm  = ( expr , "=>" , [ "|" , IDENT , "|" ]  (* receive from a Receiver(T); the name cannot be _ *)
+              | expr , "." , "send" , "(" , expr , ")" , "=>"
+              | "timeout" , "(" , expr , ")" , "=>"  (* here timeout and closed name these arms *)
+              | "closed" , "=>" ) , block ;
 return_stmt = "return" , [ expr ] ;
 
 expr        = or_expr , { "catch" , nl , [ "|" , IDENT , "|" , nl ] , fallback | "orelse" , nl , fallback } ;
@@ -119,6 +124,6 @@ CHAR        = "'" , ( byte | escape | "\x" , hex , hex ) , "'" ;  (* an INT: 'a'
                                                        escapes \n \r \t \\ \' \" \0 *)
 BUILTIN     = "@" , IDENT ;
 COMMENT     = "//" , { any char except newline } ;
-KEYWORDS    = fn return if else while for break continue switch var const
+KEYWORDS    = fn return if else while for break continue switch select var const
               true false and or struct enum union try catch orelse error inout sink comptime uses
               allow extern link owned null defer errdefer ;

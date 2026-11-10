@@ -142,7 +142,7 @@ module Egg
                       egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
                       egg_chan egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_take egg_chan_recv egg_chan_recv_for
-                      egg_chan_tx_close egg_chan_rx_close
+                      egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_conn_new egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
@@ -1171,6 +1171,11 @@ module Egg
             /* cap 0 hands each value over: it waits in the one slot, and its
                sender waits until received has counted it. */
             int64_t cap, slots, head, count, senders, receivers, sent, received;
+            /* waiting: receivers blocked on it, in recv or a select; a
+               select's send with cap 0 goes only to one of them. */
+            int64_t waiting;
+            /* the selects waiting on it, told of every change */
+            struct egg_sel_node *selects;
             bool open;
         } egg_chan;
         #ifdef _WIN32
@@ -1186,6 +1191,37 @@ module Egg
         #define EGG_CHAN_WAKE(c, on) pthread_cond_signal(&(c)->on)
         #define EGG_CHAN_WAKE_ALL(c, on) pthread_cond_broadcast(&(c)->on)
         #endif
+        /* One select waiting: what a channel tells it, under its own lock. */
+        typedef struct {
+        #ifdef _WIN32
+            CRITICAL_SECTION lock;
+            CONDITION_VARIABLE changed;
+        #else
+            pthread_mutex_t lock;
+            pthread_cond_t changed;
+        #endif
+            bool fired;
+        } egg_sel;
+        typedef struct egg_sel_node {
+            egg_sel *s;
+            struct egg_sel_node *next;
+        } egg_sel_node;
+        /* With the channel locked: something changed, so its selects look again. */
+        static inline void egg_chan_notify(egg_chan *c) {
+            for (egg_sel_node *n = c->selects; n != NULL; n = n->next) {
+        #ifdef _WIN32
+                EnterCriticalSection(&n->s->lock);
+                n->s->fired = true;
+                WakeConditionVariable(&n->s->changed);
+                LeaveCriticalSection(&n->s->lock);
+        #else
+                pthread_mutex_lock(&n->s->lock);
+                n->s->fired = true;
+                pthread_cond_signal(&n->s->changed);
+                pthread_mutex_unlock(&n->s->lock);
+        #endif
+            }
+        }
       C
       "egg_chan_new" => <<~C,
         static void *egg_chan_new(size_t size, int64_t cap) {
@@ -1220,6 +1256,8 @@ module Egg
             c->count = 0;
             c->senders = 0;
             c->receivers = 1;
+            c->waiting = 0;
+            c->selects = NULL;
             c->open = true;
             return c;
         }
@@ -1270,6 +1308,7 @@ module Egg
             c->sent += 1;
             int64_t mine = c->sent;
             EGG_CHAN_WAKE(c, readable);
+            egg_chan_notify(c);
             if (c->cap == 0) {
                 while (c->received < mine && c->open) EGG_CHAN_WAIT(c, writable);
                 if (c->received < mine) {
@@ -1284,7 +1323,12 @@ module Egg
         static bool egg_chan_recv(void *v, void *out) {
             egg_chan *c = (egg_chan *)v;
             EGG_CHAN_LOCK(c);
-            while (c->count == 0 && c->senders > 0) EGG_CHAN_WAIT(c, readable);
+            if (c->count == 0 && c->senders > 0) {
+                c->waiting += 1;
+                if (c->cap == 0) egg_chan_notify(c);
+                while (c->count == 0 && c->senders > 0) EGG_CHAN_WAIT(c, readable);
+                c->waiting -= 1;
+            }
             return egg_chan_take(c, out);
         }
       C
@@ -1306,6 +1350,8 @@ module Egg
             }
         #endif
             EGG_CHAN_LOCK(c);
+            c->waiting += 1;
+            if (c->cap == 0 && c->count == 0 && ms > 0) egg_chan_notify(c);
             while (c->count == 0 && c->senders > 0) {
         #ifdef _WIN32
                 ULONGLONG now = GetTickCount64();
@@ -1328,6 +1374,7 @@ module Egg
                 if (pthread_cond_timedwait(&c->readable, &c->lock, &end) != 0) break;
         #endif
             }
+            c->waiting -= 1;
             return egg_chan_take(c, out);
         }
       C
@@ -1346,6 +1393,7 @@ module Egg
                 } else {
                     EGG_CHAN_WAKE(c, writable);
                 }
+                egg_chan_notify(c);
             }
             EGG_CHAN_UNLOCK(c);
             return got;
@@ -1357,7 +1405,10 @@ module Egg
             EGG_CHAN_LOCK(c);
             c->senders -= 1;
             bool last = c->senders == 0 && !c->open;
-            if (c->senders == 0) EGG_CHAN_WAKE_ALL(c, readable);
+            if (c->senders == 0) {
+                EGG_CHAN_WAKE_ALL(c, readable);
+                egg_chan_notify(c);
+            }
             EGG_CHAN_UNLOCK(c);
             if (last) egg_chan_free(c);
         }
@@ -1380,8 +1431,225 @@ module Egg
             c->open = false;
             bool last = c->senders == 0;
             EGG_CHAN_WAKE_ALL(c, writable);
+            egg_chan_notify(c);
             EGG_CHAN_UNLOCK(c);
             if (last) egg_chan_free(c);
+        }
+      C
+      # select: arms[i] receives into v, or sends what v points at. Returns
+      # the arm that went, -1 when ms (timed) passed first, -2 when every
+      # arm receives and each channel is closed and empty (closable).
+      "egg_select" => <<~C,
+        typedef struct {
+            egg_chan *c;
+            void *v;
+            bool send;
+            egg_sel_node node;
+        } egg_sel_arm;
+        /* 1: arm i went; 2: it receives from a closed, empty channel; 0: not now. */
+        static int egg_sel_try(egg_sel_arm *arms, int64_t n, int64_t i, bool registered) {
+            egg_sel_arm *a = &arms[i];
+            egg_chan *c = a->c;
+            EGG_CHAN_LOCK(c);
+            if (!a->send) {
+                if (c->count > 0) {
+                    egg_chan_take(c, a->v);
+                    return 1;
+                }
+                bool closed = c->senders == 0;
+                EGG_CHAN_UNLOCK(c);
+                return closed ? 2 : 0;
+            }
+            if (!c->open) {
+                EGG_CHAN_UNLOCK(c);
+                egg_panic("send on a closed channel");
+            }
+            bool ready = c->count < c->slots;
+            if (c->cap == 0) {
+                /* Only to a receiver waiting now, and not to this select's own. */
+                int64_t mine = 0;
+                for (int64_t j = 0; j < n; j++) mine += registered && !arms[j].send && arms[j].c == c;
+                ready = c->count == 0 && c->waiting > mine;
+            }
+            if (!ready) {
+                EGG_CHAN_UNLOCK(c);
+                return 0;
+            }
+            int64_t tail = (c->head + c->count) % c->slots;
+            memcpy(c->items + (size_t)tail * c->size, a->v, c->size);
+            c->count += 1;
+            c->sent += 1;
+            int64_t sent = c->sent;
+            EGG_CHAN_WAKE(c, readable);
+            egg_chan_notify(c);
+            if (c->cap == 0) {
+                while (c->received < sent && c->open) EGG_CHAN_WAIT(c, writable);
+                if (c->received < sent) {
+                    EGG_CHAN_UNLOCK(c);
+                    egg_panic("send on a closed channel");
+                }
+            }
+            EGG_CHAN_UNLOCK(c);
+            return 1;
+        }
+        static void egg_sel_enter(egg_sel_arm *arms, int64_t n, egg_sel *s, bool on) {
+            for (int64_t i = 0; i < n; i++) {
+                egg_chan *c = arms[i].c;
+                EGG_CHAN_LOCK(c);
+                if (on) {
+                    arms[i].node.s = s;
+                    arms[i].node.next = c->selects;
+                    c->selects = &arms[i].node;
+                    if (!arms[i].send) {
+                        c->waiting += 1;
+                        if (c->cap == 0) egg_chan_notify(c);
+                    }
+                } else {
+                    egg_sel_node **p = &c->selects;
+                    while (*p != &arms[i].node) p = &(*p)->next;
+                    *p = arms[i].node.next;
+                    if (!arms[i].send) c->waiting -= 1;
+                }
+                EGG_CHAN_UNLOCK(c);
+            }
+        }
+        static int64_t egg_select(egg_sel_arm *arms, int64_t n, bool timed, int64_t ms, bool closable) {
+            if (timed && ms < 0) egg_panic("negative timeout");
+            egg_sel s;
+            s.fired = false;
+            uint64_t seed = (uint64_t)(uintptr_t)&s;
+        #ifdef _WIN32
+            ULONGLONG end = GetTickCount64() + (ULONGLONG)ms;
+            LARGE_INTEGER pc;
+            QueryPerformanceCounter(&pc);
+            seed ^= (uint64_t)pc.QuadPart;
+            InitializeCriticalSection(&s.lock);
+            InitializeConditionVariable(&s.changed);
+        #else
+            struct timespec end;
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            seed ^= (uint64_t)end.tv_nsec * 0x9E3779B97F4A7C15u;
+            if (timed) {
+                end.tv_sec += (time_t)(ms / 1000);
+                end.tv_nsec += (long)(ms % 1000) * 1000000L;
+                if (end.tv_nsec >= 1000000000L) {
+                    end.tv_sec += 1;
+                    end.tv_nsec -= 1000000000L;
+                }
+            }
+            pthread_condattr_t attr;
+            if (pthread_condattr_init(&attr) != 0) egg_panic("cannot wait in a select");
+        #ifndef __APPLE__
+            if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) egg_panic("cannot wait in a select");
+        #endif
+            if (pthread_mutex_init(&s.lock, NULL) != 0 || pthread_cond_init(&s.changed, &attr) != 0) egg_panic("cannot wait in a select");
+            pthread_condattr_destroy(&attr);
+        #endif
+            /* Start at a random arm, so that none is always passed over. */
+            seed ^= seed >> 31;
+            seed *= 0xBF58476D1CE4E5B9u;
+            seed ^= seed >> 29;
+            int64_t start = (int64_t)(seed % (uint64_t)n);
+            bool registered = false;
+            int64_t went = -1;
+            for (;;) {
+                /* A change from here on makes the wait below return at once. */
+        #ifdef _WIN32
+                EnterCriticalSection(&s.lock);
+                s.fired = false;
+                LeaveCriticalSection(&s.lock);
+        #else
+                pthread_mutex_lock(&s.lock);
+                s.fired = false;
+                pthread_mutex_unlock(&s.lock);
+        #endif
+                bool closed = true;
+                for (int64_t k = 0; k < n; k++) {
+                    int64_t i = (start + k) % n;
+                    int r = egg_sel_try(arms, n, i, registered);
+                    if (r == 1) {
+                        went = i;
+                        goto done;
+                    }
+                    if (r != 2) closed = false;
+                }
+                if (closable && closed) {
+                    went = -2;
+                    goto done;
+                }
+                if (timed && ms == 0) goto done;
+                if (!registered) {
+                    /* Look once more after joining: something may have come meanwhile. */
+                    egg_sel_enter(arms, n, &s, true);
+                    registered = true;
+                    continue;
+                }
+                bool late = false;
+        #ifdef _WIN32
+                EnterCriticalSection(&s.lock);
+                while (!s.fired && !late) {
+                    if (!timed) {
+                        SleepConditionVariableCS(&s.changed, &s.lock, INFINITE);
+                        continue;
+                    }
+                    ULONGLONG now = GetTickCount64();
+                    if (now >= end) {
+                        late = true;
+                        break;
+                    }
+                    ULONGLONG left = end - now;
+                    SleepConditionVariableCS(&s.changed, &s.lock, left > 0xFFFFFFFEu ? 0xFFFFFFFEu : (DWORD)left);
+                }
+                LeaveCriticalSection(&s.lock);
+        #else
+                pthread_mutex_lock(&s.lock);
+                while (!s.fired && !late) {
+                    if (!timed) {
+                        pthread_cond_wait(&s.changed, &s.lock);
+                        continue;
+                    }
+        #ifdef __APPLE__
+                    struct timespec now, left;
+                    clock_gettime(CLOCK_MONOTONIC, &now);
+                    left.tv_sec = end.tv_sec - now.tv_sec;
+                    left.tv_nsec = end.tv_nsec - now.tv_nsec;
+                    if (left.tv_nsec < 0) {
+                        left.tv_sec -= 1;
+                        left.tv_nsec += 1000000000L;
+                    }
+                    if (left.tv_sec < 0) {
+                        late = true;
+                        break;
+                    }
+                    /* ETIMEDOUT, or a failure: either way, look once more and stop. */
+                    if (pthread_cond_timedwait_relative_np(&s.changed, &s.lock, &left) != 0) late = true;
+        #else
+                    if (pthread_cond_timedwait(&s.changed, &s.lock, &end) != 0) late = true;
+        #endif
+                }
+                pthread_mutex_unlock(&s.lock);
+        #endif
+                if (late) {
+                    /* What came just as time ran out still counts. */
+                    for (int64_t k = 0; k < n; k++) {
+                        int64_t i = (start + k) % n;
+                        if (egg_sel_try(arms, n, i, registered) == 1) {
+                            went = i;
+                            goto done;
+                        }
+                    }
+                    goto done;
+                }
+            }
+        done:
+            if (registered) egg_sel_enter(arms, n, &s, false);
+        #ifdef _WIN32
+            DeleteCriticalSection(&s.lock);
+        #else
+            pthread_mutex_destroy(&s.lock);
+            pthread_cond_destroy(&s.changed);
+        #endif
+            return went;
         }
       C
       "egg_net_base" => <<~C,
@@ -2459,7 +2727,8 @@ module Egg
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
                     "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_send" => ["egg_chan"], "egg_chan_recv" => ["egg_chan_take"], "egg_chan_recv_for" => ["egg_chan_take"], "egg_chan_take" => ["egg_chan"],
-                    "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free], "egg_net_recv" => ["egg_net_base"],
+                    "egg_chan_tx_close" => %w[egg_chan egg_chan_free], "egg_chan_rx_close" => %w[egg_chan egg_chan_free],
+                    "egg_select" => %w[egg_chan_take], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
                     "egg_net_port" => ["egg_sockaddr_port"], "egg_addr_port" => ["egg_sockaddr_port"],
                     "egg_print_addr" => ["egg_net_base"], "egg_net_resolve" => ["egg_net_addrinfo"],
@@ -3180,6 +3449,8 @@ module Egg
         gen_for(stmt)
       in Switch
         gen_switch(stmt)
+      in Select
+        gen_select(stmt)
       in Break
         mark(stmt.line) if emit_defers(@loop_marks.last, false)
         line("break;")
@@ -3381,6 +3652,60 @@ module Egg
           payload = info.fields.find { |m, _| m == arm.names[0] }[1]
           declare_local(arm.capture, payload)
           line("    const #{c_type(payload)} v_#{arm.capture} = #{base}.u.m_#{arm.names[0]};")
+        end
+        gen_block(arm.body)
+        @locals.pop
+      end
+      line("}")
+    end
+
+    # select: the heads in order, into an array of arms for egg_select;
+    # then an if chain on the arm that went (so `break` leaves the loop).
+    def gen_select(stmt)
+      entries = []
+      ms = nil
+      took = {}
+      stmt.arms.each do |arm|
+        case arm.kind
+        when :recv
+          elem = @types[arm.chan.ty].elem
+          c = hoist(expr(arm.chan), arm.chan.ty)
+          v = tmp
+          line("#{c_type(elem)} #{v};")
+          took[arm] = [entries.length, v, elem]
+          entries << "{ .c = (egg_chan *)#{c}.c, .v = &#{v}, .send = false }"
+        when :send
+          call = arm.call
+          elem = @types[call.obj.ty].elem
+          c = hoist(expr(call.obj), call.obj.ty)
+          v = hoist(coerce(expr(call.args[0]), call.args[0].ty, elem), elem)
+          took[arm] = [entries.length]
+          entries << "{ .c = (egg_chan *)#{c}.c, .v = &#{v}, .send = true }"
+        when :timeout
+          ms = hoist(expr(arm.value), "i64")
+        end
+      end
+      arms = tmp
+      line("egg_sel_arm #{arms}[#{entries.length}] = { #{entries.join(', ')} };")
+      closable = stmt.arms.any? { |a| a.kind == :closed }
+      went = hoist("#{helper('egg_select')}(#{arms}, #{entries.length}, #{!ms.nil?}, #{ms || 0}, #{closable})", "i64")
+      last = stmt.arms.length - 1
+      stmt.arms.each_with_index do |arm, i|
+        test = case arm.kind
+               when :timeout then "#{went} == -1"
+               when :closed then "#{went} == -2"
+               else "#{went} == #{took[arm][0]}"
+               end
+        head = i == last ? "else {" : "else if (#{test}) {"
+        head = "if (#{test}) {" if i.zero?
+        line("}") unless i.zero?
+        mark(arm.line)
+        line(i.zero? && i == last ? "{" : head)
+        @locals << {}
+        if arm.kind == :recv && !arm.capture.nil?
+          _, v, elem = took[arm]
+          declare_local(arm.capture, elem)
+          line("    const #{c_type(elem)} v_#{arm.capture} = #{v};")
         end
         gen_block(arm.body)
         @locals.pop

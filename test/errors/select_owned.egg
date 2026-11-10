@@ -1,0 +1,15 @@
+// error: E134 @6
+uses alloc, thread
+
+// The value moves only in its own arm: the others must still give it away.
+fn send_or_keep(a: Allocator, tx: Sender(Buf(u8)), sink b: Buf(u8)) void {
+    select {
+        tx.send(b) => {
+        }
+        timeout(5) => {
+        }
+    }
+}
+
+fn main() void {
+}

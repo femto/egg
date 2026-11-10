@@ -1,0 +1,17 @@
+// A send arm on a channel whose receivers have all closed panics, as send
+// does: nobody would ever receive the value.
+// panic: send on a closed channel
+uses thread
+
+fn main(threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    const tx = rx.sender()
+    rx.close()
+    select {
+        tx.send(1) => {
+        }
+        timeout(0) => {
+        }
+    }
+    tx.close()
+}

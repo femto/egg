@@ -1,0 +1,75 @@
+// error: E153 @12
+// error: E153 @21
+// error: E153 @29
+// error: E153 @42
+// error: E153 @51
+// error: E153 @57
+// error: E153 @68
+uses alloc, thread
+
+fn no_closed(rx: Receiver(i64)) void {
+    // only receiving arms: closed is required
+    select {
+        rx => |v| {
+            _ = v
+        }
+    }
+}
+
+fn not_a_channel(n: i64) void {
+    select {
+        n => {
+        }
+        closed => {
+        }
+    }
+}
+
+fn closed_never_runs(rx: Receiver(i64), tx: Sender(i64)) void {
+    select {
+        rx => |v| {
+            _ = v
+        }
+        tx.send(1) => {
+        }
+        closed => {
+        }
+    }
+}
+
+fn owned_lost(rx: Receiver(Buf(u8))) void {
+    select {
+        rx => {
+        }
+        closed => {
+        }
+    }
+}
+
+fn owned_temp(a: Allocator, tx: Sender(Buf(u8))) void {
+    select {
+        tx.send(a.concat("a", "b")) => {
+        }
+    }
+}
+
+fn two_timeouts(tx: Sender(i64)) void {
+    select {
+        tx.send(1) => {
+        }
+        timeout(1) => {
+        }
+        timeout(2) => {
+        }
+    }
+}
+
+fn only_timeout() void {
+    select {
+        timeout(1) => {
+        }
+    }
+}
+
+fn main() void {
+}
