@@ -19,26 +19,42 @@ const Worker = owned struct {
     }
 }
 
-fn give(sink tx: Sender(i64), n: i64) void {
+// Each worker says it is ready just before it blocks.
+fn give(sink tx: Sender(i64), sink ready: Sender(i64), n: i64) void {
     defer tx.close()
+    ready.send(n)
+    ready.close()
     tx.send(n)
 }
 
 // Receiver n should get the value n.
-fn take(sink rx: Receiver(i64), sink out: Sender(bool), n: i64) void {
+fn take(sink rx: Receiver(i64), sink out: Sender(bool), sink ready: Sender(i64), n: i64) void {
     defer rx.close()
     defer out.close()
+    ready.send(n)
+    ready.close()
     if (rx.recv()) |v| {
         out.send(v == n)
     }
 }
 
+// Once a worker is ready, only a few steps are left before it blocks: a
+// thread blocked cannot say so, so waiting a little on idle (where nothing
+// ever comes) covers those.
+fn settle(ready: Receiver(i64), idle: Receiver(i64)) void {
+    _ = ready.recv()
+    _ = idle.recv_timeout(50)
+}
+
 fn main(io: Io, a: Allocator, threads: Threads) void {
-    // Nothing comes on idle: waiting on it gives each thread time to block.
     const idle = threads.channel(i64, 0)
     defer idle.close()
     const still = idle.sender()
     defer still.close()
+    const ready = threads.channel(i64, 1)
+    defer ready.close()
+    const told = ready.sender()
+    defer told.close()
     var pool: Buf(Worker) = .empty
     defer a.free(pool)
 
@@ -49,8 +65,8 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     first.close()
     var i = 1
     while (i <= 4) {
-        a.push(&pool, Worker{ .t = threads.spawn(give, full.sender(), i) })
-        _ = idle.recv_timeout(50)
+        a.push(&pool, Worker{ .t = threads.spawn(give, full.sender(), ready.sender(), i) })
+        settle(ready, idle)
         i = i + 1
     }
     var got = 0
@@ -66,8 +82,8 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     defer meet.close()
     i = 1
     while (i <= 3) {
-        a.push(&pool, Worker{ .t = threads.spawn(give, meet.sender(), i) })
-        _ = idle.recv_timeout(50)
+        a.push(&pool, Worker{ .t = threads.spawn(give, meet.sender(), ready.sender(), i) })
+        settle(ready, idle)
         i = i + 1
     }
     const m1 = meet.recv() orelse 0
@@ -82,8 +98,8 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     const feed = jobs.sender()
     i = 1
     while (i <= 4) {
-        a.push(&pool, Worker{ .t = threads.spawn(take, jobs.clone(), results.sender(), i) })
-        _ = idle.recv_timeout(50)
+        a.push(&pool, Worker{ .t = threads.spawn(take, jobs.clone(), results.sender(), ready.sender(), i) })
+        settle(ready, idle)
         i = i + 1
     }
     i = 1
