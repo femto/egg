@@ -1,11 +1,13 @@
-// error: E153 @13
-// error: E153 @22
-// error: E153 @30
-// error: E153 @43
-// error: E153 @52
-// error: E153 @58
-// error: E153 @69
-// error: E153 @85
+// error: E153 @15
+// error: E153 @24
+// error: E153 @32
+// error: E153 @45
+// error: E153 @54
+// error: E153 @60
+// error: E153 @71
+// error: E153 @87
+// error: E153 @100
+// error: E153 @106
 uses alloc, thread
 
 fn no_closed(rx: Receiver(i64)) void {
@@ -83,6 +85,31 @@ const Conn = struct {
 fn not_a_sender(c: Conn) void {
     select {
         c.send(1) => {
+        }
+    }
+}
+
+fn wait_for() !i64 {
+    return 5
+}
+
+fn try_in_head(tx: Sender(i64)) !void {
+    select {
+        tx.send(1) => {
+        }
+        timeout(try wait_for()) => {
+        }
+    }
+}
+
+fn two_closed(rx: Receiver(i64)) void {
+    select {
+        rx => |v| {
+            _ = v
+        }
+        closed => {
+        }
+        closed => {
         }
     }
 }
