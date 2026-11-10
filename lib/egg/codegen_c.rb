@@ -456,35 +456,39 @@ module Egg
                 if (exp_digits == 0) return false;
             }
             if (i != n) return false;
-            /* The locale's decimal point, as printf writes it in "0.5". */
-            char dp[16] = ".";
-            size_t dp_len = 1;
-            if (point >= 0) {
-                char half[32];
-                int w = snprintf(half, sizeof half, "%.1f", 0.5);
-                if (w >= 3 && w < (int)sizeof half && half[0] == '0' && half[w - 1] == '5' && (size_t)(w - 2) < sizeof dp) {
+            char small[64];
+            char *buf = NULL;
+            bool all = false;
+            /* With '.' first; if strtod stops at it, the locale's decimal
+               point (as printf writes it in "0.5") goes in its place. */
+            for (int round = 0; round < 2 && !all; round++) {
+                char dp[16] = ".";
+                size_t dp_len = 1;
+                if (round == 1) {
+                    char half[32];
+                    int w = snprintf(half, sizeof half, "%.1f", 0.5);
+                    if (point < 0 || w < 3 || w >= (int)sizeof half || half[0] != '0' || half[w - 1] != '5' || (size_t)(w - 2) >= sizeof dp) break;
                     dp_len = (size_t)(w - 2);
                     memcpy(dp, half + 1, dp_len);
                 }
-            }
-            size_t size = (size_t)n + dp_len;
-            char small[64];
-            char *buf = size <= sizeof small ? small : (char *)malloc(size);
-            if (buf == NULL) egg_panic("out of memory");
-            size_t k = 0;
-            for (int64_t j = 0; j < n; j++) {
-                if (j == point) {
-                    memcpy(buf + k, dp, dp_len);
-                    k += dp_len;
-                } else {
-                    buf[k++] = (char)p[j];
+                size_t size = (size_t)n + dp_len;
+                buf = size <= sizeof small ? small : (char *)malloc(size);
+                if (buf == NULL) egg_panic("out of memory");
+                size_t k = 0;
+                for (int64_t j = 0; j < n; j++) {
+                    if (j == point) {
+                        memcpy(buf + k, dp, dp_len);
+                        k += dp_len;
+                    } else {
+                        buf[k++] = (char)p[j];
+                    }
                 }
+                buf[k] = 0;
+                char *end;
+                *out = strtod(buf, &end);
+                all = end == buf + k;
+                if (buf != small) free(buf);
             }
-            buf[k] = 0;
-            char *end;
-            *out = strtod(buf, &end);
-            bool all = end == buf + k;
-            if (buf != small) free(buf);
             if (!all) egg_panic("strtod did not read a whole number");
             return true;
         }
@@ -558,6 +562,7 @@ module Egg
             if (exp >= -4 && exp < 16) snprintf(buf, 40, "%.*f", p - 1 - exp < 1 ? 1 : p - 1 - exp, x);
             /* printf wrote the locale's decimal point: if C code set one
                that is not '.', it becomes a '.' again. */
+            if (strchr(buf, '.') != NULL) return;
             char half[32];
             int w = snprintf(half, sizeof half, "%.1f", 0.5);
             if (w > 3 && w < (int)sizeof half && half[0] == '0' && half[w - 1] == '5') {
