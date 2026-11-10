@@ -14,10 +14,22 @@ module Egg
   # Longest operators first so "==" wins over "=" and ".." over ".".
   OPERATORS = %w[== != <= >= => << >> .. ( ) { } [ ] , : = < > + - * / % ! ? . | & ^ ~].freeze
 
+  # For the lexer's lookups: a hash finds a keyword or an operator at once,
+  # where scanning the lists costs a comparison (and for operators a
+  # substring) per entry, for every identifier and operator in the source.
+  KEYWORD_SET = KEYWORDS.to_h { |k| [k, true] }.freeze
+  OPERATORS_2 = OPERATORS.select { |o| o.length == 2 }.to_h { |o| [o, o] }.freeze
+  OPERATORS_1 = OPERATORS.select { |o| o.length == 1 }.to_h { |o| [o, o] }.freeze
+  # What ends an identifier (or a builtin's name).
+  NOT_IDENT_CHAR = /[^A-Za-z0-9_]/
+  # What ends a run of blanks between tokens.
+  NOT_BLANK = /[^ \t\r]/
+
   class Lexer
     def initialize(src)
       # Source is UTF-8 whatever the locale's default encoding is.
       @src = src.encoding == Encoding::UTF_8 ? src : src.dup.force_encoding(Encoding::UTF_8)
+      @valid = @src.valid_encoding?
       @pos = 0
       @line = 1
       @col = 1
@@ -31,9 +43,13 @@ module Egg
           push(:nl, "\n")
           advance
         elsif c == " " || c == "\t" || c == "\r"
-          advance
+          skip_blanks
         elsif c == "/" && peek(1) == "/"
-          advance while @pos < @src.length && @src[@pos] != "\n"
+          # Skip to the newline (not past it) in one step: a comment holds
+          # no newline, so only the column moves.
+          stop = @src.index("\n", @pos) || @src.length
+          @col += stop - @pos
+          @pos = stop
         elsif digit?(c)
           lex_number
         elsif ident_start?(c)
@@ -230,9 +246,9 @@ module Egg
       line = @line
       col = @col
       start = @pos
-      advance while @pos < @src.length && ident_char?(@src[@pos])
+      skip_ident_chars
       text = @src[start...@pos]
-      kind = KEYWORDS.include?(text) ? :kw : :ident
+      kind = KEYWORD_SET.key?(text) ? :kw : :ident
       @tokens << Token.new(kind, text, line, col)
     end
 
@@ -241,22 +257,49 @@ module Egg
       col = @col
       advance # '@'
       start = @pos
-      advance while @pos < @src.length && ident_char?(@src[@pos])
+      skip_ident_chars
       if @pos == start
         raise CompileError.new(Diagnostic.new("E001", "expected a builtin name after '@'", line, col))
       end
       @tokens << Token.new(:builtin, @src[start...@pos], line, col)
     end
 
+    # Longest first, as OPERATORS is ordered: "==" wins over "=".
     def lex_operator
-      OPERATORS.each do |op|
-        if @src[@pos, op.length] == op
-          push(:op, op)
-          op.length.times { advance }
-          return
-        end
+      if (op = OPERATORS_2[@src[@pos, 2]])
+        push(:op, op)
+        @col += 2
+        @pos += 2
+        return
+      end
+      if (op = OPERATORS_1[@src[@pos]])
+        push(:op, op)
+        @col += 1
+        @pos += 1
+        return
       end
       raise CompileError.new(Diagnostic.new("E001", "unexpected character '#{@src[@pos]}'", @line, @col))
+    end
+
+    # Moves past spaces, tabs and carriage returns (an indentation, say).
+    def skip_blanks
+      return advance unless @valid
+      stop = @src.index(NOT_BLANK, @pos) || @src.length
+      @col += stop - @pos
+      @pos = stop
+    end
+
+    # Moves past letters, digits and underscores, which hold no newline.
+    def skip_ident_chars
+      # A regexp cannot search text that is not valid UTF-8 (a stray byte
+      # is reported later): go a character at a time there.
+      unless @valid
+        advance while @pos < @src.length && ident_char?(@src[@pos])
+        return
+      end
+      stop = @src.index(NOT_IDENT_CHAR, @pos) || @src.length
+      @col += stop - @pos
+      @pos = stop
     end
 
     def push(kind, text)
