@@ -1,0 +1,21 @@
+// Packages given with eggc --pkg: greet's entry file, a part of it
+// (greet/style), and std/text beside them; greet itself imports the
+// package shout and a file of its own.
+// expect: hello
+// expect: egg
+// expect: !
+// expect: HEY
+// expect: 3
+// expect: .
+uses io
+
+const greet = @import("greet")
+const style = @import("greet/style")
+const text = @import("std/text")
+
+fn main(io: Io) void {
+    greet.hello(io, "egg")
+    io.print(greet.shout_hey())
+    io.print(text.find("abcd", "d") orelse -1)
+    io.print(style.end(style.Mark.dot))
+}

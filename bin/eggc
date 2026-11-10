@@ -17,6 +17,9 @@
 #            and build/run compile with -g, so gdb/lldb break on .egg lines
 #   -l LIB   build/run: also link the C library LIB (as `link "LIB"` in a file)
 #   -L DIR   build/run: look for libraries in DIR too
+#   --pkg NAME=DIR  the package NAME is in DIR: @import("NAME") is
+#            DIR/NAME.egg and @import("NAME/x") is DIR/x.egg. The package
+#            manager, clutch, passes one per dependency (`clutch flags`)
 
 # The compiler uses `case ... in`; older Rubies (macOS ships 2.6 as
 # /usr/bin/ruby) would only report a confusing syntax error.
@@ -28,7 +31,7 @@ end
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [--release] [-g] [-l LIB] [-L DIR] [-- ARGS]\n       eggc (spec|lsp)"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [--release] [-g] [-l LIB] [-L DIR] [--pkg NAME=DIR] [-- ARGS]\n       eggc (spec|lsp)"
 
 def fail_usage
   warn USAGE
@@ -83,6 +86,37 @@ while i < args.length
     i += 1
   end
 end
+# --pkg NAME=DIR, also written --pkg=NAME=DIR.
+pkgs = {}
+i = 0
+while i < args.length
+  a = args[i]
+  if a == "--pkg" || a.start_with?("--pkg=")
+    spec = a == "--pkg" ? args[i + 1] : a[6..]
+    fail_usage if spec.nil?
+    name, dir = spec.split("=", 2)
+    unless name.to_s.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) && !dir.to_s.empty?
+      warn "eggc: --pkg wants NAME=DIR with NAME a plain name such as http, not #{spec.inspect}"
+      exit 2
+    end
+    if name == "std"
+      warn "eggc: --pkg cannot name a package std, the standard library's name"
+      exit 2
+    end
+    if pkgs.key?(name)
+      warn "eggc: --pkg gives the package #{name} twice"
+      exit 2
+    end
+    unless File.directory?(dir)
+      warn "eggc: --pkg #{name}=#{dir}: no such directory"
+      exit 2
+    end
+    pkgs[name] = dir
+    args.slice!(i, a == "--pkg" ? 2 : 1)
+  else
+    i += 1
+  end
+end
 command = args[0]
 path = args[1]
 fail_usage if command.nil? || path.nil? || args.length != 2
@@ -93,7 +127,7 @@ unless File.exist?(path)
   exit 2
 end
 
-result = Egg.compile_to_c(File.read(path), path, debug: debug)
+result = Egg.compile_to_c(File.read(path), path, debug: debug, pkgs: pkgs)
 unless result.diagnostics.empty?
   result.diagnostics.each do |d|
     if json

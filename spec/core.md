@@ -1522,10 +1522,18 @@ imports another file, as a path relative to the importing file ending in
 **module** instead: `@import("std/math")` is `math.egg` of the standard
 library (`"std/a/b"` is `a/b.egg` in it, and `"std"` alone is `std.egg`),
 which ships with the compiler in `lib/std` (the `EGG_STD`
-environment variable points elsewhere); `std` is the only module name so far. A file
-import may not leave its module's root, the directory of the root file
-for a program and the library's directory for `std` (E129): a module is
-a self-contained tree, and reaches others only by name. The name, here
+environment variable points elsewhere). The other module names are
+**packages**, given to eggc as `--pkg NAME=DIR` (the package manager,
+`clutch`, passes one per dependency): `@import("http")` is `DIR/http.egg`
+and `@import("http/client")` is `DIR/client.egg`, as for `std`. The
+packages given hold for the whole program: a package imports the
+packages it needs by name from the same list, so every package that any
+file imports must be given. Any other name is E129. A file import may
+not leave its module's root, the directory of the root file for a
+program, the library's directory for `std` and a package's directory for
+it (E129); a file under a package's directory belongs to that package,
+the innermost one when one package's directory holds another's. A module is a
+self-contained tree, and reaches others only by name. The name, here
 `shapes`, is local to the importing file and reaches the top-level names
 of the imported one:
 

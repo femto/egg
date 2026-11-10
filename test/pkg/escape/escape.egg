@@ -1,0 +1,2 @@
+// A package cannot reach a file outside its directory.
+const app = @import("../app/main.egg")
