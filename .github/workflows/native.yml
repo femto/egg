@@ -23,7 +23,7 @@ permissions:
 env:
   # The Spinel that builds the release; bump it on purpose.
   SPINEL_REPO: matz/spinel
-  SPINEL_SHA: 18b153ebf3cabd4ee10b9e3ef2ad7dbaf07a75cb
+  SPINEL_SHA: 18b153ebf2c629c468a29dd26753f66a75b475e4
 
 jobs:
   unix:
