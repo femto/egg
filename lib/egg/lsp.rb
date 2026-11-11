@@ -545,9 +545,12 @@ module Egg
         [{}, "cannot run clutch (#{ENV["EGG_CLUTCH"].to_s.empty? ? "bin/clutch" : ENV["EGG_CLUTCH"]}): #{e.message} (so packages are unknown here)"]
       end
 
-      # EGG_CLUTCH, or bin/clutch beside this eggc.
+      # EGG_CLUTCH, or the clutch beside this eggc (installed beside a
+      # native one, bin/clutch on Ruby).
       def clutch
         return Shellwords.split(ENV["EGG_CLUTCH"]) unless ENV["EGG_CLUTCH"].to_s.empty?
+        native = Egg.sibling("clutch")
+        return [native] unless native.nil?
         [RbConfig.ruby, File.expand_path("../../bin/clutch", __dir__)]
       end
     end

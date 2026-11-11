@@ -1,0 +1,24 @@
+// Constant arithmetic works on i64 values (E150 when it overflows), and
+// a literal must fit its type (E003).
+const A: u64 = 18446744073709551615 + 1
+const B = 9223372036854775807 + 1
+const C = 4611686018427387904 * 2
+const D = 1 << 63
+const E = -(-9223372036854775807 - 1)
+const F: i64 = 18446744073709551615
+const G = (-9223372036854775807 - 1) / -1
+fn main() void {
+    const x: i8 = 9223372036854775808
+    const y: u8 = 1 << 100
+    _ = A + B + C + D + E + F + G + x + y
+}
+
+// error: E150 @3
+// error: E150 @4
+// error: E150 @5
+// error: E150 @6
+// error: E150 @7
+// error: E003 @8
+// error: E150 @9
+// error: E003 @11
+// error: E003 @12

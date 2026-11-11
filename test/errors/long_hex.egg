@@ -1,0 +1,4 @@
+// More significant digits than a u64 has.
+const X: u64 = 0x10000000000000000
+
+// error: E003 @2

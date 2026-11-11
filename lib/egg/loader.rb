@@ -35,7 +35,8 @@ module Egg
 
   # The standard library: EGG_STD (an empty one counts as unset), or
   # lib/std beside the compiler's lib/egg (as Zig keeps it in lib/std).
-  STD_ROOT = File.expand_path(ENV["EGG_STD"].to_s.empty? ? File.join(__dir__, "../std") : ENV["EGG_STD"])
+  # A native eggc finds it in its install, PREFIX/lib/std (home.rb).
+  STD_ROOT = File.expand_path(ENV["EGG_STD"].to_s.empty? ? Egg.home_dir("lib/std", File.join(__dir__, "../std")) : ENV["EGG_STD"])
 
   # The global name of `name` declared in module `mod`.
   def self.qualify(mod, name)

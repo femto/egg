@@ -76,12 +76,14 @@ module Egg
     INT_TYPES = %w[i8 i16 i32 i64 u8 u16 u32 u64 usize].freeze
     # Literal ranges; usize is checked as u64 here, and a usize literal
     # above 32 bits against the target's real width (SIZE_MAX) at run time.
+    # A u64's maximum is no Integer here (ints.rb): nil, and any value a
+    # literal can have that is not negative fits.
     INT_RANGE = {
       "i8" => [-128, 127], "i16" => [-32_768, 32_767],
       "i32" => [-2_147_483_648, 2_147_483_647],
-      "i64" => [-9_223_372_036_854_775_808, 9_223_372_036_854_775_807],
+      "i64" => [I64_MIN, I64_MAX],
       "u8" => [0, 255], "u16" => [0, 65_535], "u32" => [0, 4_294_967_295],
-      "u64" => [0, 18_446_744_073_709_551_615], "usize" => [0, 18_446_744_073_709_551_615]
+      "u64" => [0, nil], "usize" => [0, nil]
     }.freeze
     FLOAT_TYPES = %w[f32 f64].freeze
     # The largest finite f32, and half its smallest subnormal (below it a
@@ -510,7 +512,15 @@ module Egg
       if int_const?(v)
         n = eval_int(v)
         return "error" if n.nil?
-        lit = n < 0 ? Unary.new("-", IntLit.new(-n, c.line, c.col), c.line, c.col) : IntLit.new(n, c.line, c.col)
+        # A negative value is -literal: -n of i64's minimum, or of a u64
+        # above it (which only a float constant can be), is digits (ints.rb).
+        lit = if n.is_a?(String) && n.start_with?("-")
+                Unary.new("-", IntLit.new(n[1..], c.line, c.col), c.line, c.col)
+              elsif n.is_a?(Integer) && n < 0
+                Unary.new("-", IntLit.new(n == I64_MIN ? I64_MIN_DIGITS : -n, c.line, c.col), c.line, c.col)
+              else
+                IntLit.new(n, c.line, c.col)
+              end
         lit.info = {}
         c.lit = lit
         t = check_expr(lit, declared || "i64")
@@ -568,16 +578,26 @@ module Egg
     end
 
     # The integer value of an int_const? expression, or nil after an error.
+    # A u64 above i64 (digits, ints.rb) may be a constant, but arithmetic
+    # works on i64 values, and one that overflows is an error.
     def eval_int(e)
       case e
       in IntLit[value:] then value
-      in Unary[op:, operand:]
+      in Unary[op:, operand:, line:, col:]
         x = eval_int(operand)
-        x.nil? ? nil : (op == "-" ? -x : ~x)
+        return nil if x.nil?
+        return(op == "-" ? -x : ~x) if x.is_a?(Integer) && !(op == "-" && x == I64_MIN)
+        return Egg.neg_int(x) if op == "-" && x.is_a?(String)
+        err("E150", "this constant overflows i64: constant arithmetic works on i64 values", line, col)
+        nil
       in Binary[op:, lhs:, rhs:, line:, col:]
         x = eval_int(lhs)
         y = eval_int(rhs)
         return nil if x.nil? || y.nil?
+        if x.is_a?(String) || y.is_a?(String)
+          err("E150", "constant arithmetic works on i64 values; a u64 above i64 can only be written as it is", line, col)
+          return nil
+        end
         if %w[/ %].include?(op) && y.zero?
           err("E150", "a zero divisor in a constant", line, col)
           return nil
@@ -586,23 +606,53 @@ module Egg
           err("E150", "a shift in a constant must be by 0 to 63", line, col)
           return nil
         end
-        # Integer division truncates toward zero, as in C.
-        case op
-        when "+" then x + y
-        when "-" then x - y
-        when "*" then x * y
-        when "/" then (x.abs / y.abs) * (x * y < 0 ? -1 : 1)
-        when "%" then x - y * ((x.abs / y.abs) * (x * y < 0 ? -1 : 1))
-        when "<<" then x << y
-        when ">>" then x >> y
-        when "&" then x & y
-        when "|" then x | y
-        else x ^ y
-        end
+        r = const_op(op, x, y)
+        err("E150", "this constant overflows i64: constant arithmetic works on i64 values", line, col) if r.nil?
+        r
       else
         lit = const_ref(e).lit
-        lit.is_a?(IntLit) ? lit.value : -lit.operand.value
+        lit.is_a?(IntLit) ? lit.value : Egg.neg_int(lit.operand.value)
       end
+    end
+
+    # x op y on i64 values, or nil when it overflows. Integer division
+    # truncates toward zero, as in C.
+    def const_op(op, x, y)
+      case op
+      when "+" then (y > 0 && x > I64_MAX - y) || (y < 0 && x < I64_MIN - y) ? nil : x + y
+      when "-" then (y < 0 && x > I64_MAX + y) || (y > 0 && x < I64_MIN + y) ? nil : x - y
+      when "*" then mul_fits?(x, y) ? x * y : nil
+      when "/", "%"
+        # i64's minimum / -1 overflows; its remainder is 0, as egg_mod says.
+        return(op == "/" ? nil : 0) if x == I64_MIN && y == -1
+        q = x / y
+        q += 1 if x % y != 0 && (x < 0) != (y < 0)
+        op == "/" ? q : x - y * q
+      when "<<" then x > (I64_MAX >> y) || x < (I64_MIN >> y) ? nil : x << y
+      when ">>" then x >> y
+      when "&" then x & y
+      when "|" then x | y
+      else x ^ y
+      end
+    end
+
+    # Does x * y fit an i64? Checked by division, as C's CERT rule does,
+    # so that nothing passes 64 bits (i64's minimum itself is a product).
+    def mul_fits?(x, y)
+      if x > 0
+        y > 0 ? x <= tdiv(I64_MAX, y) : y >= tdiv(I64_MIN, x)
+      elsif y > 0
+        x >= tdiv(I64_MIN, y)
+      else
+        x.zero? || y >= tdiv(I64_MAX, x)
+      end
+    end
+
+    # a / b truncated toward zero (b is not 0, and not -1 with i64's minimum).
+    def tdiv(a, b)
+      q = a / b
+      q += 1 if a % b != 0 && (a < 0) != (b < 0)
+      q
     end
 
     def in_module(prefix)
@@ -1984,7 +2034,7 @@ module Egg
             return "error"
           end
           operand.info = {}
-          operand.ty = int_lit(-operand.value, t, operand.line, operand.col)
+          operand.ty = int_lit(Egg.neg_int(operand.value), t, operand.line, operand.col)
           e.info[:neg_lit] = true
           return operand.ty
         end
@@ -2368,9 +2418,9 @@ module Egg
       if rt != "error" && !int?(rt)
         err("E103", "'#{op}' shifts by an integer, found #{rt}", rhs.line, rhs.col)
       elsif lt != "error" && rt != "error"
-        n = rhs.is_a?(IntLit) ? rhs.value : (rhs.is_a?(Unary) && rhs.info&.[](:neg_lit) ? -rhs.operand.value : nil)
+        n = rhs.is_a?(IntLit) ? rhs.value : (rhs.is_a?(Unary) && rhs.info&.[](:neg_lit) ? Egg.neg_int(rhs.operand.value) : nil)
         bits = int_bits(lt)
-        if !n.nil? && (n < 0 || n >= bits)
+        if !n.nil? && (n.is_a?(String) || n < 0 || n >= bits)
           err("E003", "cannot shift a #{lt} by #{n}: the amount must be 0 to #{bits - 1}", rhs.line, rhs.col)
         end
       end
@@ -2452,11 +2502,17 @@ module Egg
       t
     end
 
+    # value: an Integer, or the digits of one above i64 (ints.rb).
     def int_lit(value, t, line, col)
       t ||= "i64"
       lo, hi = INT_RANGE[t]
-      if value < lo || value > hi
-        err("E003", "integer literal #{value} does not fit in #{t} (#{lo} to #{hi})", line, col)
+      fits = if value.is_a?(String)
+               hi.nil? && !value.start_with?("-")
+             else
+               value >= lo && (hi.nil? || value <= hi)
+             end
+      unless fits
+        err("E003", "integer literal #{value} does not fit in #{t} (#{lo} to #{hi || U64_MAX_TEXT})", line, col)
         return "error"
       end
       t
@@ -2739,7 +2795,7 @@ module Egg
       t = type_arg(args[0])
       expect_type("i64", check_expr(args[1], "i64"), args[1])
       if args[1].ty == "i64" && args[1].is_a?(Unary) && args[1].op == "-" && args[1].operand.is_a?(IntLit) &&
-         args[1].operand.value.between?(1, 9_223_372_036_854_775_808)
+         (args[1].operand.value.is_a?(String) || args[1].operand.value >= 1)
         err("E103", "a channel's capacity cannot be negative", args[1].line, args[1].col)
       end
       return "error" if t == "error"

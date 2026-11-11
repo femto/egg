@@ -188,6 +188,12 @@ def eggc_command
   ENV["EGGC"] ? [ENV["EGGC"]] : [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
 end
 
+# bin/clutch as a command; CLUTCH names a native build, which runs the
+# eggc installed beside it.
+def clutch_command
+  ENV["CLUTCH"] ? [ENV["CLUTCH"]] : [RbConfig.ruby, File.join(ROOT, "bin", "clutch")]
+end
+
 # Run one LSP session against bin/eggc lsp; returns responses by id and
 # the diagnostics notifications in order.
 def lsp_session(messages)
@@ -215,7 +221,7 @@ def check_lsp_packages(dir)
   root = File.join(dir, "lsp_pkgs")
   FileUtils.rm_rf(root)
   FileUtils.mkdir_p(root)
-  clutch = ->(at, *args) { Open3.capture3(RbConfig.ruby, File.join(ROOT, "bin", "clutch"), *args, chdir: File.join(root, at)) }
+  clutch = ->(at, *args) { Open3.capture3(*clutch_command, *args, chdir: File.join(root, at)) }
   clutch.(".", "new", "app")
   clutch.(".", "new", "--lib", "hello")
   File.write(File.join(root, "hello", "src", "hello.egg"), "fn hi() str {\n    return \"hi\"\n}\n")
@@ -1543,6 +1549,17 @@ def check_packages(dir)
   end
 end
 
+# eggc and clutch say their version, which is one.
+def check_versions
+  e, = Open3.capture2(*eggc_command, "--version")
+  c, = Open3.capture2(*clutch_command, "--version")
+  want = /\A\d+\.\d+\.\d+(-dev(\+\h+)?)?\z/
+  # One version; a native eggc (EGGC) says it without -dev+COMMIT.
+  base = ->(v) { v.to_s.split("-").first }
+  ok = e.start_with?("eggc ") && c.start_with?("clutch ") && base.(e.split[1]) == base.(c.split[1]) && e.split[1].to_s.match?(want) && c.split[1].to_s.match?(want)
+  report(ok, "eggc --version and clutch --version", "#{e}#{c}")
+end
+
 # clutch in dir/clutch, with its own cache and index there.
 def check_clutch(dir)
   have_git = begin
@@ -1556,7 +1573,7 @@ def check_clutch(dir)
   FileUtils.mkdir_p(root)
   env = { "CLUTCH_CACHE" => File.join(root, "cache"), "CLUTCH_INDEX" => File.join(root, "index"), "CLUTCH_OFFLINE" => nil,
           "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@t", "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@t" }
-  clutch = ->(at, *args, extra: {}) { Open3.capture3(env.merge(extra), RbConfig.ruby, File.join(ROOT, "bin", "clutch"), *args, chdir: File.join(root, at)) }
+  clutch = ->(at, *args, extra: {}) { Open3.capture3(env.merge(extra), *clutch_command, *args, chdir: File.join(root, at)) }
   git = ->(at, *args) { Open3.capture3(env, "git", *args, chdir: File.join(root, at)) }
   edit = ->(file, from, to) { f = File.join(root, file); File.write(f, File.read(f).sub(from, to)) }
 
@@ -1860,6 +1877,7 @@ Dir.mktmpdir do |dir|
 
   puts "packages"
   check_packages(dir)
+  check_versions
   check_clutch(dir)
 
   puts "lsp"

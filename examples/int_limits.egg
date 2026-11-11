@@ -1,0 +1,27 @@
+// Literals at the ends of the integer types, which the compiler handles
+// without integers wider than 64 bits (so a native eggc agrees).
+// expect: 18446744073709551615 18446744073709551615 -9223372036854775808 9223372036854775807 9223372036854775808
+// expect: 9223372036854775808 18446744073709551615 -9223372036854775808
+// expect: 0 -9223372036854775808 -1.8446744073709552e+19
+// expect: 1 15000000000 -1500000000000000000
+uses io
+
+const BIG: u64 = 18446744073709551615
+const HEX: u64 = 0xffffffffffffffff
+const MIN: i64 = -9223372036854775808
+const TOP = 0x7fffffffffffffff
+const B: u64 = 0b1000000000000000000000000000000000000000000000000000000000000000
+// Constant arithmetic that reaches i64's ends without passing them.
+const REM = (-9223372036854775807 - 1) % -1
+const LOW = -4611686018427387904 * 2
+const NEG: f64 = -18446744073709551615
+
+fn main(io: Io) void {
+    io.print(BIG, " ", HEX, " ", MIN, " ", TOP, " ", B)
+    const u: u64 = 9223372036854775808
+    const z: usize = 18446744073709551615
+    io.print(u, " ", z, " ", -9223372036854775807 - 1)
+    const f: f64 = 1.5e300
+    io.print(REM, " ", LOW, " ", NEG)
+    io.print(@as(i32, f / 1e300), " ", @as(u64, f / 1e290), " ", @as(i64, -f / 1e282))
+}

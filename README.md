@@ -101,10 +101,9 @@ Code blocks here are highlighted as Zig, because GitHub does not know Egg yet.
 ### Optional: a native eggc with Spinel
 
 `bin/eggc` is a Ruby script, so the above needs nothing built. It is written
-in the Ruby subset [Spinel](https://github.com/matz/spinel) compiles, to be
-made a native binary that starts in ~5 ms instead of ~350 ms and needs no
-Ruby. The current compiler does not build under Spinel yet; the v0 compiler
-did. See [Native eggc](#native-eggc).
+in the Ruby subset [Spinel](https://github.com/matz/spinel) compiles, so it
+(and `clutch`) can also be native binaries that start in a few milliseconds
+and need no Ruby. See [Native eggc](#native-eggc).
 
 ## The compiler catches it
 
@@ -210,18 +209,22 @@ bin/clutch new chat && cd chat       # a program: clutch.toml and src/main.egg
 
 ## Native eggc
 
-Spinel compiled eggc v0 to a native binary (about 30 s; it then starts in
-~5 ms instead of ~350 ms and needs no Ruby). **The current compiler does not
-build under Spinel yet**: Spinel (`3d22a0507`) refuses two constructs in it
-([#11078](https://github.com/matz/spinel/issues/11078),
-[#11079](https://github.com/matz/spinel/issues/11079); and
-[#11080](https://github.com/matz/spinel/issues/11080) would follow), so use
-CRuby. With v0 sources:
+Spinel compiles `eggc` and `clutch` to native binaries, which need no Ruby
+(eggc still needs a C compiler, and clutch Git for git and index
+dependencies). They say exactly what they say on Ruby: CI checks the C eggc
+emits for every example, error test, std module and spec example, and its
+diagnostics for every error test (`tools/native_check.rb`), on Linux, macOS
+and Windows. `tools/dist.rb` builds both, with the standard library beside
+them:
 
 ```bash
-mkdir -p build/bin && spinel bin/eggc -o build/bin/eggc
-EGGC=build/bin/eggc ruby test/run.rb # run the LSP tests against it
+ruby tools/dist.rb --spinel path/to/spinel   # dist/egg-VERSION-PLATFORM.tar.gz (.zip on Windows)
+ruby tools/native_check.rb dist/egg-*/bin/eggc   # bin/eggc.exe on Windows
 ```
+
+A native eggc finds the standard library in its install (`PREFIX/bin/eggc`
+with `PREFIX/lib/std`), and a native clutch runs the eggc beside it.
+`eggc --version` and `clutch --version` say the one version they share.
 
 The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
