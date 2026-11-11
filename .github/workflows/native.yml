@@ -6,20 +6,23 @@ name: Native
 # exactly what eggc on Ruby says. The release workflow runs this with
 # `release: true` and publishes the archives.
 
-# It takes a while (Windows compiles eggc for ~17 minutes), so it runs on
-# pull requests that change what goes into the binaries or how they are
-# built and installed, on a release (workflow_call), and by hand. Everything
-# else is checked on Ruby by the CI workflow.
+# It takes a while (Windows compiles eggc for ~17 minutes), so it does not
+# run on every change to the compiler: on a release (workflow_call), by
+# hand, once a week on main (so that something Spinel cannot compile shows
+# up well before a release), and on pull requests that change how the
+# binaries are built, found or installed.
 on:
   pull_request:
     paths:
-      - "bin/**"
-      - "lib/**"
-      - "tools/**"
+      - "tools/dist.rb"
+      - "tools/native_check.rb"
+      - "lib/egg/home.rb"
       - "install.sh"
       - "install.ps1"
       - ".github/workflows/native.yml"
       - ".github/workflows/release.yml"
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
   workflow_call:
     inputs:

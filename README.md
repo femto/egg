@@ -232,10 +232,11 @@ bin/clutch new chat && cd chat       # a program: clutch.toml and src/main.egg
 
 Spinel compiles `eggc` and `clutch` to native binaries, which need no Ruby
 (eggc still needs a C compiler, and clutch Git for git and index
-dependencies). They say exactly what they say on Ruby: CI checks the C eggc
-emits for every example, error test, std module and spec example, and its
-diagnostics for every error test (`tools/native_check.rb`), on Linux, macOS
-and Windows. `tools/dist.rb` builds both, with the standard library beside
+dependencies). They say exactly what they say on Ruby: the Native workflow
+checks the C eggc emits for every example, error test, std module and spec
+example, and its diagnostics for every error test (`tools/native_check.rb`),
+on Linux, macOS and Windows, for each release, weekly on main, and by hand
+(Actions → Native → Run workflow) after a change Spinel might not compile. `tools/dist.rb` builds both, with the standard library beside
 them:
 
 ```bash
