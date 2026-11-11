@@ -80,7 +80,8 @@ jobs:
   windows:
     name: windows-x86_64
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Compiling eggc's C takes MinGW's gcc about 17 minutes here.
+    timeout-minutes: 90
     defaults:
       run:
         shell: msys2 {0}
@@ -107,7 +108,13 @@ jobs:
           install: make diffutils curl tar git zip mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-ruby
       - name: Build Spinel
         working-directory: spinel
-        run: make deps && make -j4 bin/spinel lib/libspinel_rt.a lib/libspinel_rt_mt.a
+        # The compiler, its runtime, and the bundled packages eggc and clutch
+        # link (json, tmpdir, ...); not all of `make`, which Windows lacks
+        # some of (pty).
+        run: |
+          pkgs="json tmpdir stringio strscan base64"
+          objs=$(for p in $pkgs; do printf 'packages/%s/sp_%s.o packages/%s/sp_%s_mt.o ' $p $p $p $p; done)
+          make deps && make -j4 bin/spinel lib/libspinel_rt.a lib/libspinel_rt_mt.a $objs
       - name: Build eggc and clutch
         run: ruby tools/dist.rb --spinel spinel/bin/spinel --platform windows-x86_64
       - name: The native eggc says what eggc on Ruby says
