@@ -1664,6 +1664,8 @@ def check_clutch_publish(root, clutch, git, edit)
   commit.("path dep")
   _, err, st = clutch.("pub", "publish", "--dry-run")
   report(!st.success? && err.include?("depends on greet by path"), "a package with a path dependency is not published", err)
+  _, err, st = clutch.("pub", "check", extra: { "CLUTCH_EGGC" => File.join(root, "no-eggc") })
+  report(st.exitstatus == 1 && err.include?("clutch: cannot run eggc"), "clutch check without an eggc to run", err)
 end
 
 # A locale whose decimal point is a comma, set by C code: parse_float and

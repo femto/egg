@@ -252,11 +252,16 @@ module Clutch
         args += ["-o", out]
       end
       args += ["--"] + program_args unless program_args.empty?
-      return (system(*eggc, *args) ? 0 : $?.exitstatus || 1) if shown_as.nil?
+      cannot = ->(why) { raise Error, "cannot run eggc (#{eggc.join(" ")}): #{why}" }
+      if shown_as.nil?
+        ran = system(*eggc, *args)
+        cannot.("no such program, or it cannot be started") if ran.nil?
+        return ran ? 0 : $?.exitstatus || 1
+      end
       out, err, st = begin
         Open3.capture3(*eggc, *args)
       rescue SystemCallError => e
-        raise Error, "cannot run eggc (#{eggc.join(" ")}): #{e.message}"
+        cannot.(e.message)
       end
       copies = [File.realpath(dir), dir].uniq
       shown = ->(t) { copies.reduce(t) { |acc, c| acc.gsub(c, shown_as) } }
