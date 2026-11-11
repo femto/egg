@@ -1,7 +1,7 @@
 // Where owned values may live, and how they may be copied.
 uses alloc, io
 
-const Shape = union(enum) { pts: Buf(i64), none }
+const Shape = union(enum) { pts: Buf(i64), none }  // an owned union
 
 const List = struct {
     data: Buf(i64)
@@ -31,7 +31,6 @@ fn main(io: Io, a: Allocator) void {
     a.free(k)
 }
 
-// error: E133 @4
 // error: E117 @21
 // error: E117 @22
 // error: E140 @23

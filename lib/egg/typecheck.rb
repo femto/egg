@@ -35,8 +35,9 @@
 # (E131); unlike capabilities, this is not carried along calls.
 #
 # Buf(T) is an owned heap buffer. A struct or array holding one is owned
-# too. Owned values live in locals, parameters, results, struct fields,
-# arrays and buffers, but not in unions or behind pointers (E133); who
+# too, and so is a union with an owned member. Owned values live in locals,
+# parameters, results, struct fields, union members, arrays and buffers,
+# but not behind pointers (E133); who
 # owns each one at each point is checked afterwards, along every path
 # through each function (own.rb).
 #
@@ -874,9 +875,6 @@ module Egg
         elsif owned_err?(t)
           err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
           t = "error"
-        elsif union && owned?(t)
-          err("E133", "a union cannot hold a #{t}: only one member is live at a time, so its buffers could not be followed; use a struct", f.line, f.col)
-          t = "error"
         end
         fields << [f.name, t, f.line]
       end
@@ -1096,6 +1094,7 @@ module Egg
       when :buf then true
       when :array then owned?(info.elem)
       when :struct then info.resource || (info.fields || []).any? { |_, ft, _| owned?(ft) }
+      when :union then (info.fields || []).any? { |_, ft, _| ft != "void" && owned?(ft) }
       else false
       end
     end
@@ -1113,6 +1112,12 @@ module Egg
       when :array, :buf then resource_in(info.elem, seen)
       when :struct
         return(info.deinit.nil? ? t : nil) if info.resource
+        (info.fields || []).each do |_, ft, _|
+          r = resource_in(ft, seen)
+          return r unless r.nil?
+        end
+        nil
+      when :union
         (info.fields || []).each do |_, ft, _|
           r = resource_in(ft, seen)
           return r unless r.nil?
@@ -1136,7 +1141,7 @@ module Egg
       info = @types[t]
       case info&.kind
       when :array, :buf then any_resource(info.elem, seen)
-      when :struct
+      when :struct, :union
         return t if info.resource
         info.fields.each do |_, ft, _|
           r = any_resource(ft, seen)
@@ -1159,6 +1164,8 @@ module Egg
         else
           info.fields.each { |_, ft, _| deinits(ft, out, seen) }
         end
+      when :union
+        info.fields.each { |_, ft, _| deinits(ft, out, seen) }
       end
       out
     end
@@ -1196,7 +1203,7 @@ module Egg
     end
 
     def owned_place_error(t, what, line, col)
-      err("E133", "#{what} cannot be a #{t}; owned values live in locals, parameters, results, struct fields, arrays and buffers", line, col)
+      err("E133", "#{what} cannot be a #{t}; owned values live in locals, parameters, results, struct fields, union members, arrays and buffers", line, col)
       "error"
     end
 
@@ -1231,6 +1238,8 @@ module Egg
       return false unless any_resource(e.ty).nil?
       case e
       in Field[info: { buf_empty: true }] | EnumLit[info: { buf_empty: true }] then true
+      # A union member without a payload owns nothing.
+      in Field[info: { union_tag: Integer }] | EnumLit[info: { union_tag: Integer }] then true
       in StructLit[fields:] then fields.all? { |f| empty_value?(f[1]) }
       in ArrayLit[items:] then items.all? { |i| empty_value?(i) }
       in Builtin[name: "splat", args:] then empty_value?(args[0])
@@ -1253,6 +1262,9 @@ module Egg
       case info.kind
       when :buf then "#{t}.empty"
       when :array then "@splat(#{empty_hint(info.elem)})"
+      when :union
+        bare = info.fields.find { |_, ft, _| ft == "void" }
+        bare.nil? ? "a #{t} literal of empty buffers" : ".#{bare[0]}"
       else "a #{t} literal of empty buffers"
       end
     end
@@ -1561,6 +1573,8 @@ module Egg
     # switch over an enum or a union: every member handled once, or an else.
     def check_switch(stmt, subject, arms, line, col)
       t = check_expr(subject)
+      # Its arms borrow from it, or move it: it must be a place.
+      check_borrowed(subject, t) if t != "error"
       return check_error_switch(stmt, arms, line, col) if t == "anyerror"
       info = @types[t]
       if t != "error" && (info.nil? || (info.kind != :enum && info.kind != :union))

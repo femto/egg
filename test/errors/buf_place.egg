@@ -1,4 +1,4 @@
-// Where a Buf may not live (E133), and fill values that would copy one (E140).
+// Where a Buf may not live (E133; a union member is fine), and fill values that would copy one (E140).
 uses alloc, io
 
 const Holder = union(enum) {
@@ -26,7 +26,6 @@ fn main(io: Io, a: Allocator) !void {
     io.print(make(a)[0])
 }
 
-// error: E133 @5
 // error: E133 @17
 // error: E133 @21
 // error: E133 @22

@@ -551,6 +551,8 @@ module Egg
         walk_loop(body, line, col, pre)
         @iterated.delete(root) if fresh
         lent.each { |p| @iterated.delete(p) }
+      in Switch[subject:, arms:, line:, col:] if owned?(subject.ty) && @types[subject.ty].kind == :union
+        walk_union_switch(subject, arms, line, col)
       in Switch[subject:, arms:, line:, col:]
         walk(subject)
         start = @st
@@ -599,6 +601,74 @@ module Egg
       else
         raise "own: unhandled statement #{stmt.class}"
       end
+    end
+
+    # switch over an owned union. The subject is only borrowed, and so is
+    # each capture, unless an arm moves its capture (or part of it): then
+    # that arm takes the payload out, which moves the whole union, and the
+    # capture is owned and must be given away there. An arm for members
+    # that own nothing leaves the union :gone, which agrees with both owned
+    # and moved where the arms join: on that path there is nothing to free.
+    def walk_union_switch(subject, arms, line, col)
+      info = @types[subject.ty]
+      walk(subject, true)
+      return if @st.nil?
+      path = path_of(subject)
+      kind = path.nil? ? nil : @decl[root(path)][0]
+      text = place_text(subject)
+      member = ->(n) { info.fields.find { |m, _| m == n }&.[](1) }
+      start = @st
+      ends = arms.map do |arm|
+        @st = dup(start)
+        pre = nil
+        t = arm.names&.length == 1 ? member.(arm.names[0]) : nil
+        if !arm.capture.nil? && arm.capture != "_" && !t.nil? && owned?(t)
+          cap = arm.capture
+          if !path.nil? && kind != :bparam && kind != :borrowed && probe_moves?(arm, cap, t, path)
+            pre = lambda do
+              use(path, arm.line, arm.col, false)
+              declare(cap, :local, arm.line, arm.col, t)
+            end
+          else
+            why = case kind
+                  when :bparam then "'#{text}', which is only borrowed here; to take its payload, declare parameter '#{root(path)}' as sink"
+                  when :borrowed then "'#{text}', which only borrows an element of '#{@borrowed[root(path)].is_a?(Array) ? root(path) : @borrowed[root(path)]}'"
+                  else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
+                  end
+            pre = lambda do
+              @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
+              declare(cap, :borrowed, arm.line, arm.col, t)
+            end
+          end
+        elsif !path.nil? && !arm.names.nil? && arm.names.all? { |n| (m = member.(n)) == "void" || !owned?(m) }
+          under(path).each { |k| @st[k] = [:gone, nil] if @st[k][0] == :owned }
+        end
+        walk_block(arm.body, pre)
+        @st
+      end
+      merge(ends, line, col, "this switch")
+    end
+
+    # Whether the arm moves its capture (or part of it), found by walking
+    # it once with the capture owned and nothing reported.
+    def probe_moves?(arm, cap, t, path)
+      saved = [@st, @diags, @seen, @slices, @slice_errs, @iterated, @borrowed, @res, @grew, @probe, @probe_hit, @read_whole]
+      @st = dup(@st)
+      @diags = []
+      @seen = {}
+      @slices = @slices.dup
+      @slice_errs = @slice_errs.dup
+      @iterated = @iterated.dup
+      @borrowed = @borrowed.dup
+      @res = @res.dup
+      @probe = cap
+      @probe_hit = false
+      under(path).each { |k| @st[k] = [:moved, arm.line] }
+      walk_block(arm.body, -> { declare(cap, :local, arm.line, arm.col, t) })
+      @probe_hit
+    ensure
+      @st, @diags, @seen, @slices, @slice_errs, @iterated, @borrowed, @res, @grew, @probe, hit, @read_whole = saved
+      @probe_hit = hit
     end
 
     # `path = v`: what it held must have been moved; it owns all of v now.
@@ -753,6 +823,12 @@ module Egg
     def merge(states, line, col, what)
       live = states.compact
       return @st = nil if live.empty?
+      # :gone (a union whose member owns nothing) takes the others' state.
+      live.flat_map(&:keys).uniq.each do |n|
+        next unless live.any? { |s| s[n]&.[](0) == :gone }
+        other = live.map { |s| s[n] }.find { |v| !v.nil? && v[0] != :gone } || [:owned, nil]
+        live.each { |s| s[n] = other if s[n]&.[](0) == :gone }
+      end
       out = dup(live[0])
       out.each_key do |n|
         syms = live.map { |s| s[n][0] }
@@ -974,6 +1050,7 @@ module Egg
         return
       end
       return if borrow
+      @probe_hit = true if !@probe.nil? && root(path) == @probe
       check_slices(path, line, col, "moved")
       if @decl[root(path)][0] == :bparam
         borrowed_param_error(path, "moved", line, col)
@@ -981,6 +1058,10 @@ module Egg
       end
       if @decl[root(path)][0] == :borrowed
         c = @borrowed[root(path)]
+        if c.is_a?(Array)
+          err("E139", "'#{path}' cannot be moved: #{c[1]}", line, col)
+          return
+        end
         err("E139", "'#{path}' only borrows an element of '#{c}' for one iteration; it cannot be moved. Take the element out with @take(&#{c}[i]) or @replace(&#{c}[i], v), looping over an index", line, col)
         return
       end

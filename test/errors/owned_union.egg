@@ -1,0 +1,28 @@
+// Owned unions: what the checker refuses before ownership is followed.
+uses alloc
+
+const Msg = union(enum) { text: Buf(u8), ping }
+
+const File = owned struct {
+    fd: i64
+}
+
+const Handle = union(enum) { file: File, none }
+
+fn make(a: Allocator) Msg {
+    return Msg{ .text = a.concat("a", "b") }
+}
+
+fn main(a: Allocator) void {
+    switch (make(a)) {
+        else => {}
+    }
+    const hs: Buf(Handle) = .empty
+    a.free(hs)
+    const ms = a.alloc(2, make(a))
+    a.free(ms)
+}
+
+// error: E133 @17
+// error: E141 @20
+// error: E140 @22
