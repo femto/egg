@@ -28,7 +28,9 @@ module Clutch
       test [NAME...]          build and run each test/NAME.egg: it passes
                               when it exits 0 and prints test/NAME.expected
                               (if there is one)
-      flags                   the eggc flags for the dependencies (--pkg NAME=DIR)
+      flags [--test]          the eggc flags for the dependencies (--pkg NAME=DIR);
+                              with --test, those a test is built with (the
+                              dev-dependencies and the package itself too)
       lock                    resolve and write clutch.lock
       update [NAME...]        choose versions afresh, ignoring clutch.lock
       publish [--repo URL] [--dry-run]
@@ -224,10 +226,22 @@ module Clutch
     end
 
     def cmd_flags
+      test = !@argv.delete("--test").nil?
       return usage unless @argv.empty?
-      pkgs = resolve(project_dir)
-      @out.puts pkg_flags(pkgs).map { |a| shell_word(a) }.join(" ")
+      dir = project_dir
+      m = Manifest.load(dir)
+      pkgs = resolve(dir, manifest: m)
+      flags = test ? test_flags(m, pkgs) : pkg_flags(pkgs)
+      @out.puts flags.map { |a| shell_word(a) }.join(" ")
       0
+    end
+
+    # The --pkg flags of m's tests: its dependencies, dev-dependencies and
+    # m itself.
+    def test_flags(m, pkgs)
+      flags = pkg_flags(pkgs, dev: true)
+      flags += ["--pkg", "#{m.name}=#{m.src_dir}"] if File.directory?(m.src_dir)
+      flags
     end
 
     # dir: the package (the one holding the current directory by default);
@@ -354,8 +368,7 @@ module Clutch
       names = all if names.empty?
       m = Manifest.load(dir)
       pkgs = resolve(dir, manifest: m, write_lock: shown_as.nil?)
-      flags = pkg_flags(pkgs, dev: true)
-      flags += ["--pkg", "#{m.name}=#{m.src_dir}"] if File.directory?(m.src_dir)
+      flags = test_flags(m, pkgs)
       copies = shown_as.nil? ? [] : [File.realpath(dir), dir].uniq
       shown = ->(t) { shown_text(t, copies, shown_as) }
       cannot = ->(why) { raise Error, "cannot run eggc (#{eggc.join(" ")}): #{why}" }

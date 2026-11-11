@@ -147,7 +147,7 @@ clutch check                 # a library is checked through a root that imports 
 clutch build [--release] [-g] [-o EXE]   # into build/NAME by default
 clutch run [--release] [-g] [-- ARGS]
 clutch test [NAME...]        # build and run test/*.egg
-clutch flags                 # the --pkg flags, for running eggc by hand
+clutch flags [--test]        # the --pkg flags, for running eggc by hand (--test: a test's)
 clutch lock                  # resolve and write clutch.lock
 clutch update [NAME...]      # ignore the lock (for those packages)
 clutch publish [--repo URL] [--dry-run]   # this commit as a release (a pull request to a GitHub index)
@@ -155,10 +155,17 @@ clutch publish [--repo URL] [--dry-run]   # this commit as a release (a pull req
 
 `CLUTCH_EGGC` names the eggc to run (default: `bin/eggc` beside clutch).
 
+## The language server
+
+`eggc lsp` checks a file in a package (a `clutch.toml` in its directory or
+above) with that package's packages: it runs `clutch flags` there, or
+`clutch flags --test` for a file under `test/`, and keeps the answer until
+`clutch.toml` or `clutch.lock` changes. When clutch fails, its message is a
+diagnostic at the top of the file. `EGG_CLUTCH` names the clutch to run
+(default: `bin/clutch` beside eggc).
+
 ## Not yet
 
-- The language server does not know packages yet; it will take them from
-  `clutch flags`.
 - Per-package compilation and caching: every build still compiles the
   whole program from source. The plan is Rust's: each package compiled
   once and cached, its interface being its signatures and their

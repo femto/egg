@@ -208,6 +208,32 @@ def lsp_session(messages)
   [replies, diags, status, err]
 end
 
+# The language server gives a file in a clutch package that package's
+# packages, from clutch flags (with --test under test/).
+def check_lsp_packages(dir)
+  root = File.join(dir, "lsp_pkgs")
+  FileUtils.rm_rf(root)
+  FileUtils.mkdir_p(root)
+  clutch = ->(at, *args) { Open3.capture3(RbConfig.ruby, File.join(ROOT, "bin", "clutch"), *args, chdir: File.join(root, at)) }
+  clutch.(".", "new", "app")
+  clutch.(".", "new", "--lib", "hello")
+  File.write(File.join(root, "hello", "src", "hello.egg"), "fn hi() str {\n    return \"hi\"\n}\n")
+  File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")) + "hello = { path = \"../hello\" }\n")
+  main = "uses io\n\nconst hello = @import(\"hello\")\n\nfn main(io: Io) void {\n    io.print(hello.hi())\n}\n"
+  test = File.read(File.join(root, "hello", "test", "hello.egg")).sub("lib.add(2, 3) != 5", "@len(lib.hi()) != 2")
+  uri = ->(*parts) { "file://#{File.join(root, *parts)}" }
+  open = ->(u, text) { { "method" => "textDocument/didOpen", "params" => { "textDocument" => { "uri" => u, "text" => text } } } }
+  session = ->(*docs) { lsp_session([{ "id" => 1, "method" => "initialize", "params" => {} }, *docs, { "id" => 2, "method" => "shutdown" }, { "method" => "exit" }])[1] }
+  diags = session.(open.(uri.("app", "src", "main.egg"), main), open.(uri.("hello", "test", "hello.egg"), test),
+                   open.(uri.("hello", "src", "hello.egg"), main.sub("hello.hi()", "\"x\"")))
+  report(diags[0] == [], "lsp: a program's packages come from clutch", diags[0].inspect)
+  report(diags[1] == [], "lsp: a test sees its own package", diags[1].inspect)
+  report(diags[2]&.any? { |d| d["code"] == "E129" && d["message"].include?("unknown module 'hello'") }, "lsp: a package does not see itself outside test/", diags[2].inspect)
+  File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")).sub("../hello", "../nowhere"))
+  diags = session.(open.(uri.("app", "src", "main.egg"), main))
+  report(diags[0]&.any? { |d| d["code"] == "clutch" && d["message"].include?("no directory") }, "lsp: clutch's error is a diagnostic", diags[0].inspect)
+end
+
 # A diagnostic on a character literal underlines all of it: '\xff' is six
 # characters of source, though its token is the integer 255.
 def check_lsp_char
@@ -1819,6 +1845,7 @@ Dir.mktmpdir do |dir|
   check_clutch(dir)
 
   puts "lsp"
+  check_lsp_packages(dir)
   check_lsp
   check_lsp_generics
   check_lsp_v1
