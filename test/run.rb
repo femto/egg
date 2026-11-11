@@ -57,7 +57,7 @@ def report(ok, name, detail = nil)
   else
     $fail += 1
     puts "  FAIL  #{name}"
-    puts detail.gsub(/^/, "        ") if detail
+    puts detail.to_s.b.gsub(/^/n, "        ") if detail
   end
 end
 

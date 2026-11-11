@@ -375,7 +375,7 @@ module Clutch
           expected = File.join(dir, "test", "#{n}.expected")
           if !st.success?
             why = "exited with #{st.exitstatus || st.termsig && "signal #{st.termsig}"}"
-          elsif File.file?(expected) && File.binread(expected) != out.b
+          elsif File.file?(expected) && lf(File.binread(expected)) != lf(out)
             why = "printed other than test/#{n}.expected"
           end
         else
@@ -407,6 +407,12 @@ module Clutch
       end
       @err.puts "clutch: wrote clutch.lock" if write_lock && Lock.write(dir, pkgs)
       pkgs
+    end
+
+    # text as bytes, with Windows' CRLF line ends as LF (a program's
+    # output, or a .expected file git checked out with CRLF).
+    def lf(text)
+      text.b.gsub("\r\n".b, "\n".b)
     end
 
     # text (a program's output, any bytes) with each of copies replaced
