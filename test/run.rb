@@ -1548,7 +1548,9 @@ def check_versions
   e, = Open3.capture2(*eggc_command, "--version")
   c, = Open3.capture2(RbConfig.ruby, File.join(ROOT, "bin", "clutch"), "--version")
   want = /\A\d+\.\d+\.\d+(-dev(\+\h+)?)?\z/
-  ok = e.start_with?("eggc ") && c.start_with?("clutch ") && e.split[1] == c.split[1] && e.split[1].match?(want)
+  # One version; a native eggc (EGGC) says it without -dev+COMMIT.
+  base = ->(v) { v.to_s.split("-").first }
+  ok = e.start_with?("eggc ") && c.start_with?("clutch ") && base.(e.split[1]) == base.(c.split[1]) && e.split[1].to_s.match?(want) && c.split[1].to_s.match?(want)
   report(ok, "eggc --version and clutch --version", "#{e}#{c}")
 end
 
