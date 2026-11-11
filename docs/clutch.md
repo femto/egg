@@ -58,7 +58,8 @@ resolve to, and it is recorded in the lock like them.
 ## Tests
 
 Each `test/NAME.egg` is a test: a program with a `main`, built with the
-package (`@import("NAME")`), its dependencies and its dev-dependencies, and
+package (a library's `src/NAME.egg` is `@import("NAME")`), its
+dependencies and its dev-dependencies, and
 run in the package's directory. It passes when it exits 0 (a `main` that
 returns an error fails) and, if there is a `test/NAME.expected`, prints
 exactly that. `clutch test` runs them all, `clutch test NAME...` some;

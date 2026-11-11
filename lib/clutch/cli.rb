@@ -16,7 +16,8 @@ module Clutch
       add NAME [VERSION]      depend on NAME from the index (VERSION such as
                               "~> 1.2"; the newest release's ~> by default)
       add NAME --git URL [--ref REF]
-      add NAME --path DIR     (with --dev: a dev-dependency, for the tests)
+      add NAME --path DIR
+      add NAME ... --dev      any of these as a dev-dependency, for the tests
       remove NAME             drop a dependency
       check                   type-check the package (src/main.egg, or the
                               library's src/NAME.egg)
@@ -111,10 +112,10 @@ module Clutch
           // returns without an error.
           uses io
 
-          const #{pkg} = @import("#{pkg}")
+          const lib = @import("#{pkg}")
 
           fn main(io: Io) !void {
-              if (#{pkg}.add(2, 3) != 5) {
+              if (lib.add(2, 3) != 5) {
                   io.print("add(2, 3) is not 5")
                   return error.Failed
               }
@@ -288,7 +289,7 @@ module Clutch
         cannot.(e.message)
       end
       copies = [File.realpath(dir), dir].uniq
-      shown = ->(t) { copies.reduce(t) { |acc, c| acc.gsub(c, shown_as) } }
+      shown = ->(t) { shown_text(t, copies, shown_as) }
       @out.print shown.(out)
       @err.print shown.(err)
       st.exitstatus || 1
@@ -356,7 +357,7 @@ module Clutch
       flags = pkg_flags(pkgs, dev: true)
       flags += ["--pkg", "#{m.name}=#{m.src_dir}"] if File.directory?(m.src_dir)
       copies = shown_as.nil? ? [] : [File.realpath(dir), dir].uniq
-      shown = ->(t) { copies.reduce(t) { |acc, c| acc.gsub(c, shown_as) } }
+      shown = ->(t) { shown_text(t, copies, shown_as) }
       cannot = ->(why) { raise Error, "cannot run eggc (#{eggc.join(" ")}): #{why}" }
       failed = 0
       names.each do |n|
@@ -385,7 +386,7 @@ module Clutch
         else
           failed += 1
           @out.puts "  FAIL  #{n} (#{why})"
-          [out, err].each { |t| @out.print shown.(t).gsub(/^/, "        ") unless t.empty? }
+          [out, err].each { |t| @out.print shown.(t).gsub(/^/n, "        ") unless t.empty? }
         end
       end
       @out.puts "#{names.length - failed} passed, #{failed} failed"
@@ -406,6 +407,12 @@ module Clutch
       end
       @err.puts "clutch: wrote clutch.lock" if write_lock && Lock.write(dir, pkgs)
       pkgs
+    end
+
+    # text (a program's output, any bytes) with each of copies replaced
+    # by shown_as.
+    def shown_text(text, copies, shown_as)
+      copies.reduce(text.b) { |acc, c| acc.gsub(c.b, shown_as.b) }
     end
 
     # The --pkg flags; with dev, for the tests, the dev-dependencies too.

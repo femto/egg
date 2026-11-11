@@ -28,7 +28,7 @@ module Clutch
   Dep = Struct.new(:name, :kind, :constraint, :git, :ref, :path)
 
   class Manifest
-    attr_reader :dir, :name, :version, :deps, :dev_deps
+    attr_reader :dir, :name, :version, :deps
 
     def self.load(dir)
       path = File.join(dir, "clutch.toml")
@@ -53,15 +53,21 @@ module Clutch
       rescue VersionError => e
         raise Error, "#{file}: [package] version: #{e.message}"
       end
-      deps = doc["dependencies"] || {}
+      deps = doc.fetch("dependencies", {})
       raise Error, "#{file}: [dependencies] must be a table" unless deps.is_a?(Hash)
       @deps = deps.map { |n, spec| dep(n, spec, "dependency") }
-      dev = doc["dev-dependencies"] || {}
-      raise Error, "#{file}: [dev-dependencies] must be a table" unless dev.is_a?(Hash)
-      @dev_deps = dev.map { |n, spec| dep(n, spec, "dev-dependency") }
-      if (both = @dev_deps.find { |d| @deps.any? { |x| x.name == d.name } })
-        raise Error, "#{file}: #{both.name} is in both [dependencies] and [dev-dependencies]; the tests have the dependencies already"
+      @dev = doc.fetch("dev-dependencies", {})
+    end
+
+    # The dev-dependencies, read only when asked for: only the root's are.
+    def dev_deps
+      return @dev_deps if @dev_deps
+      raise Error, "#{@file}: [dev-dependencies] must be a table" unless @dev.is_a?(Hash)
+      devs = @dev.map { |n, spec| dep(n, spec, "dev-dependency") }
+      if (both = devs.find { |d| @deps.any? { |x| x.name == d.name } })
+        raise Error, "#{@file}: #{both.name} is in both [dependencies] and [dev-dependencies]; the tests have the dependencies already"
       end
+      @dev_deps = devs
     end
 
     def src_dir
