@@ -655,7 +655,7 @@ module Egg
                   when :bparam then "'#{text}', which is only borrowed here; to take its payload, declare parameter '#{root(path)}' as sink"
                   when :borrowed
                     c = @borrowed[root(path)]
-                    c.is_a?(Array) ? "'#{text}', which #{c[1].delete_prefix("it ")}" : "'#{text}', which only borrows an element of '#{c}'"
+                    c.is_a?(Array) ? "'#{text}', which #{c[1].delete_prefix("it ")}" : "'#{text}', which only borrows an element of '#{c}'; loop over an index and take the element out with @replace(&#{c}[i], v) or @take(&#{c}[i])"
                   else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
                   end
             pre = lambda do
