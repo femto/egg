@@ -20,9 +20,21 @@ if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -
   throw "egg: there is a release for 64-bit x86 Windows only"
 }
 
+# A URL's file to out; a file:// base (for testing) is copied, since
+# PowerShell 7's Invoke-WebRequest does not read file:// URLs.
+function Fetch($url, $out) {
+  if ($url.StartsWith("file:")) { Copy-Item ([Uri]$url).LocalPath $out }
+  else { Invoke-WebRequest $url -OutFile $out -UseBasicParsing }
+}
+
 $version = $env:EGG_VERSION
 if (-not $version) {
-  $version = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
+  # The latest release's page is .../releases/tag/vX.Y.Z (no API, so no
+  # rate limit): where the redirect ends.
+  $r = Invoke-WebRequest "https://github.com/$repo/releases/latest" -UseBasicParsing
+  $final = if ($r.BaseResponse.ResponseUri) { $r.BaseResponse.ResponseUri } else { $r.BaseResponse.RequestMessage.RequestUri }
+  if ("$final" -notmatch "/tag/v([^/]+)$") { throw "egg: could not find the latest release of $repo" }
+  $version = $Matches[1]
 }
 $version = $version.TrimStart("v")
 
@@ -33,9 +45,10 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
   Say "downloading Egg $version for windows-x86_64"
   $zip = Join-Path $tmp "$name.zip"
-  Invoke-WebRequest "$base/$name.zip" -OutFile $zip -UseBasicParsing
-  $sums = (Invoke-WebRequest "$base/SHA256SUMS" -UseBasicParsing).Content
-  if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
+  Fetch "$base/$name.zip" $zip
+  $sumsFile = Join-Path $tmp "SHA256SUMS"
+  Fetch "$base/SHA256SUMS" $sumsFile
+  $sums = Get-Content -Raw $sumsFile
   $line = ($sums -split "`n") | Where-Object { $_ -match "^([0-9a-f]+)  $([regex]::Escape("$name.zip"))\s*$" } | Select-Object -First 1
   if (-not $line) { throw "egg: SHA256SUMS does not list $name.zip" }
   $want = ($line -split " ")[0]
@@ -55,7 +68,11 @@ foreach ($tool in "eggc", "clutch") {
 }
 $eggc = Join-Path $home_ "$name\bin\eggc.exe"
 $clutch = Join-Path $home_ "$name\bin\clutch.exe"
-Say "installed $(& $eggc --version) and $(& $clutch --version) in $home_"
+$ev = & $eggc --version
+if ($LASTEXITCODE -ne 0) { throw "egg: the installed eggc does not run" }
+$cv = & $clutch --version
+if ($LASTEXITCODE -ne 0) { throw "egg: the installed clutch does not run" }
+Say "installed $ev and $cv in $home_"
 
 $bin = Join-Path $home_ "bin"
 $path = [Environment]::GetEnvironmentVariable("Path", "User")

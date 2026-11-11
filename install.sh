@@ -71,7 +71,10 @@ tar -xzf "$tmp/$name.tar.gz" -C "$home"
 for tool in eggc clutch; do
   ln -sf "../$name/bin/$tool" "$home/bin/$tool"
 done
-say "installed $("$home/bin/eggc" --version) and $("$home/bin/clutch" --version) in $home"
+# Each run on its own line, so that set -e stops on a binary that fails.
+eggc_version=$("$home/bin/eggc" --version) || die "the installed eggc does not run"
+clutch_version=$("$home/bin/clutch" --version) || die "the installed clutch does not run"
+say "installed $eggc_version and $clutch_version in $home"
 
 if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
   say "note: eggc compiles through C and finds no '${CC:-cc}'; install a C compiler (Xcode's command line tools, gcc or clang), or set CC"

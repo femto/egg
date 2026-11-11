@@ -74,7 +74,7 @@ the HTTP servers on every pull request
 
 eggc and clutch, as native binaries for Linux (x86_64, arm64), macOS (arm64,
 x86_64) and Windows (x86_64). eggc compiles through C, so you also need a C
-compiler (cc; on Windows gcc, with `CC=gcc`).
+compiler (cc; on Windows gcc, with `$env:CC = "gcc"` in PowerShell).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/femto/egg/main/install.sh | sh
@@ -86,7 +86,8 @@ irm https://raw.githubusercontent.com/femto/egg/main/install.ps1 | iex
 
 They install the latest release in `~/.egg` (`EGG_HOME`; `EGG_VERSION=0.1.0`
 for another release) and check it against the release's SHA-256 sums. Then
-`eggc --version`. Or download an archive from
+put `~/.egg/bin` on your PATH as install.sh says (install.ps1 adds it to your
+user PATH, so open a new terminal), and run `eggc --version`. Or download an archive from
 [Releases](https://github.com/femto/egg/releases) yourself.
 
 ## Quick start
