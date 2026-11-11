@@ -54,7 +54,8 @@
 module Egg
   # sink: a sink parameter; sources: for a local slice (or a loop or if
   # capture), the variables it views, through other slices
-  VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout, :sink, :sources)
+  # borrow: :shared for `const r = &place`, :mut for `inout r = &place`
+  VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout, :sink, :sources, :borrow)
   # params: [[type, mode]] (comptime parameters removed); ret: type
   # direct: capability -> [line, col, what] for its first direct use
   # calls: [[Sig, line, col]] for every call in the body
@@ -1390,6 +1391,10 @@ module Egg
         next if info.param
         if !info.used
           err("E110", "local variable '#{name}' is never used", info.line, info.col)
+        elsif info.borrow == :mut && !info.mutated
+          err("E111", "'#{name}' never changes what it borrows; borrow it with `const #{name} = &...`", info.line, info.col)
+        elsif info.borrow
+          nil
         elsif info.mutable && !info.mutated
           err("E111", "local variable '#{name}' is never reassigned; declare it with 'const'", info.line, info.col)
         elsif info.inout && !info.mutated
@@ -1407,9 +1412,18 @@ module Egg
         stmt.value = view
         stmt.ty = ty
         declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true, false, (src = place_sources(view.obj, false)).is_a?(Array) ? src : nil))
+      in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, inout: true]
+        check_borrow(stmt, name, type, place, true, line, col)
+      in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, mutable: false] if type.nil? || !pointer_type_expr?(type)
+        check_borrow(stmt, name, type, place, false, line, col)
+      in VarDecl[name:, type:, value: AddrOf => value, line:, col:, mutable: true] if type.nil? || !pointer_type_expr?(type)
+        check_expr(value.expr)
+        err("E121", "a borrow is `const #{name} = &x` (to read it) or `inout #{name} = &x` (to change it), not a var", line, col)
+        stmt.ty = "error"
+        declare(name, VarInfo.new("error", false, true, false, line, col, false, false))
       in VarDecl[name:, value:, line:, col:, inout: true]
         check_expr(value)
-        err("E116", "an inout local is a writable slice: `inout #{name} = &x[lo..hi]`, of a variable", line, col)
+        err("E116", "an inout local borrows a place: `inout #{name} = &x`, `&x.f`, `&x[i]` or `&x[lo..hi]`", line, col)
         stmt.ty = "error"
         declare(name, VarInfo.new("error", true, true, true, line, col, false, false))
       in VarDecl[name:, mutable:, type:, value:, line:, col:]
@@ -1448,6 +1462,7 @@ module Egg
               err("E105", "cannot assign to #{what} '#{name}'", line, col)
             else
               info.mutated = true
+              info.used = true if info.borrow # writing through it is its use
               expect_type(info.type, vt, value)
             end
           end
@@ -1759,11 +1774,12 @@ module Egg
         if mut_slice?(e)
           err("E105", "cannot #{verb} slice '#{name}': only its elements can change (#{name}[i] = v)", line, col)
         elsif !info.mutable
-          what = info.param ? "parameter" : "constant"
-          err("E105", "cannot #{verb} #{what} '#{name}'", line, col)
+          what = info.param ? "parameter" : info.borrow ? "shared borrow" : "constant"
+          err("E105", "cannot #{verb} #{what} '#{name}'#{info.borrow ? "; borrow it with `inout #{name} = &...`" : ""}", line, col)
         else
           info.mutated = true
         end
+        info.used = true if info.borrow # writing through it is its use
         e.ty = info.type
       in Field[obj:, name:, line:, col:]
         t = check_lvalue(obj, verb)
@@ -1857,6 +1873,45 @@ module Egg
       end
       return owned_place_error(t, "a pointer's target", place.line, place.col) if owned?(t)
       ptr_type(t)
+    end
+
+    # `const r = &place` / `inout r = &place`: r names the place (a
+    # variable, or a field or element of one) until its last use. A shared
+    # borrow reads it; a writable one may also change it, but neither may
+    # give away what it borrows (own.rb).
+    def check_borrow(stmt, name, type, place, writable, line, col)
+      declared = type.nil? ? nil : resolve_type(type, line, col)
+      errors = @diagnostics.length
+      t = if !owned_place?(place)
+            check_expr(place)
+            err("E121", "a borrow names a variable, or a field or element of one: `const #{name} = &x.f`", place.line, place.col)
+            "error"
+          elsif writable
+            slice_var?(place) ? check_expr(place) : check_lvalue(place, "borrow as writable")
+          else
+            check_expr(place)
+          end
+      mark_root_used(place)
+      if t != "error" && (!slice_in(t).nil? || t == "str")
+        err("E116", "'#{name}' would borrow a #{t}, which already views its data: `const #{name} = #{t == "str" ? "s" : "x[lo..hi]"}`", line, col)
+        t = "error"
+      elsif t != "error" && (!storable?(t) || t == "module")
+        err("E108", "cannot borrow a #{t}", line, col)
+        t = "error"
+      end
+      expect_type(declared, t, place) unless declared.nil? || t == "error"
+      stmt.value.info = { borrow: writable ? :mut : :shared }
+      stmt.value.ty = t
+      stmt.ty = t
+      # After an error, do not also call it unused or never written.
+      failed = @diagnostics.length > errors
+      declare(name, VarInfo.new(t, writable, failed, failed, line, col, false, false, false, nil, writable ? :mut : :shared))
+    end
+
+    # A pointer type as written (*T), which `const p: *T = &x` asks for.
+    def pointer_type_expr?(type)
+      type = type.inner if type.is_a?(OptType)
+      type.is_a?(PtrType)
     end
 
     # ---- expressions --------------------------------------------------

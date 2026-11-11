@@ -1,0 +1,36 @@
+// Local borrows last until their last use, and never own what they name.
+uses alloc, io
+
+const Db = struct {
+    name: Buf(u8)
+    hits: i64
+}
+
+fn make(a: Allocator) Db {
+    return Db{ .name = a.concat("x", "y"), .hits = 0 }
+}
+
+fn main(io: Io, a: Allocator) void {
+    const d = make(a)
+    const n = &d.name
+    a.free(d)
+    io.print(n)
+    var e = make(a)
+    inout w = &e
+    io.print(e.hits)
+    w.hits = 2
+    const r = &e.name
+    a.free(r)
+    a.free(e)
+    var f = make(a)
+    inout x = &f.hits
+    const y = &f.hits
+    x = 3
+    io.print(y)
+    a.free(f)
+}
+
+// error: E149 @16
+// error: E149 @20
+// error: E139 @23
+// error: E149 @27

@@ -3656,6 +3656,12 @@ module Egg
     def gen_stmt(stmt)
       mark(stmt.line)
       case stmt
+      in VarDecl[name:, value: AddrOf[expr: place, info: { borrow: Symbol => kind }], ty:]
+        # A borrow is a pointer to the place, read through like an inout
+        # parameter; a shared one only reads (and may borrow a const, such
+        # as a switch capture).
+        @locals.last[name] = [ty, true]
+        line("#{kind == :shared ? "const " : ""}#{c_type(ty)} *const v_#{name} = &#{lvalue(place)};")
       in VarDecl[name:, value:, ty:]
         code = coerce(expr(value), value.ty, ty)
         declare_local(name, ty)

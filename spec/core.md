@@ -1151,8 +1151,9 @@ fn main(io: Io, a: Allocator) void {
 An `inout` parameter lets a function change its caller's variable. The
 argument is written `&x` (`&x[lo..hi]` for an inout slice, below), so a
 reader of the call can see it: `x` (or a field or element of it) must be
-a `var` or an `inout` parameter, and `&` is allowed nowhere else (E121). Inside the function, the parameter reads
-and assigns like a local.
+a `var` or an `inout` parameter. Besides arguments, `&` may only start a
+local borrow (below); anywhere else it is E121. Inside the function, the
+parameter reads and assigns like a local.
 
 **Exclusivity** (E117): a place passed as `inout` may not appear in any
 other argument of the same call, so a function never sees two views of the
@@ -1241,6 +1242,74 @@ fn main(io: Io) void {
     const a = [2]i64{ 1, 2 }
     fill(&a[0..], 0)
     io.print(a[0])
+}
+```
+
+**Local borrows.** `const r = &p` names the place `p` (a variable, or a
+field or element of one) without copying or moving it: `r` reads as `p`
+does and may be passed to plain parameters, but cannot change it. `inout
+r = &p`, of a place that could be passed as `&p`, may also change it:
+assign it or its fields, pass `&r` or call its `inout self` methods
+(E111 if it never does; E105 for writing through a `const` borrow; a
+`var` borrow is E121). Like a local slice, a borrow lasts until its last
+use: while it is used later, `p` cannot be moved, assigned or borrowed as
+writable (E149), and while a writable one is, `p` cannot even be read
+except through it. A borrow never owns what it names, so moving it, or any
+part of it, is E139: `@replace(&r.f, v)` swaps a value in instead, and a
+`switch` over a borrowed union only lends its payload. The place must
+be a variable's (`&make()` is E121), and a slice or `str` already views
+its data (E116).
+
+```egg
+// expect: maindb 0
+// expect: maindb 11
+// expect: 81
+uses alloc, io
+
+const Db = struct {
+    name: Buf(u8)
+    hits: i64
+
+    fn bump(inout self: Db) void {
+        self.hits = self.hits + 1
+    }
+}
+
+const Conf = struct {
+    db: Db
+    port: i64
+}
+
+fn show(io: Io, d: Db) void {
+    io.print(d.name, " ", d.hits)
+}
+
+fn main(io: Io, a: Allocator) void {
+    var conf = Conf{ .db = Db{ .name = a.concat("main", "db"), .hits = 0 }, .port = 80 }
+    defer a.free(conf)
+    const db = &conf.db              // reads conf.db, owns nothing
+    show(io, db)
+    inout w = &conf.db               // changes it
+    w.bump()
+    w.hits = w.hits + 10
+    show(io, conf.db)                // w is not used after this
+    inout p = &conf.port
+    p = p + 1
+    io.print(conf.port)
+}
+```
+
+```egg
+// error: E149
+uses alloc, io
+
+const Db = struct { name: Buf(u8), hits: i64 }
+
+fn main(io: Io, a: Allocator) void {
+    const db = Db{ .name = a.concat("a", "b"), .hits = 0 }
+    const name = &db.name
+    a.free(db)                       // name is still used below
+    io.print(name)
 }
 ```
 
@@ -2191,13 +2260,13 @@ in the file (anything else after `allow` is E131). Then:
 
 | Written | Means |
 | --- | --- |
-| `&place` | the address of a `var`, or of its field or element (a `const` is E105) |
+| `&place` | the address of a `var`, or of its field or element (a `const` is E105), where a pointer is expected: `const p: *T = &x`, a `*T` argument (without the type, `const r = &x` is a borrow, section 12) |
 | `p.*` | the `T` that p points to; also a place: `p.* = v`, `p.*.x = v` |
 | `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`, `@bufPtr`, `@sliceFromPtr` | section 15 |
 | `extern fn` | section 20 |
 
 Without `allow unsafe` these are E131 (and `&x` outside an inout argument
-stays E121). The compiler cannot check what pointers point to: a pointer
+stays E121; a borrow is allowed everywhere). The compiler cannot check what pointers point to: a pointer
 can outlive the variable it points into, and `@ptrAdd` can leave the
 object. The one check is that `p.*` on `null` panics with
 `null pointer dereference`. Nor can it see a pointer into a value passed

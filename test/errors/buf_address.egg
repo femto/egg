@@ -6,7 +6,7 @@ allow unsafe
 
 fn main(io: Io, a: Allocator) void {
     var b = a.alloc(3, 1)
-    const p = &b
+    const p: *Buf(i64) = &b
     io.print(p == null)
     a.resize(&b, 1, 0)
     a.free(b)

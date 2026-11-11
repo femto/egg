@@ -2,7 +2,7 @@
 allow unsafe
 fn main() void {
     const x = 1
-    const p = &x
+    const p: *i64 = &x
     if (p == null) {
     }
 }
