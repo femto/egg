@@ -17,16 +17,31 @@
 
 module Clutch
   # path relative to base (both directories), or path itself when no
-  # relative one leads there (another drive on Windows). Not Pathname, which
-  # Spinel cannot compile for Windows.
+  # relative one leads there (another drive or share on Windows). Not
+  # Pathname, which Spinel cannot compile for Windows.
   def self.relative_path(path, base)
-    a = File.expand_path(path).split(%r{[/\\]+})
-    b = File.expand_path(base).split(%r{[/\\]+})
-    return path unless a[0].to_s.casecmp?(b[0].to_s) # the drive or ""
+    win = Gem.win_platform?
+    a = File.expand_path(path)
+    b = File.expand_path(base)
+    ra = path_root(a, win)
+    rb = path_root(b, win)
+    return path unless win ? ra.casecmp?(rb) : ra == rb
+    # A backslash is a separator only on Windows; elsewhere it may be in a name.
+    sep = win ? %r{[/\\]+} : %r{/+}
+    pa = a[ra.length..].split(sep).reject(&:empty?)
+    pb = b[rb.length..].split(sep).reject(&:empty?)
     same = 0
-    same += 1 while same < a.length && same < b.length && a[same] == b[same]
-    parts = [".."] * (b.length - same) + a[same..]
+    same += 1 while same < pa.length && same < pb.length && pa[same] == pb[same]
+    parts = [".."] * (pb.length - same) + pa[same..]
     parts.empty? ? "." : parts.join("/")
+  end
+
+  # The volume an absolute path starts with: "C:" or "//server/share" on
+  # Windows, nothing elsewhere.
+  def self.path_root(path, win)
+    return "" unless win
+    m = path.match(%r{\A[/\\]{2}[^/\\]+[/\\]+[^/\\]+}) || path.match(/\A[A-Za-z]:/)
+    m.nil? ? "" : m[0]
   end
 
   class Resolver

@@ -34,7 +34,8 @@ if command -v curl >/dev/null 2>&1; then
   latest() { curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest"; }
 elif command -v wget >/dev/null 2>&1; then
   fetch() { wget -q "$1" -O "$2"; }
-  latest() { wget -q --max-redirect=5 -S --spider "https://github.com/$repo/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | tail -n 1 | tr -d '\r'; }
+  # Not -q, which would hide the headers -S prints.
+  latest() { wget --max-redirect=5 -S --spider "https://github.com/$repo/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | tail -n 1 | tr -d '\r'; }
 else
   die "needs curl or wget"
 fi
@@ -65,15 +66,17 @@ else
 fi
 [ "$got" = "$want" ] || die "$name.tar.gz does not match its SHA-256 sum; not installed"
 
+# Unpacked and run where it was downloaded first, so that a release that
+# does not run here leaves what is installed alone.
+tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
+eggc_version=$("$tmp/$name/bin/eggc" --version) || die "$name's eggc does not run here; nothing was changed"
+clutch_version=$("$tmp/$name/bin/clutch" --version) || die "$name's clutch does not run here; nothing was changed"
 mkdir -p "$home/bin"
 rm -rf "${home:?}/$name"
-tar -xzf "$tmp/$name.tar.gz" -C "$home"
+mv "$tmp/$name" "$home/$name"
 for tool in eggc clutch; do
   ln -sf "../$name/bin/$tool" "$home/bin/$tool"
 done
-# Each run on its own line, so that set -e stops on a binary that fails.
-eggc_version=$("$home/bin/eggc" --version) || die "the installed eggc does not run"
-clutch_version=$("$home/bin/clutch" --version) || die "the installed clutch does not run"
 say "installed $eggc_version and $clutch_version in $home"
 
 if ! command -v "${CC:-cc}" >/dev/null 2>&1; then

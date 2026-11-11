@@ -55,10 +55,18 @@ try {
   $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
   if ($got -ne $want) { throw "egg: $name.zip does not match its SHA-256 sum; not installed" }
 
+  # Unpacked and run where it was downloaded first, so that a release that
+  # does not run here leaves what is installed alone.
+  Expand-Archive $zip -DestinationPath $tmp
+  $ev = & (Join-Path $tmp "$name\bin\eggc.exe") --version
+  if ($LASTEXITCODE -ne 0) { throw "egg: $name's eggc does not run here; nothing was changed" }
+  $cv = & (Join-Path $tmp "$name\bin\clutch.exe") --version
+  if ($LASTEXITCODE -ne 0) { throw "egg: $name's clutch does not run here; nothing was changed" }
+
   New-Item -ItemType Directory -Force -Path (Join-Path $home_ "bin") | Out-Null
   $dest = Join-Path $home_ $name
   if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-  Expand-Archive $zip -DestinationPath $home_
+  Move-Item (Join-Path $tmp $name) $dest
 } finally {
   Remove-Item -Recurse -Force $tmp
 }
@@ -66,12 +74,6 @@ try {
 foreach ($tool in "eggc", "clutch") {
   Set-Content -Path (Join-Path $home_ "bin\$tool.cmd") -Encoding ASCII -Value "@`"%~dp0..\$name\bin\$tool.exe`" %*"
 }
-$eggc = Join-Path $home_ "$name\bin\eggc.exe"
-$clutch = Join-Path $home_ "$name\bin\clutch.exe"
-$ev = & $eggc --version
-if ($LASTEXITCODE -ne 0) { throw "egg: the installed eggc does not run" }
-$cv = & $clutch --version
-if ($LASTEXITCODE -ne 0) { throw "egg: the installed clutch does not run" }
 Say "installed $ev and $cv in $home_"
 
 $bin = Join-Path $home_ "bin"
