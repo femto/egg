@@ -150,9 +150,26 @@ module Clutch
     # name -> Entry, or nil when the index has no such package
     def entry(name)
       return @entries[name] if @entries.key?(name)
+      t = text(name)
+      @entries[name] = t.nil? ? nil : parse(name, t, "#{@where}/packages/#{name}.toml")
+    end
+
+    # The text of name's file in the index, or nil.
+    def text(name)
       file = "packages/#{name}.toml"
-      text = File.directory?(@where) ? (File.file?(File.join(@where, file)) ? File.read(File.join(@where, file)) : nil) : @git.read(@where, file)
-      @entries[name] = text.nil? ? nil : parse(name, text, "#{@where}/#{file}")
+      return @git.read(@where, file) unless local_dir?
+      path = File.join(@where, file)
+      File.file?(path) ? File.read(path) : nil
+    end
+
+    # An index that is a directory, read and written in place.
+    def local_dir?
+      File.directory?(@where)
+    end
+
+    # A directory or a file:// URL: an index for testing.
+    def local?
+      local_dir? || @where.start_with?("file://")
     end
 
     def to_s

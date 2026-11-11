@@ -72,6 +72,28 @@ repository and releases, each a version and a full commit SHA. Publishing
 is a pull request there. `CLUTCH_INDEX` names another index (a URL or, for
 testing, a directory).
 
+## Publishing
+
+`clutch publish`, in a library's repository, adds its current commit to the
+index as the version its `clutch.toml` gives:
+
+- The package is a library (`src/NAME.egg`) at the root of a git work tree
+  with nothing uncommitted, and its repository (`origin`, or `--repo URL`)
+  already has the commit: clutch fetches it from there and checks the
+  release as its users will get it. A path or `file://` repository is
+  refused (only a test index, a directory, takes one), and so is a path
+  dependency, which users could not fetch.
+- `clutch check` must pass.
+- The version must be new to the index, and the name, if the index has it,
+  must belong to the same repository: a name belongs to the package that
+  first took it. The release is added in version order.
+- Then, for an index on GitHub, clutch clones it, commits
+  `packages/NAME.toml` on a branch `NAME-VERSION` (in a fork when you
+  cannot push to the index), and opens the pull request with `gh`. An
+  index that is a directory is written in place.
+
+`--dry-run` does every check and prints the file it would write.
+
 ## The cache
 
 `$CLUTCH_CACHE`, or `$XDG_CACHE_HOME/clutch`, or `~/.cache/clutch`:
@@ -101,6 +123,7 @@ clutch run [--release] [-g] [-- ARGS]
 clutch flags                 # the --pkg flags, for running eggc by hand
 clutch lock                  # resolve and write clutch.lock
 clutch update [NAME...]      # ignore the lock (for those packages)
+clutch publish [--repo URL] [--dry-run]   # this commit as a release, by pull request
 ```
 
 `CLUTCH_EGGC` names the eggc to run (default: `bin/eggc` beside clutch).
@@ -109,7 +132,6 @@ clutch update [NAME...]      # ignore the lock (for those packages)
 
 - The language server does not know packages yet; it will take them from
   `clutch flags`.
-- `clutch publish` (writing the index file and opening the pull request).
 - Per-package compilation and caching: every build still compiles the
   whole program from source. The plan is Rust's: each package compiled
   once and cached, its interface being its signatures and their

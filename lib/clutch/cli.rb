@@ -25,6 +25,10 @@ module Clutch
       flags                   the eggc flags for the dependencies (--pkg NAME=DIR)
       lock                    resolve and write clutch.lock
       update [NAME...]        choose versions afresh, ignoring clutch.lock
+      publish [--repo URL] [--dry-run]
+                              add this commit as a release to the index: a
+                              pull request through gh (pushed, clean, and
+                              passing clutch check first)
 
     The commands after new work in the package holding the current
     directory. CLUTCH_INDEX names the package index, CLUTCH_CACHE the cache,
@@ -52,6 +56,7 @@ module Clutch
       when "flags" then cmd_flags
       when "lock" then @argv.empty? ? cmd_lock([]) : usage
       when "update" then cmd_lock(@argv.empty? ? true : @argv)
+      when "publish" then cmd_publish
       when "help", "-h", "--help"
         @out.print USAGE
         0
@@ -243,6 +248,35 @@ module Clutch
       args += ["--"] + program_args unless program_args.empty?
       system(*eggc, *args)
       $?.exitstatus || 1
+    end
+
+    def cmd_publish
+      dry = !@argv.delete("--dry-run").nil?
+      repo = nil
+      if (i = @argv.index("--repo"))
+        repo = @argv[i + 1]
+        return usage if repo.nil?
+        @argv.slice!(i, 2)
+      end
+      return usage unless @argv.empty?
+      pub = Publish.new(project_dir, repo: repo).prepare
+      text = pub.index_text
+      # The gate: the release as committed (the tree is clean) checks.
+      unless cmd_eggc("check").zero?
+        raise Error, "#{pub.name} #{pub.version} does not pass clutch check; nothing was published"
+      end
+      if dry
+        @out.print text
+        @err.puts "clutch: --dry-run: #{pub.name} #{pub.version} (#{pub.sha[0, 12]}) is ready; the index's packages/#{pub.name}.toml would be the text above"
+        return 0
+      end
+      begin
+        @out.puts pub.submit(text)
+      rescue Error
+        @out.print text
+        raise
+      end
+      0
     end
 
     # Resolves dir's package and writes the lock; the resolved packages.
