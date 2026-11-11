@@ -4,11 +4,19 @@
 # diagnostics. Everything comes from the real lexer, parser and checker,
 # so the editor sees exactly what the compiler sees.
 #
+# A file in a clutch package (a clutch.toml in its directory or above) is
+# checked with the packages clutch gives the compiler: `clutch flags`, or
+# for a file under test/ `clutch flags --test`, as `clutch test` builds it.
+# The server reads no manifest itself.
+#
 # This file is a tool, not part of the compiler: it uses the json and uri stdlib
 # and is loaded only by `eggc lsp`, so the compiler stays in the Spinel
 # subset.
 
 require "json"
+require "open3"
+require "rbconfig"
+require "shellwords"
 require "uri"
 
 module Egg
@@ -25,7 +33,9 @@ module Egg
     class Index
       attr_reader :diagnostics, :funcs
 
-      def initialize(src, path = nil)
+      # pkgs: package name -> directory, as eggc's --pkg; pkg_error: why
+      # clutch could not give them (a diagnostic), or nil.
+      def initialize(src, path = nil, pkgs = {}, pkg_error = nil)
         @refs = []
         @funcs = []
         @tokens = nil
@@ -33,7 +43,7 @@ module Egg
         @tokens = Lexer.new(src).tokenize
         program = Parser.new(@tokens).parse_program
         begin
-          result = Egg.check(src, path, program)
+          result = Egg.check(src, path, program, pkgs)
           # Shown even with errors (E130 is when they matter most); after
           # a type error no function has any.
           @caps = result.caps
@@ -42,10 +52,12 @@ module Egg
           # A missing import or a syntax error in an imported file.
           @diagnostics = in_this_file([e.diagnostic])
         end
+        @diagnostics.unshift(Diagnostic.new("clutch", pkg_error, 1, 1)) if pkg_error
         build(program)
         @parsed = true
       rescue CompileError => e
         @diagnostics = [e.diagnostic]
+        @diagnostics.unshift(Diagnostic.new("clutch", pkg_error, 1, 1)) if pkg_error
         @parsed = false
       end
 
@@ -471,6 +483,75 @@ module Egg
     end
 
     # JSON-RPC over stdio, one file at a time (v0 programs are one file).
+    # The packages of each clutch package, from `clutch flags`, kept until
+    # its clutch.toml or clutch.lock, or the clutch.toml of one of the
+    # packages it got, changes.
+    class Packages
+      def initialize
+        @cache = {}   # [package dir, test?] -> [stamp, pkgs, error]
+      end
+
+      # [name -> dir, error or nil] for the file at path (nil: none).
+      def for(path)
+        return [{}, nil] if path.nil?
+        dir = package_dir(File.dirname(File.expand_path(path)))
+        return [{}, nil] if dir.nil?
+        rel = File.expand_path(path).delete_prefix(dir + File::SEPARATOR)
+        test = rel.start_with?("test/", "test#{File::SEPARATOR}")
+        key = [dir, test]
+        hit = @cache[key]
+        return hit[1, 2] if hit && hit[0] == stamp(dir, hit[1])
+        pkgs, error = ask(dir, test)
+        # After asking: clutch may have written the lock just now.
+        @cache[key] = [stamp(dir, pkgs), pkgs, error]
+        [pkgs, error]
+      end
+
+      private
+
+      # The times of the files the answer for dir depends on: its manifest
+      # and lock, and each package's manifest (beside its src/; a path
+      # package's may change, and its own dependencies with it).
+      def stamp(dir, pkgs)
+        files = [File.join(dir, "clutch.toml"), File.join(dir, "clutch.lock")]
+        files += pkgs.values.map { |src| File.join(File.dirname(src), "clutch.toml") }
+        files.map { |f| File.mtime(f) rescue nil }
+      end
+
+      def package_dir(d)
+        loop do
+          return d if File.file?(File.join(d, "clutch.toml"))
+          up = File.dirname(d)
+          return nil if up == d
+          d = up
+        end
+      end
+
+      def ask(dir, test)
+        out, err, st = Open3.capture3(*clutch, "flags", *(test ? ["--test"] : []), chdir: dir)
+        unless st.success?
+          why = err.lines.map(&:strip).reject { |l| l.empty? || l.start_with?("usage:") }.first || "failed"
+          return [{}, "#{why} (so packages are unknown here)"]
+        end
+        words = Shellwords.split(out)
+        pkgs = {}
+        words.each_slice(2) do |flag, arg|
+          next unless flag == "--pkg" && arg&.include?("=")
+          name, d = arg.split("=", 2)
+          pkgs[name] = d
+        end
+        [pkgs, nil]
+      rescue SystemCallError, ArgumentError => e
+        [{}, "cannot run clutch (#{ENV["EGG_CLUTCH"].to_s.empty? ? "bin/clutch" : ENV["EGG_CLUTCH"]}): #{e.message} (so packages are unknown here)"]
+      end
+
+      # EGG_CLUTCH, or bin/clutch beside this eggc.
+      def clutch
+        return Shellwords.split(ENV["EGG_CLUTCH"]) unless ENV["EGG_CLUTCH"].to_s.empty?
+        [RbConfig.ruby, File.expand_path("../../bin/clutch", __dir__)]
+      end
+    end
+
     class Server
       # LSP SymbolKind values.
       SYMBOL_KINDS = { fn: 12, method: 6, struct: 23, union: 23, enum: 10, alias: 11 }.freeze
@@ -483,6 +564,7 @@ module Egg
         @out.binmode
         @docs = {}   # uri -> latest Index
         @good = {}   # uri -> latest Index that parsed, for navigation
+        @packages = Packages.new
         @shutdown = false
       end
 
@@ -562,7 +644,8 @@ module Egg
       end
 
       def update(uri, text)
-        index = Index.new(text, path_of(uri))
+        path = path_of(uri)
+        index = Index.new(text, path, *@packages.for(path))
         @docs[uri] = index
         @good[uri] = index if index.parsed?
         diags = index.diagnostics.map do |d|
@@ -577,10 +660,14 @@ module Egg
         notify("textDocument/publishDiagnostics", { "uri" => uri, "diagnostics" => diags })
       end
 
-      # file:///a/b%20c.egg -> /a/b c.egg; nil for other schemes.
+      # file:///a/b%20c.egg -> /a/b c.egg, and on Windows file:///C:/a.egg
+      # -> C:/a.egg (elsewhere /C:/a.egg is a path as it is); nil for other
+      # schemes.
       def path_of(uri)
         u = URI.parse(uri)
-        u.scheme == "file" ? URI.decode_www_form_component(u.path.gsub("+", "%2B")) : nil
+        return nil unless u.scheme == "file"
+        path = URI.decode_www_form_component(u.path.gsub("+", "%2B"))
+        Gem.win_platform? && path.match?(%r{\A/[A-Za-z]:[/\\]}) ? path[1..] : path
       rescue URI::Error
         nil
       end

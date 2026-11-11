@@ -36,6 +36,7 @@ require "rbconfig"
 require "open3"
 require "shellwords"
 require "socket"
+require "stringio"
 require "timeout"
 require "tmpdir"
 require_relative "../lib/egg"
@@ -57,7 +58,7 @@ def report(ok, name, detail = nil)
   else
     $fail += 1
     puts "  FAIL  #{name}"
-    puts detail.gsub(/^/, "        ") if detail
+    puts detail.to_s.b.gsub(/^/n, "        ") if detail
   end
 end
 
@@ -206,6 +207,49 @@ def lsp_session(messages)
     end
   end
   [replies, diags, status, err]
+end
+
+# The language server gives a file in a clutch package that package's
+# packages, from clutch flags (with --test under test/).
+def check_lsp_packages(dir)
+  root = File.join(dir, "lsp_pkgs")
+  FileUtils.rm_rf(root)
+  FileUtils.mkdir_p(root)
+  clutch = ->(at, *args) { Open3.capture3(RbConfig.ruby, File.join(ROOT, "bin", "clutch"), *args, chdir: File.join(root, at)) }
+  clutch.(".", "new", "app")
+  clutch.(".", "new", "--lib", "hello")
+  File.write(File.join(root, "hello", "src", "hello.egg"), "fn hi() str {\n    return \"hi\"\n}\n")
+  File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")) + "hello = { path = \"../hello\" }\n")
+  main = "uses io\n\nconst hello = @import(\"hello\")\n\nfn main(io: Io) void {\n    io.print(hello.hi())\n}\n"
+  test = File.read(File.join(root, "hello", "test", "hello.egg")).sub("lib.add(2, 3) != 5", "@len(lib.hi()) != 2")
+  uri = ->(*parts) { "file:///#{File.join(root, *parts).tr("\\", "/").delete_prefix("/")}" }
+  open = ->(u, text) { { "method" => "textDocument/didOpen", "params" => { "textDocument" => { "uri" => u, "text" => text } } } }
+  session = ->(*docs) { lsp_session([{ "id" => 1, "method" => "initialize", "params" => {} }, *docs, { "id" => 2, "method" => "shutdown" }, { "method" => "exit" }])[1] }
+  diags = session.(open.(uri.("app", "src", "main.egg"), main), open.(uri.("hello", "test", "hello.egg"), test),
+                   open.(uri.("hello", "src", "hello.egg"), main.sub("hello.hi()", "\"x\"")))
+  report(diags[0] == [], "lsp: a program's packages come from clutch", diags[0].inspect)
+  report(diags[1] == [], "lsp: a test sees its own package", diags[1].inspect)
+  report(diags[2]&.any? { |d| d["code"] == "E129" && d["message"].include?("unknown module 'hello'") }, "lsp: a package does not see itself outside test/", diags[2].inspect)
+  File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")).sub("../hello", "../nowhere"))
+  diags = session.(open.(uri.("app", "src", "main.egg"), main))
+  report(diags[0]&.any? { |d| d["code"] == "clutch" && d["message"].include?("no directory") }, "lsp: clutch's error is a diagnostic", diags[0].inspect)
+  diags = session.(open.(uri.("app", "src", "main.egg"), main.sub("fn main", "fn main(")))
+  report(diags[0]&.any? { |d| d["code"] == "clutch" }, "lsp: clutch's error is kept with a syntax error", diags[0].inspect)
+  # The answer is kept until a manifest it depends on changes, a path
+  # package's too.
+  require_relative "../lib/egg/lsp"
+  File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")).sub("../nowhere", "../hello"))
+  packages = Egg::LSP::Packages.new
+  main_file = File.join(root, "app", "src", "main.egg")
+  first = packages.for(main_file)
+  hello_toml = File.join(root, "hello", "clutch.toml")
+  File.write(hello_toml, File.read(hello_toml) + "nope = { path = \"../nope\" }\n")
+  later = Time.now + 5
+  File.utime(later, later, hello_toml)
+  second = packages.for(main_file)
+  drive = Egg::LSP::Server.new(StringIO.new, StringIO.new).send(:path_of, "file:///C:/a/b.egg")
+  report(drive == (Gem.win_platform? ? "C:/a/b.egg" : "/C:/a/b.egg"), "lsp: a drive letter only on Windows", drive.inspect)
+  report(first[1].nil? && File.realpath(first[0]["hello"].to_s) == File.realpath(File.join(root, "hello", "src")) && second[1].to_s.include?("no directory"), "lsp: a path package's manifest is watched", [first, second].inspect)
 end
 
 # A diagnostic on a character literal underlines all of it: '\xff' is six
@@ -1819,6 +1863,7 @@ Dir.mktmpdir do |dir|
   check_clutch(dir)
 
   puts "lsp"
+  check_lsp_packages(dir)
   check_lsp
   check_lsp_generics
   check_lsp_v1
