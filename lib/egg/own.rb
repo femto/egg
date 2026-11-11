@@ -632,7 +632,9 @@ module Egg
           else
             why = case kind
                   when :bparam then "'#{text}', which is only borrowed here; to take its payload, declare parameter '#{root(path)}' as sink"
-                  when :borrowed then "'#{text}', which only borrows an element of '#{@borrowed[root(path)].is_a?(Array) ? root(path) : @borrowed[root(path)]}'"
+                  when :borrowed
+                    c = @borrowed[root(path)]
+                    c.is_a?(Array) ? "'#{text}', which #{c[1].delete_prefix("it ")}" : "'#{text}', which only borrows an element of '#{c}'"
                   else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
                   end
             pre = lambda do

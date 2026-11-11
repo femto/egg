@@ -2514,8 +2514,8 @@ buffers and a buffer of buffers are owned too: they move like a buffer,
 and `a.free(v)` frees everything they hold, the elements of an array or
 buffer in order and a struct's fields last declared first (they may
 depend on earlier ones). A `!T` or `?T` of one
-must be unwrapped right away (`try`, `catch`, `orelse`); one cannot be a
-pointer's target (E133). Borrowing from a temporary, as in
+must be unwrapped right away (`try`, `catch`, `orelse`), so it cannot be a
+field or a union member; an owned value cannot be a pointer's target (E133). Borrowing from a temporary, as in
 `@len(make(a))` or `make_list(a).len`, is E133 too: nothing could free it.
 
 The fields of a struct variable are followed one by one. Moving `v.data`

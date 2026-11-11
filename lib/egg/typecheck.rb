@@ -1235,11 +1235,12 @@ module Egg
     # copy their fill value, which is safe only for these.
     def empty_value?(e)
       return true unless owned?(e.ty)
+      # A union member without a payload owns nothing, whatever the
+      # others may hold.
+      return true if (e.is_a?(Field) || e.is_a?(EnumLit)) && e.info&.[](:union_tag).is_a?(Integer)
       return false unless any_resource(e.ty).nil?
       case e
       in Field[info: { buf_empty: true }] | EnumLit[info: { buf_empty: true }] then true
-      # A union member without a payload owns nothing.
-      in Field[info: { union_tag: Integer }] | EnumLit[info: { union_tag: Integer }] then true
       in StructLit[fields:] then fields.all? { |f| empty_value?(f[1]) }
       in ArrayLit[items:] then items.all? { |i| empty_value?(i) }
       in Builtin[name: "splat", args:] then empty_value?(args[0])

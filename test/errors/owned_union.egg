@@ -9,6 +9,16 @@ const File = owned struct {
 
 const Handle = union(enum) { file: File, none }
 
+const Conn = owned struct {
+    id: i64
+
+    fn deinit(sink self: Conn) void {
+        @forget(self)
+    }
+}
+
+const Slot = union(enum) { conn: Conn, free }
+
 fn make(a: Allocator) Msg {
     return Msg{ .text = a.concat("a", "b") }
 }
@@ -21,8 +31,10 @@ fn main(a: Allocator) void {
     a.free(hs)
     const ms = a.alloc(2, make(a))
     a.free(ms)
+    const ss = a.alloc(2, Slot.free)     // owns nothing: fine
+    a.free(ss)
 }
 
-// error: E133 @17
-// error: E141 @20
-// error: E140 @22
+// error: E133 @27
+// error: E141 @30
+// error: E140 @32
