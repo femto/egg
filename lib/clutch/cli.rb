@@ -34,6 +34,7 @@ module Clutch
                               itself too)
       lock                    resolve and write clutch.lock
       update [NAME...]        choose versions afresh, ignoring clutch.lock
+      version, --version      print clutch's version
       publish [--repo URL] [--dry-run]
                               add this commit as a release to the index: a
                               pull request through gh (pushed, clean, and
@@ -67,6 +68,10 @@ module Clutch
       when "lock" then @argv.empty? ? cmd_lock([]) : usage
       when "update" then cmd_lock(@argv.empty? ? true : @argv)
       when "publish" then cmd_publish
+      when "version", "--version"
+        return usage unless @argv.empty?
+        @out.puts "clutch #{Egg.version_text}"
+        0
       when "help", "-h", "--help"
         @out.print USAGE
         0
@@ -445,8 +450,11 @@ module Clutch
       a.match?(%r{\A[A-Za-z0-9_@%+=:,./-]+\z}) ? a : "'#{a.gsub("'", "'\\\\''")}'"
     end
 
+    # CLUTCH_EGGC; a native clutch's eggc is the one installed beside it.
     def eggc
       return Shellwords.split(ENV["CLUTCH_EGGC"]) unless ENV["CLUTCH_EGGC"].to_s.empty?
+      native = Egg.sibling("eggc")
+      return [native] unless native.nil?
       [RbConfig.ruby, File.expand_path("../../bin/eggc", __dir__)]
     end
 

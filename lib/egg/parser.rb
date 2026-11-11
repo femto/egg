@@ -9,9 +9,8 @@
 
 module Egg
   class Parser
-    MAX_I64 = 9_223_372_036_854_775_807
-    # The largest literal (u64); the checker checks it against its type.
-    MAX_U64 = 18_446_744_073_709_551_615
+    # The largest literal is a u64's (Egg::U64_MAX_TEXT); the checker
+    # checks it against its type.
 
     def initialize(tokens)
       @tokens = tokens
@@ -832,11 +831,11 @@ module Egg
       t = cur
       if at?(:int)
         advance
-        # Range-check the digits before to_i: under Spinel, to_i raises on overflow.
-        unless fits?(t.text, MAX_U64)
+        # Range-check the digits as text: integers are 64 bits under Spinel.
+        unless Egg.digits_le?(t.text, U64_MAX_TEXT)
           raise CompileError.new(Diagnostic.new("E003", "integer literal #{t.text} does not fit in any integer type (the largest is u64)", t.line, t.col))
         end
-        IntLit.new(t.text.to_i, t.line, t.col)
+        IntLit.new(Egg.int_value(t.text), t.line, t.col)
       elsif at?(:float)
         advance
         FloatLit.new(t.text, t.line, t.col)
@@ -1036,13 +1035,7 @@ module Egg
     end
 
     def fits_i64?(digits)
-      fits?(digits, MAX_I64)
-    end
-
-    def fits?(digits, max_value)
-      d = digits.sub(/\A0+/, "")
-      max = max_value.to_s
-      d.length < max.length || (d.length == max.length && d <= max)
+      Egg.digits_le?(digits, I64_MAX_TEXT)
     end
 
     def error_here(msg)

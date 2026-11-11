@@ -8,6 +8,7 @@
 #   eggc spec                       print the whole language spec (core, grammar,
 #                                   diagnostics) for loading into an AI's context
 #   eggc lsp                        language server on stdin/stdout, for editors
+#   eggc --version                  print eggc's version
 #
 #   --json   print diagnostics as JSON lines (for tools and AI agents)
 #   --release  build/run: let the C compiler optimize (-O2). Without it they
@@ -31,15 +32,20 @@ end
 require "tmpdir"
 require_relative "../lib/egg"
 
-USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [--release] [-g] [-l LIB] [-L DIR] [--pkg NAME=DIR] [-- ARGS]\n       eggc (spec|lsp)"
+USAGE = "usage: eggc (check|emit-c|build|run) FILE.egg [-o OUT] [--json] [--release] [-g] [-l LIB] [-L DIR] [--pkg NAME=DIR] [-- ARGS]\n       eggc (spec|lsp|--version)"
 
 def fail_usage
   warn USAGE
   exit 2
 end
 
+if ARGV == ["--version"] || ARGV == ["version"]
+  puts "eggc #{Egg.version_text}"
+  exit 0
+end
+
 if ARGV == ["spec"]
-  spec_dir = File.expand_path("../spec", __dir__)
+  spec_dir = Egg.home_dir("spec", File.expand_path("../spec", __dir__))
   %w[core.md grammar.ebnf diagnostics.md].each_with_index do |f, i|
     puts unless i.zero?
     puts "===== spec/#{f} ====="

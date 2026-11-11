@@ -112,7 +112,7 @@ module Egg
         what = hex ? "a hex literal needs hex digits after 0x, as in 0xff" : "a binary literal needs 0s and 1s after 0b, as in 0b1010"
         raise CompileError.new(Diagnostic.new("E001", "#{what}, found '#{text}'", line, col))
       end
-      @tokens << Token.new(:int, digits.to_i(hex ? 16 : 2).to_s, line, col, @pos - start)
+      @tokens << Token.new(:int, Egg.decimal_digits(digits, hex ? 16 : 2), line, col, @pos - start)
     end
 
     def lex_digits

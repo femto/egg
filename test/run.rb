@@ -1543,6 +1543,15 @@ def check_packages(dir)
   end
 end
 
+# eggc and clutch say their version, which is one.
+def check_versions
+  e, = Open3.capture2(*eggc_command, "--version")
+  c, = Open3.capture2(RbConfig.ruby, File.join(ROOT, "bin", "clutch"), "--version")
+  want = /\A\d+\.\d+\.\d+(-dev(\+\h+)?)?\z/
+  ok = e.start_with?("eggc ") && c.start_with?("clutch ") && e.split[1] == c.split[1] && e.split[1].match?(want)
+  report(ok, "eggc --version and clutch --version", "#{e}#{c}")
+end
+
 # clutch in dir/clutch, with its own cache and index there.
 def check_clutch(dir)
   have_git = begin
@@ -1860,6 +1869,7 @@ Dir.mktmpdir do |dir|
 
   puts "packages"
   check_packages(dir)
+  check_versions
   check_clutch(dir)
 
   puts "lsp"

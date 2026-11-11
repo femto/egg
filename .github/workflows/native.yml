@@ -1,0 +1,112 @@
+name: Native
+
+# eggc and clutch compiled to native binaries by Spinel, on each platform a
+# release ships for: tools/dist.rb builds them with the standard library
+# beside them, and tools/native_check.rb checks that the native eggc says
+# exactly what eggc on Ruby says. The release workflow runs this with
+# `release: true` and publishes the archives.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+    inputs:
+      release:
+        description: Keep the archives for a release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # The Spinel that builds the release; bump it on purpose.
+  SPINEL_REPO: matz/spinel
+  SPINEL_SHA: 18b153ebf3cabd4ee10b9e3ef2ad7dbaf07a75cb
+
+jobs:
+  unix:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, platform: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { os: macos-latest, platform: macos-arm64 }
+          - { os: macos-15-intel, platform: macos-x86_64 }
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        with:
+          ruby-version: "3.3"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.SPINEL_REPO }}
+          ref: ${{ env.SPINEL_SHA }}
+          path: spinel
+          persist-credentials: false
+      - name: Build Spinel
+        working-directory: spinel
+        run: make deps && make -j4
+      - name: Build eggc and clutch
+        run: ruby tools/dist.rb --spinel spinel/bin/spinel --platform ${{ matrix.platform }}
+      - name: The native eggc says what eggc on Ruby says
+        run: ruby tools/native_check.rb dist/egg-*-${{ matrix.platform }}/bin/eggc
+      - name: The tests, with the native eggc and clutch on the command line
+        run: |
+          dir=$(echo dist/egg-*-${{ matrix.platform }})
+          EGGC="$PWD/$dir/bin/eggc" ruby test/run.rb
+      - if: inputs.release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: egg-${{ matrix.platform }}
+          path: dist/egg-*-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: windows-x86_64
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - run: git config --global core.autocrlf false
+        shell: bash
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.SPINEL_REPO }}
+          ref: ${{ env.SPINEL_SHA }}
+          path: spinel
+          persist-credentials: false
+      # Spinel's native Windows build (its docs/windows.md): MSYS2's UCRT64
+      # gcc, and Ruby for its generators and for eggc on Ruby.
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: false
+          path-type: inherit
+          install: make diffutils curl tar git zip mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-ruby
+      - name: Build Spinel
+        working-directory: spinel
+        run: make deps && make -j4 bin/spinel lib/libspinel_rt.a lib/libspinel_rt_mt.a
+      - name: Build eggc and clutch
+        run: ruby tools/dist.rb --spinel spinel/bin/spinel --platform windows-x86_64
+      - name: The native eggc says what eggc on Ruby says
+        run: ruby tools/native_check.rb dist/egg-*-windows-x86_64/bin/eggc.exe
+      - if: inputs.release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: egg-windows-x86_64
+          path: dist/egg-*-windows-x86_64.zip
+          if-no-files-found: error

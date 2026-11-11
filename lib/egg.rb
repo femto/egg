@@ -1,3 +1,6 @@
+require_relative "egg/ints"
+require_relative "egg/home"
+require_relative "egg/version"
 require_relative "egg/diagnostic"
 require_relative "egg/lexer"
 require_relative "egg/ast"
@@ -9,8 +12,6 @@ require_relative "egg/own"
 require_relative "egg/codegen_c"
 
 module Egg
-  VERSION = "0.0.2"
-
   # Result of compiling one source file to C.
   # Exactly one of c_source / diagnostics is meaningful. links: the C
   # libraries the program's files name with `link`, each once, to pass

@@ -3286,10 +3286,11 @@ module Egg
       unless @int_helpers.key?(name)
         helper("egg_panic")
         bits = to == "usize" ? 64 : to[1..].to_i
-        # The open range of x around the type: (lo - 1, hi + 1). For 64
+        # The open range of x around the type: (lo - 1, hi + 1), as text:
+        # 2**64 is no Integer where the compiler runs (ints.rb). For 64
         # bits lo - 1 is no double, but nothing lies between it and lo.
-        lo, hi = to.start_with?("i") ? [-(2**(bits - 1)), 2**(bits - 1)] : [0, 2**bits]
-        test = bits == 64 && to.start_with?("i") ? "x >= #{lo}.0" : "x > #{lo - 1}.0"
+        lo, hi = to.start_with?("i") ? SIGNED_SPAN[bits] : ["-1", UNSIGNED_TOP[bits]]
+        test = to.start_with?("i") && bits == 64 ? "x >= #{lo}.0" : "x > #{lo}.0"
         @int_helpers[name] = "static #{ct} #{name}(double x) {\n" \
                              "    if (!(#{test} && x < #{hi}.0)) egg_panic(\"float cast out of range\");\n" \
                              "    return (#{ct})x;\n}\n"
@@ -3297,20 +3298,29 @@ module Egg
       "#{name}((double)#{code})"
     end
 
+    # [-2**(bits - 1) - 1, 2**(bits - 1)] (for 64 bits the low end is
+    # -2**63 itself, which x may equal) and 2**bits, as text.
+    SIGNED_SPAN = {
+      8 => %w[-129 128], 16 => %w[-32769 32768], 32 => %w[-2147483649 2147483648],
+      64 => %w[-9223372036854775808 9223372036854775808]
+    }.freeze
+    UNSIGNED_TOP = { 8 => "256", 16 => "65536", 32 => "4294967296", 64 => "18446744073709551616" }.freeze
+
     # A float literal (its text as written) of type t.
     def float_lit(text, t)
       t == "f32" ? "#{text}f" : text
     end
 
     # An integer literal of type t (which may be a float type: 2 as an f64).
+    # value: an Integer, or the digits of a u64 above i64 (ints.rb).
     def int_lit(value, t)
       return float_lit("#{value}.0", t) if FLOAT_C.key?(t)
-      return(value == -9_223_372_036_854_775_808 ? "INT64_MIN" : "INT64_C(#{value})") if t == "i64" || t.nil?
+      return(value == I64_MIN ? "INT64_MIN" : "INT64_C(#{value})") if t == "i64" || t.nil?
       ct, min, = INT_C[t]
       return "UINT64_C(#{value})" if t == "u64"
       # usize is as wide as a pointer: above 32 bits, check it fits size_t
       # (a no-op on 64-bit targets, a panic instead of truncation on others).
-      return as_conv("u64", "usize", "UINT64_C(#{value})") if t == "usize" && value > 4_294_967_295
+      return as_conv("u64", "usize", "UINT64_C(#{value})") if t == "usize" && (value.is_a?(String) || value > 4_294_967_295)
       # The minimum (-128) is not writable as a C literal of its type.
       return "((#{ct})#{min})" if value == TypeChecker::INT_RANGE[t][0] && value.negative?
       "((#{ct})#{value})"
@@ -4037,7 +4047,7 @@ module Egg
         var_ref(name)
       in Unary[op:, operand:, info: { neg_lit: true }]
         # As a float, -0 keeps its sign: negate the literal, do not fold it.
-        FLOAT_C.key?(e.ty) ? "(-#{int_lit(operand.value, e.ty)})" : int_lit(-operand.value, e.ty)
+        FLOAT_C.key?(e.ty) ? "(-#{int_lit(operand.value, e.ty)})" : int_lit(Egg.neg_int(operand.value), e.ty)
       in Unary[op: "~", operand:]
         "((#{INT_C[e.ty][0]})~#{expr(operand)})"
       in Unary[op:, operand:]
