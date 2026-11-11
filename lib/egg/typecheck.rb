@@ -512,12 +512,15 @@ module Egg
       if int_const?(v)
         n = eval_int(v)
         return "error" if n.nil?
-        if n.is_a?(String) && n.start_with?("-")
-          err("E003", "integer literal #{n} does not fit in any integer type", v.line, v.col)
-          return "error"
-        end
-        # -n of i64's minimum is no Integer: its digits (ints.rb).
-        lit = n.is_a?(Integer) && n < 0 ? Unary.new("-", IntLit.new(n == I64_MIN ? I64_MIN_DIGITS : -n, c.line, c.col), c.line, c.col) : IntLit.new(n, c.line, c.col)
+        # A negative value is -literal: -n of i64's minimum, or of a u64
+        # above it (which only a float constant can be), is digits (ints.rb).
+        lit = if n.is_a?(String) && n.start_with?("-")
+                Unary.new("-", IntLit.new(n[1..], c.line, c.col), c.line, c.col)
+              elsif n.is_a?(Integer) && n < 0
+                Unary.new("-", IntLit.new(n == I64_MIN ? I64_MIN_DIGITS : -n, c.line, c.col), c.line, c.col)
+              else
+                IntLit.new(n, c.line, c.col)
+              end
         lit.info = {}
         c.lit = lit
         t = check_expr(lit, declared || "i64")
@@ -620,7 +623,8 @@ module Egg
       when "-" then (y < 0 && x > I64_MAX + y) || (y > 0 && x < I64_MIN + y) ? nil : x - y
       when "*" then mul_fits?(x, y) ? x * y : nil
       when "/", "%"
-        return nil if x == I64_MIN && y == -1
+        # i64's minimum / -1 overflows; its remainder is 0, as egg_mod says.
+        return(op == "/" ? nil : 0) if x == I64_MIN && y == -1
         q = x / y
         q += 1 if x % y != 0 && (x < 0) != (y < 0)
         op == "/" ? q : x - y * q
@@ -632,11 +636,23 @@ module Egg
       end
     end
 
+    # Does x * y fit an i64? Checked by division, as C's CERT rule does,
+    # so that nothing passes 64 bits (i64's minimum itself is a product).
     def mul_fits?(x, y)
-      return true if x.zero? || y.zero?
-      return x == 1 || y == 1 if x == I64_MIN || y == I64_MIN
-      limit = I64_MAX / y.abs
-      x.abs <= limit
+      if x > 0
+        y > 0 ? x <= tdiv(I64_MAX, y) : y >= tdiv(I64_MIN, x)
+      elsif y > 0
+        x >= tdiv(I64_MIN, y)
+      else
+        x.zero? || y >= tdiv(I64_MAX, x)
+      end
+    end
+
+    # a / b truncated toward zero (b is not 0, and not -1 with i64's minimum).
+    def tdiv(a, b)
+      q = a / b
+      q += 1 if a % b != 0 && (a < 0) != (b < 0)
+      q
     end
 
     def in_module(prefix)

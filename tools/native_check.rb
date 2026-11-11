@@ -24,9 +24,10 @@ Dir.mktmpdir do |dir|
     cmds = [["emit-c", f]]
     cmds << ["check", "--json", f] if f.include?("test/errors")
     cmds.each do |args|
-      r = Open3.capture3(RbConfig.ruby, File.join(ROOT, "bin", "eggc"), *args, chdir: ROOT)
       # The same std for both: diagnostics in it name its files.
-      n = Open3.capture3({ "EGG_STD" => File.join(ROOT, "lib", "std") }, native, *args, chdir: ROOT)
+      env = { "EGG_STD" => File.join(ROOT, "lib", "std") }
+      r = Open3.capture3(env, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), *args, chdir: ROOT)
+      n = Open3.capture3(env, native, *args, chdir: ROOT)
       next if r[0] == n[0] && r[1] == n[1] && r[2].exitstatus == n[2].exitstatus
       differ << "#{args.join(' ')}: exit #{r[2].exitstatus} on Ruby, #{n[2].exitstatus} native\n  ruby:   #{(r[1] + r[0])[0, 300].inspect}\n  native: #{(n[1] + n[0])[0, 300].inspect}"
     end

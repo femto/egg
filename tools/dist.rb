@@ -44,13 +44,16 @@ end
 spinel = "spinel"
 plat = platform
 args = ARGV.dup
+usage = "usage: ruby tools/dist.rb [--spinel PATH] [--platform NAME]"
 until args.empty?
   case args.shift
-  when "--spinel" then spinel = args.shift
-  when "--platform" then plat = args.shift
-  else abort "usage: ruby tools/dist.rb [--spinel PATH] [--platform NAME]"
+  when "--spinel" then spinel = args.shift || abort(usage)
+  when "--platform" then plat = args.shift || abort(usage)
+  else abort usage
   end
 end
+# It names a directory under dist/, which is emptied first.
+abort "dist: a platform is OS-CPU, such as linux-x86_64, not #{plat.inspect}" unless plat.match?(/\A[a-z0-9_]+-[a-z0-9_]+\z/)
 
 windows = plat.start_with?("windows")
 exe = windows ? ".exe" : ""
