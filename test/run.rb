@@ -232,6 +232,21 @@ def check_lsp_packages(dir)
   File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")).sub("../hello", "../nowhere"))
   diags = session.(open.(uri.("app", "src", "main.egg"), main))
   report(diags[0]&.any? { |d| d["code"] == "clutch" && d["message"].include?("no directory") }, "lsp: clutch's error is a diagnostic", diags[0].inspect)
+  diags = session.(open.(uri.("app", "src", "main.egg"), main.sub("fn main", "fn main(")))
+  report(diags[0]&.any? { |d| d["code"] == "clutch" }, "lsp: clutch's error is kept with a syntax error", diags[0].inspect)
+  # The answer is kept until a manifest it depends on changes, a path
+  # package's too.
+  require_relative "../lib/egg/lsp"
+  File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")).sub("../nowhere", "../hello"))
+  packages = Egg::LSP::Packages.new
+  main_file = File.join(root, "app", "src", "main.egg")
+  first = packages.for(main_file)
+  hello_toml = File.join(root, "hello", "clutch.toml")
+  File.write(hello_toml, File.read(hello_toml) + "nope = { path = \"../nope\" }\n")
+  later = Time.now + 5
+  File.utime(later, later, hello_toml)
+  second = packages.for(main_file)
+  report(first[1].nil? && File.realpath(first[0]["hello"].to_s) == File.realpath(File.join(root, "hello", "src")) && second[1].to_s.include?("no directory"), "lsp: a path package's manifest is watched", [first, second].inspect)
 end
 
 # A diagnostic on a character literal underlines all of it: '\xff' is six

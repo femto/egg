@@ -57,6 +57,7 @@ module Egg
         @parsed = true
       rescue CompileError => e
         @diagnostics = [e.diagnostic]
+        @diagnostics.unshift(Diagnostic.new("clutch", pkg_error, 1, 1)) if pkg_error
         @parsed = false
       end
 
@@ -483,7 +484,8 @@ module Egg
 
     # JSON-RPC over stdio, one file at a time (v0 programs are one file).
     # The packages of each clutch package, from `clutch flags`, kept until
-    # its clutch.toml or clutch.lock changes.
+    # its clutch.toml or clutch.lock, or the clutch.toml of one of the
+    # packages it got, changes.
     class Packages
       def initialize
         @cache = {}   # [package dir, test?] -> [stamp, pkgs, error]
@@ -496,18 +498,25 @@ module Egg
         return [{}, nil] if dir.nil?
         rel = File.expand_path(path).delete_prefix(dir + File::SEPARATOR)
         test = rel.start_with?("test/", "test#{File::SEPARATOR}")
-        stamp = %w[clutch.toml clutch.lock].map { |f| File.mtime(File.join(dir, f)) rescue nil }
         key = [dir, test]
         hit = @cache[key]
-        return hit[1, 2] if hit && hit[0] == stamp
+        return hit[1, 2] if hit && hit[0] == stamp(dir, hit[1])
         pkgs, error = ask(dir, test)
-        # clutch may have written the lock just now.
-        stamp = %w[clutch.toml clutch.lock].map { |f| File.mtime(File.join(dir, f)) rescue nil }
-        @cache[key] = [stamp, pkgs, error]
+        # After asking: clutch may have written the lock just now.
+        @cache[key] = [stamp(dir, pkgs), pkgs, error]
         [pkgs, error]
       end
 
       private
+
+      # The times of the files the answer for dir depends on: its manifest
+      # and lock, and each package's manifest (beside its src/; a path
+      # package's may change, and its own dependencies with it).
+      def stamp(dir, pkgs)
+        files = [File.join(dir, "clutch.toml"), File.join(dir, "clutch.lock")]
+        files += pkgs.values.map { |src| File.join(File.dirname(src), "clutch.toml") }
+        files.map { |f| File.mtime(f) rescue nil }
+      end
 
       def package_dir(d)
         loop do
@@ -532,8 +541,8 @@ module Egg
           pkgs[name] = d
         end
         [pkgs, nil]
-      rescue SystemCallError => e
-        [{}, "cannot run clutch (#{clutch.join(" ")}): #{e.message}"]
+      rescue SystemCallError, ArgumentError => e
+        [{}, "cannot run clutch (#{ENV["EGG_CLUTCH"].to_s.empty? ? "bin/clutch" : ENV["EGG_CLUTCH"]}): #{e.message} (so packages are unknown here)"]
       end
 
       # EGG_CLUTCH, or bin/clutch beside this eggc.

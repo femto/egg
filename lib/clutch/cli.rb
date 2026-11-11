@@ -29,8 +29,9 @@ module Clutch
                               when it exits 0 and prints test/NAME.expected
                               (if there is one)
       flags [--test]          the eggc flags for the dependencies (--pkg NAME=DIR);
-                              with --test, those a test is built with (the
-                              dev-dependencies and the package itself too)
+                              with --test, the flags clutch test builds
+                              with (the dev-dependencies and the package
+                              itself too)
       lock                    resolve and write clutch.lock
       update [NAME...]        choose versions afresh, ignoring clutch.lock
       publish [--repo URL] [--dry-run]

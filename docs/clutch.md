@@ -160,8 +160,10 @@ clutch publish [--repo URL] [--dry-run]   # this commit as a release (a pull req
 `eggc lsp` checks a file in a package (a `clutch.toml` in its directory or
 above) with that package's packages: it runs `clutch flags` there, or
 `clutch flags --test` for a file under `test/`, and keeps the answer until
-`clutch.toml` or `clutch.lock` changes. When clutch fails, its message is a
-diagnostic at the top of the file. `EGG_CLUTCH` names the clutch to run
+`clutch.toml` or `clutch.lock`, or the `clutch.toml` of one of those
+packages, changes. When clutch fails, its message is a diagnostic at the
+top of the file, and the file is checked without packages (so its package
+imports are unknown modules too). `EGG_CLUTCH` names the clutch to run
 (default: `bin/clutch` beside eggc).
 
 ## Not yet
