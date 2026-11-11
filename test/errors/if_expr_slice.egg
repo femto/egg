@@ -1,4 +1,5 @@
-// An if with a value cannot yield a slice, even when both branches are one.
+// An if with a value may yield a slice (viewing what either branch does),
+// but its branches must have one type.
 
 fn both(a: []u8, b: []u8, c: bool) i64 {
     const s = if (c) a else b
@@ -10,9 +11,14 @@ fn mixed(a: []u8, c: bool) i64 {
     return s
 }
 
+fn local(c: bool) []u8 {
+    const xs = [2]u8{ 1, 2 }
+    return if (c) xs[0..] else ""
+}
+
 fn main(io: Io) void {
     io.print(both("ab", "c", true) + mixed("ab", true))
 }
 
-// error: E103 @4
-// error: E103 @9
+// error: E103 @10
+// error: E151 @16

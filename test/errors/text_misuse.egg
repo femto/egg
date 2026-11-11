@@ -35,4 +35,3 @@ fn main(io: Io, a: Allocator) void {
 // error: E110 @24
 // error: E103 @25
 // error: E103 @26
-// error: E133 @27

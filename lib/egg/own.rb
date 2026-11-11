@@ -353,6 +353,7 @@ module Egg
         fb = nil if fb.is_a?(Return) || fb.is_a?(Break) || fb.is_a?(Continue) || fb.is_a?(Block)
         (paths_of(e.expr) + (fb.nil? ? [] : paths_of(fb))).uniq
       in Try[expr:] then paths_of(expr)
+      in IfExpr[then_expr:, else_expr:] then (paths_of(then_expr) + paths_of(else_expr)).uniq
       else []
       end
     end
@@ -560,7 +561,7 @@ module Egg
         fresh = !root.nil? && !@iterated.key?(root)
         @iterated[root] = line if fresh
         # for (trim(s)) |c|: what the result views stays put while it runs.
-        lent = %w[Call MethodCall Orelse Catch Try].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
+        lent = %w[Call MethodCall Orelse Catch Try IfExpr].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
         lent.each { |p| @iterated[p] = line }
         elem = iter.ty == "str" ? nil : @types[iter.ty]&.elem
         # An element that owns buffers is only borrowed by the loop variable.
@@ -983,13 +984,15 @@ module Egg
         merge([start, @st], line, col, "this catch")
       in IfExpr[cond:, then_expr:, else_expr:, line:, col:]
         # Each branch runs only sometimes; they must agree on what moved.
+        # One that yields a slice only borrows what its branches view.
+        lend = borrow || slice_type?(e.ty)
         walk(cond)
         start = @st
         @st = dup(start)
-        walk(then_expr)
+        walk(then_expr, lend)
         taken = @st
         @st = dup(start)
-        walk(else_expr)
+        walk(else_expr, lend)
         merge([taken, @st], line, col, "this if")
       in Orelse[expr: inner, fallback:, line:, col:]
         walk(inner)
