@@ -6,6 +6,7 @@ require_relative "clutch/version"
 require_relative "clutch/project"
 require_relative "clutch/git"
 require_relative "clutch/resolve"
+require_relative "clutch/publish"
 require_relative "clutch/cli"
 
 module Clutch
