@@ -660,10 +660,13 @@ module Egg
         notify("textDocument/publishDiagnostics", { "uri" => uri, "diagnostics" => diags })
       end
 
-      # file:///a/b%20c.egg -> /a/b c.egg; nil for other schemes.
+      # file:///a/b%20c.egg -> /a/b c.egg, file:///C:/a.egg -> C:/a.egg;
+      # nil for other schemes.
       def path_of(uri)
         u = URI.parse(uri)
-        u.scheme == "file" ? URI.decode_www_form_component(u.path.gsub("+", "%2B")) : nil
+        return nil unless u.scheme == "file"
+        path = URI.decode_www_form_component(u.path.gsub("+", "%2B"))
+        path.match?(%r{\A/[A-Za-z]:[/\\]}) ? path[1..] : path
       rescue URI::Error
         nil
       end

@@ -221,7 +221,7 @@ def check_lsp_packages(dir)
   File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")) + "hello = { path = \"../hello\" }\n")
   main = "uses io\n\nconst hello = @import(\"hello\")\n\nfn main(io: Io) void {\n    io.print(hello.hi())\n}\n"
   test = File.read(File.join(root, "hello", "test", "hello.egg")).sub("lib.add(2, 3) != 5", "@len(lib.hi()) != 2")
-  uri = ->(*parts) { "file://#{File.join(root, *parts)}" }
+  uri = ->(*parts) { "file:///#{File.join(root, *parts).tr("\\", "/").delete_prefix("/")}" }
   open = ->(u, text) { { "method" => "textDocument/didOpen", "params" => { "textDocument" => { "uri" => u, "text" => text } } } }
   session = ->(*docs) { lsp_session([{ "id" => 1, "method" => "initialize", "params" => {} }, *docs, { "id" => 2, "method" => "shutdown" }, { "method" => "exit" }])[1] }
   diags = session.(open.(uri.("app", "src", "main.egg"), main), open.(uri.("hello", "test", "hello.egg"), test),
