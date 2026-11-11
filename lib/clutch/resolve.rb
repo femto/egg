@@ -28,14 +28,26 @@ module Clutch
       @unlock = unlock
     end
 
-    # The packages, in the order they were reached (each a Locked with dir)
+    # The packages, in the order they were reached (each a Locked with
+    # dir). The root's dev-dependencies come after everything else, so
+    # they never change what its dependencies resolve to; a package only
+    # they bring in is marked dev. A dependency's own dev-dependencies are
+    # not read.
     def resolve
       chosen = {}
       why = {}
-      queue = @root.deps.map { |d| [d, @root] }
+      walk(@root.deps.map { |d| [d, @root] }, chosen, why, false)
+      walk(@root.dev_deps.map { |d| [d, @root] }, chosen, why, true)
+      chosen.values
+    end
+
+    private
+
+    def walk(queue, chosen, why, dev)
       until queue.empty?
         dep, from = queue.shift
-        req = "#{from == @root ? "#{@root.name} (the root)" : from.name} needs #{dep.name}#{dep.constraint ? " #{dep.constraint}" : ""}"
+        root = dev ? "#{@root.name} (the root, for its tests)" : "#{@root.name} (the root)"
+        req = "#{from == @root ? root : from.name} needs #{dep.name}#{dep.constraint ? " #{dep.constraint}" : ""}"
         if dep.name == @root.name
           raise Error, "#{req}, but that is the root package's own name"
         end
@@ -44,14 +56,12 @@ module Clutch
           next
         end
         pkg, manifest = choose(dep, from, req)
+        pkg.dev = dev
         chosen[dep.name] = pkg
         why[dep.name] = req
         manifest.deps.each { |d| queue << [d, manifest] }
       end
-      chosen.values
     end
-
-    private
 
     def choose(dep, from, req)
       case dep.kind
