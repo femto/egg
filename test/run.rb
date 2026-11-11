@@ -36,6 +36,7 @@ require "rbconfig"
 require "open3"
 require "shellwords"
 require "socket"
+require "stringio"
 require "timeout"
 require "tmpdir"
 require_relative "../lib/egg"
@@ -246,6 +247,8 @@ def check_lsp_packages(dir)
   later = Time.now + 5
   File.utime(later, later, hello_toml)
   second = packages.for(main_file)
+  drive = Egg::LSP::Server.new(StringIO.new, StringIO.new).send(:path_of, "file:///C:/a/b.egg")
+  report(drive == (Gem.win_platform? ? "C:/a/b.egg" : "/C:/a/b.egg"), "lsp: a drive letter only on Windows", drive.inspect)
   report(first[1].nil? && File.realpath(first[0]["hello"].to_s) == File.realpath(File.join(root, "hello", "src")) && second[1].to_s.include?("no directory"), "lsp: a path package's manifest is watched", [first, second].inspect)
 end
 
