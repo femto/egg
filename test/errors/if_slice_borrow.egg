@@ -1,6 +1,10 @@
 // An if that yields a slice borrows what both branches view.
 uses alloc, io
 
+fn id(s: []u8) []u8 {
+    return s
+}
+
 fn main(io: Io, a: Allocator) void {
     const b = a.concat("ab", "cd")
     var d = a.concat("ef", "gh")
@@ -8,8 +12,12 @@ fn main(io: Io, a: Allocator) void {
     a.free(b)
     d[0] = 120
     io.print(s)
+    for (if (@len(d) > 1) id(d[0..]) else "") |ch| {
+        a.push(&d, ch)
+    }
     a.free(d)
 }
 
-// error: E149 @8
-// error: E149 @9
+// error: E149 @12
+// error: E149 @13
+// error: E137 @16

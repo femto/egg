@@ -960,7 +960,8 @@ implicitly a slice: pass `a[0..]` (E103).
 
 `const s = x[lo..hi]` names a part of a variable, or of a part of one (E116
 for a temporary, or a view through a pointer); `const t = s` names a
-slice again, and `const t = if (c) x[1..] else y[1..]` either part. It is read-only, and it borrows `x` until its last use: while
+slice again, and `const t = if (c) x[1..] else y[1..]` either part. It is read-only, and it borrows `x` (each variable it may view: both
+`x` and `y` for that if) until its last use: while
 `s` is used later, on a path that can really get there, `x` cannot be moved,
 assigned, resized, passed as `inout` or have its elements written (E149).
 Reading `x` is always fine, and after the last use of `s` all of it is

@@ -561,7 +561,7 @@ module Egg
         fresh = !root.nil? && !@iterated.key?(root)
         @iterated[root] = line if fresh
         # for (trim(s)) |c|: what the result views stays put while it runs.
-        lent = %w[Call MethodCall Orelse Catch Try].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
+        lent = %w[Call MethodCall Orelse Catch Try IfExpr].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
         lent.each { |p| @iterated[p] = line }
         elem = iter.ty == "str" ? nil : @types[iter.ty]&.elem
         # An element that owns buffers is only borrowed by the loop variable.

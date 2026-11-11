@@ -3010,11 +3010,13 @@ module Egg
 
     def check_slice_arg(a, _expected)
       a.info = {}
+      saved = @slice_ok
       @slice_ok = true
       begin
         a.ty = infer(a, nil)
       ensure
-        @slice_ok = false
+        # A branch of an if that yields a slice is still one afterwards.
+        @slice_ok = saved
       end
     end
 
