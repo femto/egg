@@ -1363,7 +1363,7 @@ def check_lsp_pointers
 
     fn main(io: Io) void {
         var x = 1
-        const p = &x
+        const p: *i64 = &x
         defer io.print(p.* + 1)
         io.print(p == null)
         x = 2

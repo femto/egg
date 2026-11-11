@@ -8,7 +8,7 @@ uses io, alloc
 fn main(io: Io, a: Allocator) void {
     const p = a.create(5)
     io.print(p.*)
-    const q = &p
+    const q: **i64 = &p
     io.print(p == null)
     io.print(@intFromPtr(p))
 }

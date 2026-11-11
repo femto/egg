@@ -394,6 +394,7 @@ module Egg
     def reads?(node, name)
       case node
       when Var then node.name == name
+      when Assign then node.name == name || reads?(node.target, name) || reads?(node.value, name)
       when Array then node.any? { |n| reads?(n, name) }
       when Struct then node.each_pair.any? { |k, v| !%i[info ty].include?(k) && reads?(v, name) }
       else false
@@ -438,10 +439,10 @@ module Egg
     def check_slices(path, line, col, what, by = nil)
       return if path.nil?
       through = views_of(by)
-      @slices.each do |name, (viewed, depth)|
+      @slices.each do |name, (viewed, depth, _, _, kind)|
         next if through.include?(name)
         next unless viewed.any? { |v| overlap?(v, path) } && live?(name, depth)
-        slice_err("'#{path}' cannot be #{what} here: the slice '#{name}' of it is used later", line, col)
+        slice_err("'#{path}' cannot be #{what} here: the #{kind == :borrow ? "borrow" : "slice"} '#{name}' of it is used later", line, col)
       end
     end
 
@@ -457,10 +458,10 @@ module Egg
       path = place_path(e)
       return if path.nil?
       through = views_of(place_root(e))
-      @slices.each do |name, (viewed, depth, writable)|
+      @slices.each do |name, (viewed, depth, writable, _, kind)|
         next if !writable || through.include?(name)
         next unless viewed.any? { |v| overlap?(v, path) } && live?(name, depth)
-        slice_err("'#{path}' cannot be read here: the writable slice '#{name}' of it is used later", e.line, e.col)
+        slice_err("'#{path}' cannot be read here: the writable #{kind == :borrow ? "borrow" : "slice"} '#{name}' of it is used later", e.line, e.col)
       end
     end
 
@@ -480,6 +481,26 @@ module Egg
 
     def walk_stmt(stmt)
       case stmt
+      in VarDecl[name:, value: AddrOf[expr: place, info: { borrow: Symbol => kind }], line:, col:, ty:]
+        # const r = &p / inout r = &p: r stands for p until its last use.
+        writable = kind == :mut
+        if writable
+          check_slices(place_path(place), line, col, "borrowed as writable", place_root(place))
+          walk_place(place)
+        else
+          walk(place, true)
+        end
+        if owned?(ty)
+          text = place_text(place)
+          how = writable ? "; to take its value out, swap one in with @replace(&#{name}, v)" : ""
+          @borrowed[name] = [:borrow, "it borrows '#{text}'#{how}"]
+          declare(name, :borrowed, line, col, ty)
+        end
+        path = place_path(place)
+        unless path.nil?
+          @slices[name] = [[path], @rest.length - 1, writable, place_root(place), :borrow]
+          @frames.last.slices << name
+        end
       in VarDecl[name:, value:, line:, col:, ty:, inout:]
         check_slices(place_path(value), line, col, "lent as a writable slice", place_root(value)) if inout
         @read_whole = value.obj if inout # judged just above
@@ -1082,6 +1103,11 @@ module Egg
       end
       if @decl[root(path)][0] == :bparam
         borrowed_param_error(path, "forgotten", line, col)
+        return
+      end
+      if @decl[root(path)][0] == :borrowed
+        c = @borrowed[root(path)]
+        err("E139", c.is_a?(Array) ? "'#{path}' cannot be forgotten: #{c[1]}" : "'#{path}' only borrows an element of '#{c}' for one iteration; it cannot be forgotten", line, col)
         return
       end
       check_iterated(path, line, col, "forgotten")
