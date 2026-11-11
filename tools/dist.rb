@@ -68,7 +68,7 @@ FileUtils.mkdir_p(File.join(out, "lib"))
 end
 FileUtils.cp_r(File.join(ROOT, "lib", "std"), File.join(out, "lib", "std"))
 FileUtils.cp_r(File.join(ROOT, "spec"), File.join(out, "spec"))
-FileUtils.cp(File.join(ROOT, "README.md"), out)
+%w[README.md LICENSE].each { |f| FileUtils.cp(File.join(ROOT, f), out) }
 
 # What it says about itself must be the release's version.
 %w[eggc clutch].each do |tool|

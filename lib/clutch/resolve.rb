@@ -14,9 +14,21 @@
 # reading the index or fetching. Path packages are read where they are,
 # never pinned.
 
-require "pathname"
 
 module Clutch
+  # path relative to base (both directories), or path itself when no
+  # relative one leads there (another drive on Windows). Not Pathname, which
+  # Spinel cannot compile for Windows.
+  def self.relative_path(path, base)
+    a = File.expand_path(path).split(%r{[/\\]+})
+    b = File.expand_path(base).split(%r{[/\\]+})
+    return path unless a[0].to_s.casecmp?(b[0].to_s) # the drive or ""
+    same = 0
+    same += 1 while same < a.length && same < b.length && a[same] == b[same]
+    parts = [".."] * (b.length - same) + a[same..]
+    parts.empty? ? "." : parts.join("/")
+  end
+
   class Resolver
     # lock: name -> Locked from clutch.lock; unlock: names to choose
     # afresh (all of them when true)
@@ -162,9 +174,7 @@ module Clutch
     # A path package's directory as the lock records it: relative to the
     # root package when it can be.
     def relative(dir)
-      Pathname.new(dir).relative_path_from(Pathname.new(@root.dir)).to_s
-    rescue ArgumentError
-      dir
+      Clutch.relative_path(dir, @root.dir)
     end
   end
 end

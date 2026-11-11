@@ -548,18 +548,20 @@ module Egg
       # keeping ".0" on whole numbers, positional from 1e-4 to below 1e16
       # and in exponent form outside, as Python prints floats. No math.h:
       # it would claim names (sqrt, sin) an extern fn may want.
+      # buf holds 64 bytes: more than any of these needs, so that gcc's
+      # -Wformat-truncation can see it (-Werror).
       "egg_fmt_float" => <<~C,
         static void egg_fmt_float(char *buf, double x, bool f32) {
             if (x != x) { strcpy(buf, "nan"); return; }
             if (x - x != x - x) { strcpy(buf, x > 0 ? "inf" : "-inf"); return; }
             int p = 1;
             for (; p < (f32 ? 9 : 17); p++) {
-                snprintf(buf, 40, "%.*e", p - 1, x);
+                snprintf(buf, 64, "%.*e", p - 1, x);
                 if (f32 ? strtof(buf, NULL) == (float)x : strtod(buf, NULL) == x) break;
             }
-            snprintf(buf, 40, "%.*e", p - 1, x);
+            snprintf(buf, 64, "%.*e", p - 1, x);
             int exp = atoi(strchr(buf, 'e') + 1);
-            if (exp >= -4 && exp < 16) snprintf(buf, 40, "%.*f", p - 1 - exp < 1 ? 1 : p - 1 - exp, x);
+            if (exp >= -4 && exp < 16) snprintf(buf, 64, "%.*f", p - 1 - exp < 1 ? 1 : p - 1 - exp, x);
             /* printf wrote the locale's decimal point: if C code set one
                that is not '.', it becomes a '.' again. */
             if (strchr(buf, '.') != NULL) return;
@@ -580,7 +582,7 @@ module Egg
       C
       "egg_print_float" => <<~C,
         static void egg_print_float(FILE *f, double x, bool f32, bool nl) {
-            char buf[40];
+            char buf[64];
             egg_fmt_float(buf, x, f32);
             fputs(buf, f);
             if (nl) fputc('\\n', f);
@@ -2932,7 +2934,7 @@ module Egg
       C
       "egg_append_float" => <<~C
         static void egg_append_float(uint8_t **ptr, int64_t *len, int64_t *cap, double x, bool f32) {
-            char buf[40];
+            char buf[64];
             egg_fmt_float(buf, x, f32);
             egg_append(ptr, len, cap, (const uint8_t *)buf, (int64_t)strlen(buf));
         }

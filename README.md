@@ -549,3 +549,7 @@ extension): open a `.egg` file, click the gutter to set a breakpoint, pick
 Limits: variables show under their C names (`v_n` for `n`), and stepping
 into a checked operation lands in a C runtime helper (`egg_add` and so on);
 use step over.
+
+## License
+
+MIT; see [LICENSE](LICENSE).
