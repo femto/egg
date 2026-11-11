@@ -6,10 +6,24 @@ name: Native
 # exactly what eggc on Ruby says. The release workflow runs this with
 # `release: true` and publishes the archives.
 
+# It takes a while (Windows compiles eggc for ~17 minutes), so it does not
+# run on every change to the compiler: on a release (workflow_call), by
+# hand, once a week on main (so that something Spinel cannot compile shows
+# up well before a release), and on pull requests that change how the
+# binaries are built, found or installed.
 on:
-  push:
-    branches: [main]
   pull_request:
+    paths:
+      - "tools/dist.rb"
+      - "tools/native_check.rb"
+      - "lib/egg/home.rb"
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/native.yml"
+      - ".github/workflows/release.yml"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
   workflow_call:
     inputs:
       release:
@@ -63,6 +77,13 @@ jobs:
         run: |
           dir=$(echo dist/egg-*-${{ matrix.platform }})
           EGGC="$PWD/$dir/bin/eggc" CLUTCH="$PWD/$dir/bin/clutch" ruby test/run.rb
+      - name: install.sh installs it, and it runs from there
+        run: |
+          cd dist && shasum -a 256 egg-*.tar.gz > SHA256SUMS && cd ..
+          version=$(ruby -e 'require "./lib/egg/home"; require "./lib/egg/version"; print Egg::VERSION')
+          EGG_VERSION=$version EGG_HOME="$RUNNER_TEMP/egg" EGG_DOWNLOAD_BASE="file://$PWD/dist" sh install.sh
+          export PATH="$RUNNER_TEMP/egg/bin:$PATH"
+          cd "$RUNNER_TEMP" && clutch new --lib smoke && cd smoke && clutch test
       - if: inputs.release
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -93,6 +114,7 @@ jobs:
       # Spinel's native Windows build (its docs/windows.md): MSYS2's UCRT64
       # gcc, and Ruby for its generators and for eggc on Ruby.
       - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        id: msys2
         with:
           msystem: UCRT64
           update: false
@@ -111,6 +133,25 @@ jobs:
         run: ruby tools/dist.rb --spinel spinel/bin/spinel --platform windows-x86_64
       - name: The native eggc says what eggc on Ruby says
         run: ruby tools/native_check.rb dist/egg-*-windows-x86_64/bin/eggc.exe
+      - name: Sums for the install test
+        run: cd dist && sha256sum egg-*.zip > SHA256SUMS
+      - name: install.ps1 installs it, and it runs from there
+        shell: pwsh
+        env:
+          CC: gcc
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $version = (Get-Content lib/egg/version.rb | Select-String 'VERSION = "(.*)"').Matches[0].Groups[1].Value
+          $env:EGG_VERSION = $version
+          $env:EGG_HOME = Join-Path $env:RUNNER_TEMP "egg"
+          $env:EGG_DOWNLOAD_BASE = ([Uri](Resolve-Path dist).Path).AbsoluteUri
+          ./install.ps1
+          $env:Path = (Join-Path $env:EGG_HOME "bin") + ";" + (Join-Path $env:MSYS2_LOCATION "ucrt64\bin") + ";" + $env:Path
+          Set-Location $env:RUNNER_TEMP
+          clutch new --lib smoke
+          Set-Location smoke
+          clutch test
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - if: inputs.release
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

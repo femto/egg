@@ -14,9 +14,36 @@
 # reading the index or fetching. Path packages are read where they are,
 # never pinned.
 
-require "pathname"
 
 module Clutch
+  # path relative to base (both directories), or path itself when no
+  # relative one leads there (another drive or share on Windows). Not
+  # Pathname, which Spinel cannot compile for Windows.
+  def self.relative_path(path, base)
+    win = Gem.win_platform?
+    a = File.expand_path(path)
+    b = File.expand_path(base)
+    ra = path_root(a, win)
+    rb = path_root(b, win)
+    return path unless win ? ra.casecmp?(rb) : ra == rb
+    # A backslash is a separator only on Windows; elsewhere it may be in a name.
+    sep = win ? %r{[/\\]+} : %r{/+}
+    pa = a[ra.length..].split(sep).reject(&:empty?)
+    pb = b[rb.length..].split(sep).reject(&:empty?)
+    same = 0
+    same += 1 while same < pa.length && same < pb.length && pa[same] == pb[same]
+    parts = [".."] * (pb.length - same) + pa[same..]
+    parts.empty? ? "." : parts.join("/")
+  end
+
+  # The volume an absolute path starts with: "C:" or "//server/share" on
+  # Windows, nothing elsewhere.
+  def self.path_root(path, win)
+    return "" unless win
+    m = path.match(%r{\A[/\\]{2}[^/\\]+[/\\]+[^/\\]+}) || path.match(/\A[A-Za-z]:/)
+    m.nil? ? "" : m[0]
+  end
+
   class Resolver
     # lock: name -> Locked from clutch.lock; unlock: names to choose
     # afresh (all of them when true)
@@ -162,9 +189,7 @@ module Clutch
     # A path package's directory as the lock records it: relative to the
     # root package when it can be.
     def relative(dir)
-      Pathname.new(dir).relative_path_from(Pathname.new(@root.dir)).to_s
-    rescue ArgumentError
-      dir
+      Clutch.relative_path(dir, @root.dir)
     end
   end
 end

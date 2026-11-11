@@ -70,9 +70,30 @@ speed, smaller versions of these programs and the CPU cost per request of
 the HTTP servers on every pull request
 ([bench/codspeed/](bench/codspeed/README.md)).
 
+## Install
+
+eggc and clutch come as native binaries for Linux (x86_64, arm64), macOS
+(arm64, x86_64) and Windows (x86_64). eggc compiles through C, so you also need a C
+compiler (cc; on Windows gcc, with `$env:CC = "gcc"` in PowerShell).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/femto/egg/main/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/femto/egg/main/install.ps1 | iex
+```
+
+They install the latest release in `~/.egg` (`EGG_HOME`; `EGG_VERSION=0.1.0`
+for another release) and check it against the release's SHA-256 sums. Then
+put the installation's `bin` (`$EGG_HOME/bin`, by default `~/.egg/bin`) on
+your PATH as install.sh says (install.ps1 adds it to your
+user PATH, so open a new terminal), and run `eggc --version`. Or download an archive from
+[Releases](https://github.com/femto/egg/releases) yourself.
+
 ## Quick start
 
-You need Ruby 3.0+ and a C compiler.
+From a clone instead, eggc runs on Ruby 3.0+ (and a C compiler):
 
 ```bash
 git clone https://github.com/femto/egg
@@ -80,7 +101,8 @@ cd egg
 bin/eggc run examples/complex/word_freq.egg
 ```
 
-Save this as `hello.egg` and run `bin/eggc run hello.egg`:
+Save this as `hello.egg` and run `eggc run hello.egg` (`bin/eggc` in a
+clone):
 
 ```zig
 uses alloc, io
@@ -211,10 +233,11 @@ bin/clutch new chat && cd chat       # a program: clutch.toml and src/main.egg
 
 Spinel compiles `eggc` and `clutch` to native binaries, which need no Ruby
 (eggc still needs a C compiler, and clutch Git for git and index
-dependencies). They say exactly what they say on Ruby: CI checks the C eggc
-emits for every example, error test, std module and spec example, and its
-diagnostics for every error test (`tools/native_check.rb`), on Linux, macOS
-and Windows. `tools/dist.rb` builds both, with the standard library beside
+dependencies). They say exactly what they say on Ruby: the Native workflow
+checks the C eggc emits for every example, error test, std module and spec
+example, and its diagnostics for every error test (`tools/native_check.rb`),
+on Linux, macOS and Windows, for each release, weekly on main, and by hand
+(Actions → Native → Run workflow) after a change Spinel might not compile. `tools/dist.rb` builds both, with the standard library beside
 them:
 
 ```bash
@@ -225,6 +248,12 @@ ruby tools/native_check.rb dist/egg-*/bin/eggc   # bin/eggc.exe on Windows
 A native eggc finds the standard library in its install (`PREFIX/bin/eggc`
 with `PREFIX/lib/std`), and a native clutch runs the eggc beside it.
 `eggc --version` and `clutch --version` say the one version they share.
+
+**Releasing.** Set `VERSION` in `lib/egg/version.rb`, merge it, then push
+the tag `v` + that version (`git tag v0.1.0 && git push origin v0.1.0`). The
+Release workflow refuses a tag that is not the version, builds and checks
+the binaries on every platform (the Native workflow), and publishes them
+with `SHA256SUMS`, `install.sh` and `install.ps1` as a GitHub release.
 
 The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
@@ -549,3 +578,7 @@ extension): open a `.egg` file, click the gutter to set a breakpoint, pick
 Limits: variables show under their C names (`v_n` for `n`), and stepping
 into a checked operation lands in a C runtime helper (`egg_add` and so on);
 use step over.
+
+## License
+
+MIT; see [LICENSE](LICENSE).
