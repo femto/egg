@@ -294,8 +294,9 @@ compiling: a number, `bool`, text or enum literal, another constant, or
 integer arithmetic on those (`+ - * / % << >> & | ^`, `-`, `~`), which the
 compiler does on `i64` values, with C's division (E150 for anything else,
 such as a call, and for a zero divisor of `/` or `%`, shifting by less than
-0 or more than 63, or a result or step outside `i64`; a `u64` above `i64`
-is written as one literal, `const MAX: u64 = 18446744073709551615`). A
+0 or more than 63, or a result or step outside `i64`; a `u64` or `usize`
+above `i64` is written as one literal, `const MAX: u64 =
+18446744073709551615`, which a float constant may also negate). A
 type may follow the name, `const OK: i32 = 0`: a number type, `bool`, `str`
 or an enum (E150 for any other); without one an integer is an
 `i64` and a float an `f64`, as for a local `const`, and an enum literal

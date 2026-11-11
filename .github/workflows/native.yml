@@ -59,10 +59,10 @@ jobs:
         run: ruby tools/dist.rb --spinel spinel/bin/spinel --platform ${{ matrix.platform }}
       - name: The native eggc says what eggc on Ruby says
         run: ruby tools/native_check.rb dist/egg-*-${{ matrix.platform }}/bin/eggc
-      - name: The tests, with the native eggc and clutch on the command line
+      - name: The tests, with the native eggc and clutch as the commands
         run: |
           dir=$(echo dist/egg-*-${{ matrix.platform }})
-          EGGC="$PWD/$dir/bin/eggc" ruby test/run.rb
+          EGGC="$PWD/$dir/bin/eggc" CLUTCH="$PWD/$dir/bin/clutch" ruby test/run.rb
       - name: install.sh installs it, and it runs from there
         run: |
           cd dist && shasum -a 256 egg-*.tar.gz > SHA256SUMS && cd ..

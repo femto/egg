@@ -17,7 +17,7 @@ module Egg
       ENV["PATH"].to_s.split(File::PATH_SEPARATOR).each do |d|
         [p, "#{p}.exe"].each do |name|
           f = File.join(d, name)
-          return File.realpath(f) if File.file?(f)
+          return File.realpath(f) if File.file?(f) && File.executable?(f)
         end
       end
     end
@@ -46,7 +46,7 @@ module Egg
     dir = File.dirname(exe_path)
     [name, "#{name}.exe"].each do |n|
       f = File.join(dir, n)
-      return f if File.file?(f)
+      return f if File.file?(f) && File.executable?(f)
     end
     nil
   end

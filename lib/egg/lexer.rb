@@ -112,6 +112,12 @@ module Egg
         what = hex ? "a hex literal needs hex digits after 0x, as in 0xff" : "a binary literal needs 0s and 1s after 0b, as in 0b1010"
         raise CompileError.new(Diagnostic.new("E001", "#{what}, found '#{text}'", line, col))
       end
+      # More significant digits than a u64 has cannot fit: say so before
+      # converting (which takes time in the number of digits).
+      if digits.sub(/\A0+/, "").length > (hex ? 16 : 64)
+        shown = text.length > 40 ? "#{text[0, 24]}... (#{text.length} characters)" : text
+        raise CompileError.new(Diagnostic.new("E003", "integer literal #{shown} does not fit in any integer type (the largest is u64)", line, col))
+      end
       @tokens << Token.new(:int, Egg.decimal_digits(digits, hex ? 16 : 2), line, col, @pos - start)
     end
 
