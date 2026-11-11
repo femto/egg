@@ -451,21 +451,30 @@ The branches have one type: the type the context expects, or else the
 first branch's; a literal (`5`, `.red`) takes the other branch's type, so
 `if (c) 1 else x` is x's type (E103 when they differ). `null` still needs
 a `?T` or pointer from the context: `const m: ?i64 = if (c) x else null`. The
-result must be a value: not `void`, a type or a slice (E103).
+result must be a value, not `void` or a type (E103).
+
+An if may yield a **slice** when its branches are slices or text
+(`if (c) b[1..] else ""`): it views what either branch does, so it goes
+where a slice may (a local `const`, an argument, a `for`, a function's
+result) and borrows both branches' variables like a slice of each (E149,
+E151).
 
 An owned value moves out of the branch that makes or names it, and the
 branches must agree on what they move (E134), as the branches of an if
 statement do: `if (c) b else d` moves only one of two buffers, so it is
 E134; use an if statement that also frees the other one. An if
-with a value cannot be borrowed from (`n(if (c) b else d)` with a plain
-parameter, `for (if (c) b else d)`: E133), since it would hide which
-variable is held.
+with an owned value cannot be borrowed from (`n(if (c) b else d)` with a
+plain `Buf` parameter, `for (if (c) b else d)`: E133), since it would hide
+which variable is held; slice the branches instead (`if (c) b[0..] else
+d[0..]`), which borrows both.
 
 ```egg
 // expect: -1
 // expect: green
 // expect: 99
-uses io
+// expect: ello
+// expect: 2
+uses alloc, io
 
 const Color = enum { red, green }
 
@@ -473,12 +482,23 @@ fn name(c: Color) str {
     return if (c == .red) "red" else "green"
 }
 
-fn main(io: Io) void {
+// A slice result: what either branch views.
+fn rest(s: []u8, n: i64) []u8 {
+    return if (n < @len(s)) s[n..] else ""
+}
+
+fn main(io: Io, a: Allocator) void {
     const x: i64 = -3
     io.print(if (x < 0) -1 else 1)
     io.print(name(if (x > 0) .red else .green))
     const m: ?i64 = if (x > 0) x else null
     io.print(m orelse 99)
+    const b = a.concat("hel", "lo")
+    defer a.free(b)
+    io.print(rest(b, 1))
+    const xs = [3]i64{ 1, 2, 3 }
+    const tail = if (x < 0) xs[1..] else xs[0..]
+    io.print(@len(tail))
 }
 ```
 
@@ -939,8 +959,8 @@ array it looks into, without lifetime annotations. An array is not
 implicitly a slice: pass `a[0..]` (E103).
 
 `const s = x[lo..hi]` names a part of a variable, or of a part of one (E116
-for a temporary, a view through a pointer, or a slice chosen by an `if`); `const t = s` names a
-slice again. It is read-only, and it borrows `x` until its last use: while
+for a temporary, or a view through a pointer); `const t = s` names a
+slice again, and `const t = if (c) x[1..] else y[1..]` either part. It is read-only, and it borrows `x` until its last use: while
 `s` is used later, on a path that can really get there, `x` cannot be moved,
 assigned, resized, passed as `inout` or have its elements written (E149).
 Reading `x` is always fine, and after the last use of `s` all of it is

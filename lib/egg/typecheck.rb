@@ -88,7 +88,6 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    IF_SLICE_HINT = "slices exist only as parameters and local slices; use an if statement, or call a function in each branch".freeze
     PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Poller Waker Addr Threads Thread Clock Random]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args", "Clock" => "time", "Random" => "rand" }.freeze
     CAPABILITIES = %w[alloc args fs io net rand thread time].freeze
@@ -2151,30 +2150,26 @@ module Egg
         inner
       in IfExpr[cond:, then_expr:, else_expr:, line:, col:]
         expect_type("bool", check_expr(cond), cond)
-        # An if with a value is never a slice, so a []u8 context does not
-        # turn its branches into one: the argument check then sees what
-        # they are (a str fits; a Buf(u8) cannot be lent from here, E133).
-        expected = nil if expected&.start_with?("[]")
+        # A branch may be a slice (x[lo..hi]): the if then yields one, which
+        # views what either branch does, and goes where slices may.
+        slice_ok = @slice_ok
+        @slice_ok = true
         # Both branches have the type the context expects, or else the
         # first one's; a literal (5, .red, null) takes the other's.
         first, second = expected.nil? && untyped_lit?(then_expr) && !untyped_lit?(else_expr) ? [else_expr, then_expr] : [then_expr, else_expr]
         t1 = check_expr(first, expected)
         want = expected || t1
         t2 = check_expr(second, want)
+        @slice_ok = slice_ok
         if expected.nil? && !fits?(want, t2)
           found = first.equal?(then_expr) ? "#{t1} and #{t2}" : "#{t2} and #{t1}"
-          hint = [t1, t2].any? { |x| x.start_with?("[]") } ? IF_SLICE_HINT : "give the result a type (const x: ?i64 = ...) if one fits it"
-          err("E103", "the branches of an if with a value must have one type, found #{found}; #{hint}", line, col)
+          err("E103", "the branches of an if with a value must have one type, found #{found}; give the result a type (const x: ?i64 = ...) if one fits it", line, col)
           return "error"
         end
         expect_type(want, t1, first)
         expect_type(want, t2, second)
         t = want == "error" ? t2 : want
-        if !slice_in(t).nil?
-          err("E103", "an if with a value cannot yield a slice (#{t}); #{IF_SLICE_HINT}", line, col)
-          return "error"
-        end
-        unless t == "error" || (storable?(t) && t != "module")
+        unless t == "error" || (storable?(t) && t != "module") || !slice_in(t).nil?
           err("E103", "an if with a value needs values, found #{t}; for actions use an if statement", line, col)
           return "error"
         end
@@ -3179,6 +3174,11 @@ module Egg
         b = view_sources(fb, ret)
         b.is_a?(String) ? b : a | b
       in Try[expr:] then view_sources(expr, ret)
+      in IfExpr[then_expr:, else_expr:]
+        a = view_sources(then_expr, ret)
+        return a if a.is_a?(String)
+        b = view_sources(else_expr, ret)
+        b.is_a?(String) ? b : a | b
       else "it is a temporary"
       end
     end

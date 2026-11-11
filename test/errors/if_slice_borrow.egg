@@ -1,0 +1,15 @@
+// An if that yields a slice borrows what both branches view.
+uses alloc, io
+
+fn main(io: Io, a: Allocator) void {
+    const b = a.concat("ab", "cd")
+    var d = a.concat("ef", "gh")
+    const s = if (@len(b) > 1) b[1..] else d[0..]
+    a.free(b)
+    d[0] = 120
+    io.print(s)
+    a.free(d)
+}
+
+// error: E149 @8
+// error: E149 @9

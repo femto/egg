@@ -353,6 +353,7 @@ module Egg
         fb = nil if fb.is_a?(Return) || fb.is_a?(Break) || fb.is_a?(Continue) || fb.is_a?(Block)
         (paths_of(e.expr) + (fb.nil? ? [] : paths_of(fb))).uniq
       in Try[expr:] then paths_of(expr)
+      in IfExpr[then_expr:, else_expr:] then (paths_of(then_expr) + paths_of(else_expr)).uniq
       else []
       end
     end
@@ -983,13 +984,15 @@ module Egg
         merge([start, @st], line, col, "this catch")
       in IfExpr[cond:, then_expr:, else_expr:, line:, col:]
         # Each branch runs only sometimes; they must agree on what moved.
+        # One that yields a slice only borrows what its branches view.
+        lend = borrow || slice_type?(e.ty)
         walk(cond)
         start = @st
         @st = dup(start)
-        walk(then_expr)
+        walk(then_expr, lend)
         taken = @st
         @st = dup(start)
-        walk(else_expr)
+        walk(else_expr, lend)
         merge([taken, @st], line, col, "this if")
       in Orelse[expr: inner, fallback:, line:, col:]
         walk(inner)

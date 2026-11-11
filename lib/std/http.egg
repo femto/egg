@@ -1224,13 +1224,6 @@ fn resolve(a: Allocator, base: []u8, location: []u8) ?Buf(u8) {
     return a.concat(base[0..dir], location)
 }
 
-fn choose(first: bool, x: []u8, y: []u8) []u8 {
-    if (first) {
-        return x
-    }
-    return y
-}
-
 fn is_redirect(status: i64) bool {
     return status == 301 or status == 302 or status == 303 or status == 307 or status == 308
 }
@@ -1256,8 +1249,8 @@ fn fetch(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: [
     var get = false
     var hops = 0
     while (true) {
-        const own = choose(same_origin(url, current), headers, "")
-        const resp = try fetch_once(net, a, choose(get, "GET", method), current, own, choose(get, "", body), opts)
+        const own = if (same_origin(url, current)) headers else ""
+        const resp = try fetch_once(net, a, if (get) "GET" else method, current, own, if (get) "" else body, opts)
         if (hops >= opts.redirects or !is_redirect(resp.status)) {
             return resp
         }
