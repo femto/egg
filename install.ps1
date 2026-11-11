@@ -55,20 +55,23 @@ try {
   $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
   if ($got -ne $want) { throw "egg: $name.zip does not match its SHA-256 sum; not installed" }
 
-  # Unpacked and run where it was downloaded first, so that a release that
-  # does not run here leaves what is installed alone.
-  Expand-Archive $zip -DestinationPath $tmp
-  $ev = & (Join-Path $tmp "$name\bin\eggc.exe") --version
+  # Unpacked and run in a directory of its own beside the installed ones
+  # first (the same drive, so putting it in place is a rename), so that a
+  # release that does not run here leaves what is installed alone.
+  New-Item -ItemType Directory -Force -Path (Join-Path $home_ "bin") | Out-Null
+  $stage = Join-Path $home_ ".install-$([Guid]::NewGuid())"
+  Expand-Archive $zip -DestinationPath $stage
+  $ev = & (Join-Path $stage "$name\bin\eggc.exe") --version
   if ($LASTEXITCODE -ne 0) { throw "egg: $name's eggc does not run here; nothing was changed" }
-  $cv = & (Join-Path $tmp "$name\bin\clutch.exe") --version
+  $cv = & (Join-Path $stage "$name\bin\clutch.exe") --version
   if ($LASTEXITCODE -ne 0) { throw "egg: $name's clutch does not run here; nothing was changed" }
 
-  New-Item -ItemType Directory -Force -Path (Join-Path $home_ "bin") | Out-Null
   $dest = Join-Path $home_ $name
   if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-  Move-Item (Join-Path $tmp $name) $dest
+  Move-Item (Join-Path $stage $name) $dest
 } finally {
   Remove-Item -Recurse -Force $tmp
+  if ($stage -and (Test-Path $stage)) { Remove-Item -Recurse -Force $stage }
 }
 
 foreach ($tool in "eggc", "clutch") {

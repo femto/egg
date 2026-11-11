@@ -66,14 +66,17 @@ else
 fi
 [ "$got" = "$want" ] || die "$name.tar.gz does not match its SHA-256 sum; not installed"
 
-# Unpacked and run where it was downloaded first, so that a release that
-# does not run here leaves what is installed alone.
-tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
-eggc_version=$("$tmp/$name/bin/eggc" --version) || die "$name's eggc does not run here; nothing was changed"
-clutch_version=$("$tmp/$name/bin/clutch" --version) || die "$name's clutch does not run here; nothing was changed"
+# Unpacked and run in a directory of its own beside the installed ones
+# first (the same file system, so putting it in place is a rename), so that
+# a release that does not run here leaves what is installed alone.
 mkdir -p "$home/bin"
+stage=$(mktemp -d "$home/.install-XXXXXX")
+trap 'rm -rf "$tmp" "$stage"' EXIT INT TERM
+tar -xzf "$tmp/$name.tar.gz" -C "$stage"
+eggc_version=$("$stage/$name/bin/eggc" --version) || die "$name's eggc does not run here; nothing was changed"
+clutch_version=$("$stage/$name/bin/clutch" --version) || die "$name's clutch does not run here; nothing was changed"
 rm -rf "${home:?}/$name"
-mv "$tmp/$name" "$home/$name"
+mv "$stage/$name" "$home/$name"
 for tool in eggc clutch; do
   ln -sf "../$name/bin/$tool" "$home/bin/$tool"
 done
