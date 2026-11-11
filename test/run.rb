@@ -185,13 +185,19 @@ end
 # bin/eggc as a command. EGGC names a native build; a script runs through
 # Ruby, since Windows has no #! lines.
 def eggc_command
-  ENV["EGGC"] ? [ENV["EGGC"]] : [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
+  ENV["EGGC"] ? [env_command(ENV["EGGC"])] : [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
+end
+
+# A command given as a path is taken from the repository's root (the tests
+# run it in other directories); a bare name is looked up on PATH.
+def env_command(cmd)
+  cmd.include?("/") || cmd.include?("\\") ? File.expand_path(cmd, ROOT) : cmd
 end
 
 # bin/clutch as a command; CLUTCH names a native build, which runs the
 # eggc installed beside it.
 def clutch_command
-  ENV["CLUTCH"] ? [ENV["CLUTCH"]] : [RbConfig.ruby, File.join(ROOT, "bin", "clutch")]
+  ENV["CLUTCH"] ? [env_command(ENV["CLUTCH"])] : [RbConfig.ruby, File.join(ROOT, "bin", "clutch")]
 end
 
 # Run one LSP session against bin/eggc lsp; returns responses by id and
