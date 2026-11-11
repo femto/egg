@@ -253,7 +253,11 @@ module Clutch
       end
       args += ["--"] + program_args unless program_args.empty?
       return (system(*eggc, *args) ? 0 : $?.exitstatus || 1) if shown_as.nil?
-      out, err, st = Open3.capture3(*eggc, *args)
+      out, err, st = begin
+        Open3.capture3(*eggc, *args)
+      rescue SystemCallError => e
+        raise Error, "cannot run eggc (#{eggc.join(" ")}): #{e.message}"
+      end
       copies = [File.realpath(dir), dir].uniq
       shown = ->(t) { copies.reduce(t) { |acc, c| acc.gsub(c, shown_as) } }
       @out.print shown.(out)

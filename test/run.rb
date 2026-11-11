@@ -1645,6 +1645,8 @@ def check_clutch_publish(root, clutch, git, edit)
   _, err, st = clutch.("pub", "publish")
   report(!st.success? && err.include?("does not pass clutch check") && !File.read(index_file).include?("0.4.0"), "clutch publish runs clutch check first", err)
   report(err.include?(File.join(pub, "src", "pub.egg")) && !err.include?("clutch-publish-") && !err.include?("wrote clutch.lock"), "clutch publish's check names the package's own files", err)
+  _, err, st = clutch.("pub", "publish", "--dry-run", extra: { "CLUTCH_EGGC" => File.join(root, "no-eggc") })
+  report(st.exitstatus == 1 && err.include?("clutch: cannot run eggc"), "clutch publish without an eggc to run", err)
   out, _, st = git.("pub", "status", "--porcelain", "--ignored")
   report(st.success? && out.empty?, "clutch publish writes nothing into the package", out)
   # A file the repository does not have (ignored here) is not checked.
