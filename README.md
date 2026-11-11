@@ -70,9 +70,28 @@ speed, smaller versions of these programs and the CPU cost per request of
 the HTTP servers on every pull request
 ([bench/codspeed/](bench/codspeed/README.md)).
 
+## Install
+
+eggc and clutch, as native binaries for Linux (x86_64, arm64), macOS (arm64,
+x86_64) and Windows (x86_64). eggc compiles through C, so you also need a C
+compiler (cc; on Windows gcc, with `CC=gcc`).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/femto/egg/main/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/femto/egg/main/install.ps1 | iex
+```
+
+They install the latest release in `~/.egg` (`EGG_HOME`; `EGG_VERSION=0.1.0`
+for another release) and check it against the release's SHA-256 sums. Then
+`eggc --version`. Or download an archive from
+[Releases](https://github.com/femto/egg/releases) yourself.
+
 ## Quick start
 
-You need Ruby 3.0+ and a C compiler.
+From a clone instead, eggc runs on Ruby 3.0+ (and a C compiler):
 
 ```bash
 git clone https://github.com/femto/egg
@@ -80,7 +99,8 @@ cd egg
 bin/eggc run examples/complex/word_freq.egg
 ```
 
-Save this as `hello.egg` and run `bin/eggc run hello.egg`:
+Save this as `hello.egg` and run `eggc run hello.egg` (`bin/eggc` in a
+clone):
 
 ```zig
 uses alloc, io
@@ -223,6 +243,12 @@ ruby tools/native_check.rb dist/egg-*/bin/eggc
 A native eggc finds the standard library in its install (`PREFIX/bin/eggc`
 with `PREFIX/lib/std`), and a native clutch runs the eggc beside it.
 `eggc --version` and `clutch --version` say the one version they share.
+
+**Releasing.** Set `VERSION` in `lib/egg/version.rb`, merge it, then push
+the tag `v` + that version (`git tag v0.1.0 && git push origin v0.1.0`). The
+Release workflow refuses a tag that is not the version, builds and checks
+the binaries on every platform (the Native workflow), and publishes them
+with `SHA256SUMS`, `install.sh` and `install.ps1` as a GitHub release.
 
 The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;

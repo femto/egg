@@ -1,0 +1,65 @@
+name: Release
+
+# Pushing the tag vX.Y.Z releases Egg X.Y.Z: the tag must be the version
+# eggc and clutch say (lib/egg/version.rb). The Native workflow builds and
+# checks the binaries on every platform; then they go up, with their
+# SHA-256 sums, as a GitHub release that install.sh and install.ps1 fetch.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: The tag is the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        with:
+          ruby-version: "3.3"
+      - env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(ruby -e 'require "./lib/egg/home"; require "./lib/egg/version"; print Egg::VERSION')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::the tag is $TAG, but lib/egg/version.rb says $version: tag v$version, or change VERSION first"
+            exit 1
+          fi
+
+  build:
+    needs: version
+    uses: ./.github/workflows/native.yml
+    with:
+      release: true
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: egg-*
+          merge-multiple: true
+      - name: Sums
+        working-directory: dist
+        run: sha256sum egg-* > SHA256SUMS && cat SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/egg-* dist/SHA256SUMS install.sh install.ps1 \
+            --repo "$GITHUB_REPOSITORY" --title "Egg ${TAG#v}" --generate-notes --verify-tag
