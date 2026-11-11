@@ -73,6 +73,17 @@ module Clutch
       dest
     end
 
+    # Whether the repository at url, fetched now, has sha on one of its
+    # branches or tags (a commit only in the cache does not count).
+    def published?(url, sha)
+      raise Error, "publishing reads #{url}, but CLUTCH_OFFLINE is set" if Clutch.offline?
+      db = repo(url)
+      fetch(url)
+      return false unless commit?(db, sha)
+      out, _, st = Open3.capture3("git", "--git-dir", db, "for-each-ref", "--contains", sha, "refs/heads", "refs/tags")
+      st.success? && !out.strip.empty?
+    end
+
     # The text of path at the default branch's newest commit, or nil.
     def read(url, path)
       db = repo(url)
@@ -167,17 +178,11 @@ module Clutch
       File.directory?(@where)
     end
 
-    # A directory or a file:// URL: an index for testing.
-    def local?
-      local_dir? || @where.start_with?("file://")
-    end
-
     def to_s
       @where
     end
 
-    private
-
+    # name's Entry from the text of its file.
     def parse(name, text, file)
       doc = Toml.parse(text, file)
       raise Error, "#{file}: name is #{doc["name"].inspect}, not #{name.inspect}" unless doc["name"] == name

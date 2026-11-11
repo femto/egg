@@ -3,6 +3,7 @@
 
 require "rbconfig"
 require "shellwords"
+require "tmpdir"
 
 module Clutch
   USAGE = <<~TEXT
@@ -203,7 +204,8 @@ module Clutch
       0
     end
 
-    def cmd_eggc(command)
+    # dir: the package (the one holding the current directory by default)
+    def cmd_eggc(command, dir = nil)
       program_args = []
       if (i = @argv.index("--"))
         return usage unless command == "run"
@@ -223,7 +225,7 @@ module Clutch
           return usage
         end
       end
-      dir = project_dir
+      dir ||= project_dir
       m = Manifest.load(dir)
       pkgs = resolve(dir, manifest: m)
       flags = pkg_flags(pkgs)
@@ -261,10 +263,14 @@ module Clutch
       return usage unless @argv.empty?
       pub = Publish.new(project_dir, repo: repo).prepare
       text = pub.index_text
-      # The gate: the release as committed (the tree is clean) checks.
-      unless cmd_eggc("check").zero?
-        raise Error, "#{pub.name} #{pub.version} does not pass clutch check; nothing was published"
+      # The gate: the release as its users get it checks. In a copy, so
+      # neither the cache nor the package's own directory is written.
+      ok = Dir.mktmpdir("clutch-publish-") do |tmp|
+        copy = File.join(tmp, pub.name)
+        FileUtils.cp_r(pub.release_dir, copy)
+        cmd_eggc("check", copy).zero?
       end
+      raise Error, "#{pub.name} #{pub.version} does not pass clutch check; nothing was published" unless ok
       if dry
         @out.print text
         @err.puts "clutch: --dry-run: #{pub.name} #{pub.version} (#{pub.sha[0, 12]}) is ready; the index's packages/#{pub.name}.toml would be the text above"

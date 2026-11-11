@@ -79,20 +79,23 @@ index as the version its `clutch.toml` gives:
 
 - The package is a library (`src/NAME.egg`) at the root of a git work tree
   with nothing uncommitted, and its repository (`origin`, or `--repo URL`)
-  already has the commit: clutch fetches it from there and checks the
-  release as its users will get it. A path or `file://` repository is
+  has the commit on a branch or tag: clutch fetches it from there and
+  checks the release as its users will get it, whose `clutch.toml` must
+  give the same name and version. A path or `file://` repository is
   refused (only a test index, a directory, takes one), and so is a path
   dependency, which users could not fetch.
-- `clutch check` must pass.
 - The version must be new to the index, and the name, if the index has it,
   must belong to the same repository: a name belongs to the package that
   first took it. The release is added in version order.
+- Last, `clutch check` must pass on a copy of the release (not the work
+  tree, which may hold files the repository does not).
 - Then, for an index on GitHub, clutch clones it, commits
   `packages/NAME.toml` on a branch `NAME-VERSION` (in a fork when you
   cannot push to the index), and opens the pull request with `gh`. An
   index that is a directory is written in place.
 
-`--dry-run` does every check and prints the file it would write.
+`--dry-run` does every check and prints the file it would write. Publishing
+writes nothing into the package's directory.
 
 ## The cache
 
@@ -123,7 +126,7 @@ clutch run [--release] [-g] [-- ARGS]
 clutch flags                 # the --pkg flags, for running eggc by hand
 clutch lock                  # resolve and write clutch.lock
 clutch update [NAME...]      # ignore the lock (for those packages)
-clutch publish [--repo URL] [--dry-run]   # this commit as a release, by pull request
+clutch publish [--repo URL] [--dry-run]   # this commit as a release (a pull request to a GitHub index)
 ```
 
 `CLUTCH_EGGC` names the eggc to run (default: `bin/eggc` beside clutch).

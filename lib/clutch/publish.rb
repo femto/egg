@@ -12,7 +12,7 @@ require "tmpdir"
 
 module Clutch
   class Publish
-    attr_reader :name, :version, :repo, :sha
+    attr_reader :name, :version, :repo, :sha, :release_dir
 
     def initialize(dir, repo: nil, git: Git.new, index: nil)
       @dir = dir
@@ -34,15 +34,14 @@ module Clutch
       raise Error, "#{@dir} has uncommitted changes: commit and push them first" unless dirty.empty?
       @sha = local_git("rev-parse", "HEAD", what: "#{@dir} has no commit yet")
       @repo = Publish.normalize(@repo_given || local_git("remote", "get-url", "origin", what: "#{@dir} has no remote origin: add one, or give --repo URL"), @dir)
-      if Publish.local?(@repo) && !@index.local?
+      if Publish.local?(@repo) && !@index.local_dir?
         raise Error, "#{@repo} is not a repository others can fetch (a path or file:// URL); push the package somewhere public and give --repo URL"
       end
-      begin
-        @git.resolve(@repo, @sha)
-      rescue Error => e
-        raise Error, "#{e.message}: push #{@sha[0, 12]} first"
+      unless @git.published?(@repo, @sha)
+        raise Error, "#{@repo} has no branch or tag holding #{@sha[0, 12]}: push it first"
       end
-      pub = Manifest.load(@git.checkout(@repo, @sha, @name))
+      @release_dir = @git.checkout(@repo, @sha, @name)
+      pub = Manifest.load(@release_dir)
       unless pub.name == @name && pub.version == @version
         raise Error, "#{@repo} at #{@sha[0, 12]} holds #{pub.name} #{pub.version}, not #{@name} #{@version}"
       end
@@ -57,7 +56,13 @@ module Clutch
 
     # packages/NAME.toml with this release added, in version order.
     def index_text
-      entry = @index.entry(@name)
+      with_release(@index.text(@name), "#{@index}/packages/#{@name}.toml")
+    end
+
+    # text (the index's file for the package, or nil) with this release
+    # added.
+    def with_release(text, file)
+      entry = text.nil? ? nil : @index.parse(@name, text, file)
       release = "[[release]]\nversion = #{Toml.quote(@version.to_s)}\nref = #{Toml.quote(@sha)}\n"
       if entry.nil?
         return "name = #{Toml.quote(@name)}\nrepo = #{Toml.quote(@repo)}\n\n#{release}"
@@ -68,13 +73,13 @@ module Clutch
       if (same = entry.releases.find { |r| r.version == @version })
         raise Error, "#{@name} #{@version} is already in the index (at #{same.ref[0, 12]}); a release never changes, so publish a new version"
       end
-      text = @index.text(@name)
       text += "\n" unless text.end_with?("\n")
       later = entry.releases.index { |r| r.version > @version }
       return "#{text}\n#{release}" if later.nil?
       # Before the later release's header, keeping the file oldest first.
       lines = text.lines
       at = lines.each_index.select { |i| lines[i].match?(/\A\s*\[\[\s*release\s*\]\]/) }[later]
+      raise Error, "#{file}: the releases are not written as [[release]] tables, so clutch cannot add one" if at.nil?
       lines.insert(at, release, "\n")
       lines.join
     end
@@ -87,7 +92,7 @@ module Clutch
         File.write(file, text)
         return "added #{@name} #{@version} to #{file}"
       end
-      gh = Publish.github(@index.to_s)
+      gh = Publish.github(Publish.normalize(@index.to_s, @dir))
       raise Error, "the index #{@index} is not on GitHub: open a pull request there that makes packages/#{@name}.toml the text above" if gh.nil?
       pull_request(*gh, text)
     end
@@ -132,6 +137,9 @@ module Clutch
         work = File.join(tmp, "index")
         run("git", "clone", "--quiet", "--depth", "1", "https://github.com/#{target}.git", work, what: "could not clone #{target}")
         file = File.join(work, "packages", "#{@name}.toml")
+        # The index as cloned, which may have changed since it was read.
+        now = with_release(File.file?(file) ? File.read(file) : nil, "#{target}/packages/#{@name}.toml")
+        raise Error, "#{target} changed while publishing: run clutch publish again" unless now == text
         FileUtils.mkdir_p(File.dirname(file))
         File.write(file, text)
         run("git", "-C", work, "checkout", "--quiet", "-b", branch)
