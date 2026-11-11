@@ -42,6 +42,9 @@ $name = "egg-$version-windows-x86_64"
 $base = if ($env:EGG_DOWNLOAD_BASE) { $env:EGG_DOWNLOAD_BASE } else { "https://github.com/$repo/releases/download/v$version" }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
+# `irm ... | iex` runs this in the caller's scope, where $stage may already
+# name something: clear it, so that only a stage made here is removed.
+$stage = $null
 try {
   Say "downloading Egg $version for windows-x86_64"
   $zip = Join-Path $tmp "$name.zip"
