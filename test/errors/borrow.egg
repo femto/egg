@@ -1,0 +1,35 @@
+// Local borrows: what the checker refuses.
+uses alloc, io
+
+const Db = struct {
+    name: Buf(u8)
+    hits: i64
+}
+
+fn make(a: Allocator) Db {
+    return Db{ .name = a.concat("x", "y"), .hits = 0 }
+}
+
+fn main(io: Io, a: Allocator) void {
+    const d = make(a)
+    defer a.free(d)
+    const t = &make(a)
+    var v = &d.hits
+    inout w = &d.hits
+    const r = &d
+    r.hits = 1
+    var e = make(a)
+    defer a.free(e)
+    inout u = &e.hits
+    io.print(u, v, w, t.hits)
+    const s = "text"
+    const q = &s
+    io.print(q)
+}
+
+// error: E121 @16
+// error: E121 @17
+// error: E105 @18
+// error: E105 @20
+// error: E111 @23
+// error: E116 @26

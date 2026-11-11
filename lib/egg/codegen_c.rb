@@ -3123,14 +3123,16 @@ module Egg
     private
 
     # Deep free of an owned value: a buffer's elements, then the buffer; a
-    # struct's owned fields, last declared first; an array's elements; an
-    # owned struct, by its deinit. Returns the function.
+    # struct's owned fields, last declared first; an array's elements; a
+    # union's live member; an owned struct, by its deinit. Returns the
+    # function.
     def drop(t)
       return @drops[t] if @drops.key?(t)
       @drops[t] = "egg_drop_#{@types[t].c_name}"
       info = @types[t]
       case info.kind
       when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
+      when :union then info.fields.each { |_, ft, _| drop(ft) if ft != "void" && @checker.owned?(ft) }
       when :struct
         if info.deinit.nil?
           info.fields.each { |_, ft, _| drop(ft) if @checker.owned?(ft) }
@@ -3152,6 +3154,10 @@ module Egg
                  "#{elem}    free(v.ptr);\n"
                when :array
                  "    for (int64_t i = 0; i < #{info.len}; i++) #{drop(info.elem)}(v.a[i]);\n"
+               when :union
+                 # Only the member the tag names is live.
+                 info.fields.each_with_index.select { |(_, ft, _), _| ft != "void" && @checker.owned?(ft) }
+                     .map { |(m, ft, _), i| "    if (v.tag == #{i}) #{drop(ft)}(v.u.m_#{m});\n" }.join
                when :struct
                  if !info.deinit.nil?
                    # Its deinit ends it, fields and all.
@@ -3650,6 +3656,12 @@ module Egg
     def gen_stmt(stmt)
       mark(stmt.line)
       case stmt
+      in VarDecl[name:, value: AddrOf[expr: place, info: { borrow: Symbol => kind }], ty:]
+        # A borrow is a pointer to the place, read through like an inout
+        # parameter; a shared one only reads (and may borrow a const, such
+        # as a switch capture).
+        @locals.last[name] = [ty, true]
+        line("#{c_type(ty)}#{kind == :shared ? " const" : ""} *const v_#{name} = &#{lvalue(place)};")
       in VarDecl[name:, value:, ty:]
         code = coerce(expr(value), value.ty, ty)
         declare_local(name, ty)

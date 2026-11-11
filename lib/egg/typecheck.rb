@@ -35,8 +35,9 @@
 # (E131); unlike capabilities, this is not carried along calls.
 #
 # Buf(T) is an owned heap buffer. A struct or array holding one is owned
-# too. Owned values live in locals, parameters, results, struct fields,
-# arrays and buffers, but not in unions or behind pointers (E133); who
+# too, and so is a union with an owned member. Owned values live in locals,
+# parameters, results, struct fields, union members, arrays and buffers,
+# but not behind pointers (E133); who
 # owns each one at each point is checked afterwards, along every path
 # through each function (own.rb).
 #
@@ -53,7 +54,8 @@
 module Egg
   # sink: a sink parameter; sources: for a local slice (or a loop or if
   # capture), the variables it views, through other slices
-  VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout, :sink, :sources)
+  # borrow: :shared for `const r = &place`, :mut for `inout r = &place`
+  VarInfo = Struct.new(:type, :mutable, :used, :mutated, :line, :col, :param, :inout, :sink, :sources, :borrow)
   # params: [[type, mode]] (comptime parameters removed); ret: type
   # direct: capability -> [line, col, what] for its first direct use
   # calls: [[Sig, line, col]] for every call in the body
@@ -874,9 +876,6 @@ module Egg
         elsif owned_err?(t)
           err("E133", "a #{union ? 'union' : 'struct'} cannot hold a #{t}; unwrap it with #{unwrap_how(t)} and store the #{@types[t].inner}", f.line, f.col)
           t = "error"
-        elsif union && owned?(t)
-          err("E133", "a union cannot hold a #{t}: only one member is live at a time, so its buffers could not be followed; use a struct", f.line, f.col)
-          t = "error"
         end
         fields << [f.name, t, f.line]
       end
@@ -1096,6 +1095,7 @@ module Egg
       when :buf then true
       when :array then owned?(info.elem)
       when :struct then info.resource || (info.fields || []).any? { |_, ft, _| owned?(ft) }
+      when :union then (info.fields || []).any? { |_, ft, _| ft != "void" && owned?(ft) }
       else false
       end
     end
@@ -1113,6 +1113,12 @@ module Egg
       when :array, :buf then resource_in(info.elem, seen)
       when :struct
         return(info.deinit.nil? ? t : nil) if info.resource
+        (info.fields || []).each do |_, ft, _|
+          r = resource_in(ft, seen)
+          return r unless r.nil?
+        end
+        nil
+      when :union
         (info.fields || []).each do |_, ft, _|
           r = resource_in(ft, seen)
           return r unless r.nil?
@@ -1136,7 +1142,7 @@ module Egg
       info = @types[t]
       case info&.kind
       when :array, :buf then any_resource(info.elem, seen)
-      when :struct
+      when :struct, :union
         return t if info.resource
         info.fields.each do |_, ft, _|
           r = any_resource(ft, seen)
@@ -1159,6 +1165,8 @@ module Egg
         else
           info.fields.each { |_, ft, _| deinits(ft, out, seen) }
         end
+      when :union
+        info.fields.each { |_, ft, _| deinits(ft, out, seen) }
       end
       out
     end
@@ -1196,7 +1204,7 @@ module Egg
     end
 
     def owned_place_error(t, what, line, col)
-      err("E133", "#{what} cannot be a #{t}; owned values live in locals, parameters, results, struct fields, arrays and buffers", line, col)
+      err("E133", "#{what} cannot be a #{t}; owned values live in locals, parameters, results, struct fields, union members, arrays and buffers", line, col)
       "error"
     end
 
@@ -1228,6 +1236,9 @@ module Egg
     # copy their fill value, which is safe only for these.
     def empty_value?(e)
       return true unless owned?(e.ty)
+      # A union member without a payload owns nothing, whatever the
+      # others may hold.
+      return true if (e.is_a?(Field) || e.is_a?(EnumLit)) && e.info&.[](:union_tag).is_a?(Integer)
       return false unless any_resource(e.ty).nil?
       case e
       in Field[info: { buf_empty: true }] | EnumLit[info: { buf_empty: true }] then true
@@ -1253,6 +1264,9 @@ module Egg
       case info.kind
       when :buf then "#{t}.empty"
       when :array then "@splat(#{empty_hint(info.elem)})"
+      when :union
+        bare = info.fields.find { |_, ft, _| ft == "void" }
+        bare.nil? ? "a #{t} literal of empty buffers" : ".#{bare[0]}"
       else "a #{t} literal of empty buffers"
       end
     end
@@ -1377,6 +1391,10 @@ module Egg
         next if info.param
         if !info.used
           err("E110", "local variable '#{name}' is never used", info.line, info.col)
+        elsif info.borrow == :mut && !info.mutated
+          err("E111", "'#{name}' never changes what it borrows; borrow it with `const #{name} = &...`", info.line, info.col)
+        elsif info.borrow
+          nil
         elsif info.mutable && !info.mutated
           err("E111", "local variable '#{name}' is never reassigned; declare it with 'const'", info.line, info.col)
         elsif info.inout && !info.mutated
@@ -1394,9 +1412,18 @@ module Egg
         stmt.value = view
         stmt.ty = ty
         declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true, false, (src = place_sources(view.obj, false)).is_a?(Array) ? src : nil))
+      in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, inout: true]
+        check_borrow(stmt, name, type, place, true, line, col)
+      in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, mutable: false] if !pointer_type_expr?(type, line, col)
+        check_borrow(stmt, name, type, place, false, line, col)
+      in VarDecl[name:, type:, value: AddrOf => value, line:, col:, mutable: true] if !pointer_type_expr?(type, line, col)
+        check_expr(value.expr)
+        err("E121", "a borrow is `const #{name} = &x` (to read it) or `inout #{name} = &x` (to change it), not a var", line, col)
+        stmt.ty = "error"
+        declare(name, VarInfo.new("error", false, true, false, line, col, false, false))
       in VarDecl[name:, value:, line:, col:, inout: true]
         check_expr(value)
-        err("E116", "an inout local is a writable slice: `inout #{name} = &x[lo..hi]`, of a variable", line, col)
+        err("E116", "an inout local borrows a place: `inout #{name} = &x`, `&x.f`, `&x[i]` or `&x[lo..hi]`", line, col)
         stmt.ty = "error"
         declare(name, VarInfo.new("error", true, true, true, line, col, false, false))
       in VarDecl[name:, mutable:, type:, value:, line:, col:]
@@ -1435,6 +1462,7 @@ module Egg
               err("E105", "cannot assign to #{what} '#{name}'", line, col)
             else
               info.mutated = true
+              info.used = true if info.borrow # writing through it is its use
               expect_type(info.type, vt, value)
             end
           end
@@ -1561,6 +1589,8 @@ module Egg
     # switch over an enum or a union: every member handled once, or an else.
     def check_switch(stmt, subject, arms, line, col)
       t = check_expr(subject)
+      # Its arms borrow from it, or move it: it must be a place.
+      check_borrowed(subject, t) if t != "error"
       return check_error_switch(stmt, arms, line, col) if t == "anyerror"
       info = @types[t]
       if t != "error" && (info.nil? || (info.kind != :enum && info.kind != :union))
@@ -1744,11 +1774,12 @@ module Egg
         if mut_slice?(e)
           err("E105", "cannot #{verb} slice '#{name}': only its elements can change (#{name}[i] = v)", line, col)
         elsif !info.mutable
-          what = info.param ? "parameter" : "constant"
-          err("E105", "cannot #{verb} #{what} '#{name}'", line, col)
+          what = info.param ? "parameter" : info.borrow ? "shared borrow" : "constant"
+          err("E105", "cannot #{verb} #{what} '#{name}'#{info.borrow ? "; borrow it with `inout #{name} = &...`" : ""}", line, col)
         else
           info.mutated = true
         end
+        info.used = true if info.borrow # writing through it is its use
         e.ty = info.type
       in Field[obj:, name:, line:, col:]
         t = check_lvalue(obj, verb)
@@ -1842,6 +1873,49 @@ module Egg
       end
       return owned_place_error(t, "a pointer's target", place.line, place.col) if owned?(t)
       ptr_type(t)
+    end
+
+    # `const r = &place` / `inout r = &place`: r names the place (a
+    # variable, or a field or element of one) until its last use. A shared
+    # borrow reads it; a writable one may also change it, but neither may
+    # give away what it borrows (own.rb).
+    def check_borrow(stmt, name, type, place, writable, line, col)
+      declared = type.nil? ? nil : resolve_type(type, line, col)
+      errors = @diagnostics.length
+      t = if !owned_place?(place)
+            check_expr(place)
+            err("E121", "a borrow names a variable, or a field or element of one: `const #{name} = &x.f`", place.line, place.col)
+            "error"
+          elsif writable
+            slice_var?(place) ? check_expr(place) : check_lvalue(place, "borrow as writable")
+          else
+            check_expr(place)
+          end
+      mark_root_used(place)
+      if t != "error" && (!slice_in(t).nil? || t == "str")
+        err("E116", "'#{name}' would borrow a #{t}, which already views its data: `const #{name} = #{t == "str" ? "s" : "x[lo..hi]"}`", line, col)
+        t = "error"
+      elsif t != "error" && (!storable?(t) || t == "module")
+        err("E108", "cannot borrow a #{t}", line, col)
+        t = "error"
+      end
+      expect_type(declared, t, place) unless declared.nil? || t == "error"
+      stmt.value.info = { borrow: writable ? :mut : :shared }
+      stmt.value.ty = t
+      stmt.ty = t
+      # After an error, do not also call it unused or never written.
+      failed = @diagnostics.length > errors
+      declare(name, VarInfo.new(t, writable, failed, failed, line, col, false, false, false, nil, writable ? :mut : :shared))
+    end
+
+    # Does the declared type (nil: none) ask for a pointer, as in
+    # `const p: *T = &x` or through an alias of one? (A type named wrongly
+    # is reported once: the declaration resolves it again.)
+    def pointer_type_expr?(type, line, col)
+      return false if type.nil?
+      t = resolve_type(type, line, col)
+      t = @types[t].inner if @types[t]&.kind == :opt
+      @types[t]&.kind == :ptr
     end
 
     # ---- expressions --------------------------------------------------

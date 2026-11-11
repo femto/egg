@@ -3,7 +3,7 @@ uses io
 
 fn main(io: Io) void {
     var x = 1
-    const y = &x
+    const y: *i64 = &x
     x = 2
     io.print(y)
 }

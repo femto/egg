@@ -840,6 +840,8 @@ const Shape = union(enum) { circle: i64, rect: Size, empty }
   written `Shape{ .circle = 2 }`; one without, `.empty` or `Shape.empty`.
   A union's payload is read only with `switch` (E122 on `u.circle`).
 - Unions may have methods, like structs.
+- A member may be owned (a `Buf`, an owned struct); the union is then
+  owned, and a `switch` over it may take the payload out (section 21).
 
 `switch` is a statement over an enum or a union (E127 otherwise):
 
@@ -1149,8 +1151,10 @@ fn main(io: Io, a: Allocator) void {
 An `inout` parameter lets a function change its caller's variable. The
 argument is written `&x` (`&x[lo..hi]` for an inout slice, below), so a
 reader of the call can see it: `x` (or a field or element of it) must be
-a `var` or an `inout` parameter, and `&` is allowed nowhere else (E121). Inside the function, the parameter reads
-and assigns like a local.
+a `var` or an `inout` parameter. Besides arguments, `&` may only start a
+local borrow (below), or, in an `allow unsafe` file, take an address where
+a pointer is expected (section 18); anywhere else it is E121. Inside the function, the
+parameter reads and assigns like a local.
 
 **Exclusivity** (E117): a place passed as `inout` may not appear in any
 other argument of the same call, so a function never sees two views of the
@@ -1239,6 +1243,74 @@ fn main(io: Io) void {
     const a = [2]i64{ 1, 2 }
     fill(&a[0..], 0)
     io.print(a[0])
+}
+```
+
+**Local borrows.** `const r = &p` names the place `p` (a variable, or a
+field or element of one) without copying or moving it: `r` reads as `p`
+does and may be passed to plain parameters, but cannot change it. `inout
+r = &p`, of a place that could be passed as `&p`, may also change it:
+assign it or its fields, pass `&r` or call its `inout self` methods
+(E111 if it never does; E105 for writing through a `const` borrow; a
+`var` borrow is E121). Like a local slice, a borrow lasts until its last
+use: while it is used later, `p` cannot be moved, assigned or borrowed as
+writable (E149), and while a writable one is, `p` cannot even be read
+except through it. A borrow never owns what it names, so moving it, or any
+part of it, is E139: `@replace(&r.f, v)` swaps a value in instead, and a
+`switch` over a borrowed union only lends its payload. The place must
+be a variable's (`&make()` is E121), and a slice or `str` already views
+its data (E116).
+
+```egg
+// expect: maindb 0
+// expect: maindb 11
+// expect: 81
+uses alloc, io
+
+const Db = struct {
+    name: Buf(u8)
+    hits: i64
+
+    fn bump(inout self: Db) void {
+        self.hits = self.hits + 1
+    }
+}
+
+const Conf = struct {
+    db: Db
+    port: i64
+}
+
+fn show(io: Io, d: Db) void {
+    io.print(d.name, " ", d.hits)
+}
+
+fn main(io: Io, a: Allocator) void {
+    var conf = Conf{ .db = Db{ .name = a.concat("main", "db"), .hits = 0 }, .port = 80 }
+    defer a.free(conf)
+    const db = &conf.db              // reads conf.db, owns nothing
+    show(io, db)
+    inout w = &conf.db               // changes it
+    w.bump()
+    w.hits = w.hits + 10
+    show(io, conf.db)                // w is not used after this
+    inout p = &conf.port
+    p = p + 1
+    io.print(conf.port)
+}
+```
+
+```egg
+// error: E149
+uses alloc, io
+
+const Db = struct { name: Buf(u8), hits: i64 }
+
+fn main(io: Io, a: Allocator) void {
+    const db = Db{ .name = a.concat("a", "b"), .hits = 0 }
+    const name = &db.name
+    a.free(db)                       // name is still used below
+    io.print(name)
 }
 ```
 
@@ -2189,13 +2261,13 @@ in the file (anything else after `allow` is E131). Then:
 
 | Written | Means |
 | --- | --- |
-| `&place` | the address of a `var`, or of its field or element (a `const` is E105) |
+| `&place` | the address of a `var` or an `inout` parameter, or of its field or element (a `const` is E105), where a pointer is expected: `const p: *T = &x`, a `*T` argument (without the type, `const r = &x` is a borrow, section 12) |
 | `p.*` | the `T` that p points to; also a place: `p.* = v`, `p.*.x = v` |
 | `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`, `@bufPtr`, `@sliceFromPtr` | section 15 |
 | `extern fn` | section 20 |
 
 Without `allow unsafe` these are E131 (and `&x` outside an inout argument
-stays E121). The compiler cannot check what pointers point to: a pointer
+stays E121; a borrow is allowed everywhere). The compiler cannot check what pointers point to: a pointer
 can outlive the variable it points into, and `@ptrAdd` can leave the
 object. The one check is that `p.*` on `null` panics with
 `null pointer dereference`. Nor can it see a pointer into a value passed
@@ -2512,8 +2584,8 @@ buffers and a buffer of buffers are owned too: they move like a buffer,
 and `a.free(v)` frees everything they hold, the elements of an array or
 buffer in order and a struct's fields last declared first (they may
 depend on earlier ones). A `!T` or `?T` of one
-must be unwrapped right away (`try`, `catch`, `orelse`); one cannot be a union
-member or a pointer's target (E133). Borrowing from a temporary, as in
+must be unwrapped right away (`try`, `catch`, `orelse`), so it cannot be a
+field or a union member; an owned value cannot be a pointer's target (E133). Borrowing from a temporary, as in
 `@len(make(a))` or `make_list(a).len`, is E133 too: nothing could free it.
 
 The fields of a struct variable are followed one by one. Moving `v.data`
@@ -2548,6 +2620,103 @@ Buf(u8).empty)`, `List{ .data = .empty, .len = 0 }`. Shrinking a buffer of
 buffers with `a.resize` frees the elements cut off. While `for (xs) |x|`
 iterates over owned elements, `x` only borrows each one (moving it is
 E139), and the body may not swap elements of `xs` (E137).
+
+**Owned unions.** A union with an owned member (a buffer, an owned
+struct, or a value holding one) is owned too, and moves like a buffer.
+Building one (`Msg{ .text = b }`) moves the payload in; a member without a
+payload owns nothing (`.ping`, which may also fill `a.alloc`). `a.free(m)`
+frees the payload of the member that is live. Only that member is live, so
+the union is followed as one value: it is moved whole or not at all.
+
+A `switch` over an owned union reads it from a place (a temporary is
+E133). Each capture borrows the payload, unless its arm moves the capture
+or any part of it: then that arm **takes the payload out**, which moves
+the union, and the capture is owned there and must be given away like any
+local (E135). An arm for members that own nothing has nothing to free, so
+it agrees with the others either way; arms whose payload is owned must
+agree with each other (E134): all take it out, or none does. After the
+switch the union is moved if the arms took it out, and owned (to free or
+pass on) otherwise. A union that cannot be moved here, such as a plain
+parameter or an element of a buffer, only lends its payload: moving the
+capture is E139.
+
+```egg
+// expect: hello
+// expect: 5
+// expect: 3
+uses alloc, io
+
+const Msg = union(enum) {
+    text: Buf(u8)
+    nums: Buf(i64)
+    ping
+
+    fn show(self: Msg, io: Io) void {
+        switch (self) {
+            .text => |t| {
+                io.print(t)                // borrowed
+            }
+            .nums => |n| {
+                io.print(@len(n))
+            }
+            .ping => {
+                io.print("ping")
+            }
+        }
+    }
+}
+
+// Takes the payload out: m is moved by the arms that move their capture.
+fn size(a: Allocator, sink m: Msg) i64 {
+    switch (m) {
+        .text => |t| {
+            const n = @len(t)
+            a.free(t)
+            return n
+        }
+        .nums => |n| {
+            const k = @len(n)
+            a.free(n)
+            return k
+        }
+        .ping => {
+            return 0                       // nothing to free
+        }
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    const m = Msg{ .text = a.concat("hel", "lo") }
+    m.show(io)
+    io.print(size(a, m))
+    var box: Buf(Msg) = .empty
+    defer a.free(box)                      // frees each live payload
+    a.push(&box, Msg{ .nums = a.alloc(3, 0) })
+    a.push(&box, .ping)
+    const first = size(a, a.pop(&box) orelse .ping)
+    io.print(first + size(a, a.pop(&box) orelse .ping))
+}
+```
+
+```egg
+// error: E134
+uses alloc, io
+
+const Msg = union(enum) { text: Buf(u8), nums: Buf(i64), ping }
+
+fn main(io: Io, a: Allocator) void {
+    const m = Msg{ .text = a.concat("a", "b") }
+    switch (m) {
+        .text => |t| {
+            a.free(t)                      // takes m's payload out
+        }
+        .nums => |n| {
+            io.print(@len(n))              // but this arm keeps it
+        }
+        .ping => {}
+    }
+}
+```
 
 **Owned structs.** `const Db = owned struct { ... }` declares a struct
 that is owned for itself, with or without buffers: a resource such as an

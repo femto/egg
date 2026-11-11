@@ -1,0 +1,80 @@
+// Owned unions: switching on one borrows its payload, or takes it out.
+uses alloc, io
+
+const Msg = union(enum) { text: Buf(u8), nums: Buf(i64), ping }
+
+const Outer = union(enum) { inner: Msg, none }
+
+fn peek(a: Allocator, o: Outer) void {
+    switch (o) {
+        .inner => |m| {
+            switch (m) {
+                .text => |t| {
+                    a.free(t)
+                }
+                else => {}
+            }
+        }
+        .none => {}
+    }
+}
+
+fn make(a: Allocator) Msg {
+    return Msg{ .text = a.concat("a", "b") }
+}
+
+fn eat(a: Allocator, m: Msg) void {
+    switch (m) {
+        .text => |t| {
+            a.free(t)
+        }
+        else => {}
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    const m = make(a)
+    switch (m) {
+        .text => |t| {
+            a.free(t)
+        }
+        .nums => |n| {
+            a.free(n)
+        }
+        .ping => {}
+    }
+    eat(a, m)
+    const box: Buf(Msg) = .empty
+    defer a.free(box)
+    for (box) |x| {
+        switch (x) {
+            .nums => |n| {
+                a.free(n)
+            }
+            else => {}
+        }
+    }
+    const k = make(a)
+    switch (k) {
+        .text => |t| {
+            io.print(@len(t))
+        }
+        else => {}
+    }
+    const j = make(a)
+    switch (j) {
+        .text => |t| {
+            const u = t
+            io.print(@len(u))
+        }
+        else => {}
+    }
+}
+
+// error: E139 @13
+// error: E139 @29
+// error: E136 @46
+// error: E139 @52
+// error: E135 @57
+// error: E134 @65
+// error: E135 @67
