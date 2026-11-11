@@ -1152,7 +1152,8 @@ An `inout` parameter lets a function change its caller's variable. The
 argument is written `&x` (`&x[lo..hi]` for an inout slice, below), so a
 reader of the call can see it: `x` (or a field or element of it) must be
 a `var` or an `inout` parameter. Besides arguments, `&` may only start a
-local borrow (below); anywhere else it is E121. Inside the function, the
+local borrow (below), or, in an `allow unsafe` file, take an address where
+a pointer is expected (section 18); anywhere else it is E121. Inside the function, the
 parameter reads and assigns like a local.
 
 **Exclusivity** (E117): a place passed as `inout` may not appear in any
@@ -2260,7 +2261,7 @@ in the file (anything else after `allow` is E131). Then:
 
 | Written | Means |
 | --- | --- |
-| `&place` | the address of a `var`, or of its field or element (a `const` is E105), where a pointer is expected: `const p: *T = &x`, a `*T` argument (without the type, `const r = &x` is a borrow, section 12) |
+| `&place` | the address of a `var` or an `inout` parameter, or of its field or element (a `const` is E105), where a pointer is expected: `const p: *T = &x`, a `*T` argument (without the type, `const r = &x` is a borrow, section 12) |
 | `p.*` | the `T` that p points to; also a place: `p.* = v`, `p.*.x = v` |
 | `@ptrAdd`, `@ptrCast`, `@intFromPtr`, `@ptrFromInt`, `@strPtr`, `@bufPtr`, `@sliceFromPtr` | section 15 |
 | `extern fn` | section 20 |

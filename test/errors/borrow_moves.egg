@@ -6,6 +6,10 @@ const Db = struct {
     hits: i64
 }
 
+const File = owned struct {
+    fd: i64
+}
+
 fn make(a: Allocator) Db {
     return Db{ .name = a.concat("x", "y"), .hits = 0 }
 }
@@ -28,9 +32,14 @@ fn main(io: Io, a: Allocator) void {
     x = 3
     io.print(y)
     a.free(f)
+    const g = File{ .fd = 1 }
+    const h = &g
+    @forget(h)
+    @forget(g)
 }
 
-// error: E149 @16
 // error: E149 @20
-// error: E139 @23
-// error: E149 @27
+// error: E149 @24
+// error: E139 @27
+// error: E149 @31
+// error: E139 @37

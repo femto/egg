@@ -1414,9 +1414,9 @@ module Egg
         declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true, false, (src = place_sources(view.obj, false)).is_a?(Array) ? src : nil))
       in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, inout: true]
         check_borrow(stmt, name, type, place, true, line, col)
-      in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, mutable: false] if type.nil? || !pointer_type_expr?(type)
+      in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, mutable: false] if !pointer_type_expr?(type, line, col)
         check_borrow(stmt, name, type, place, false, line, col)
-      in VarDecl[name:, type:, value: AddrOf => value, line:, col:, mutable: true] if type.nil? || !pointer_type_expr?(type)
+      in VarDecl[name:, type:, value: AddrOf => value, line:, col:, mutable: true] if !pointer_type_expr?(type, line, col)
         check_expr(value.expr)
         err("E121", "a borrow is `const #{name} = &x` (to read it) or `inout #{name} = &x` (to change it), not a var", line, col)
         stmt.ty = "error"
@@ -1908,10 +1908,14 @@ module Egg
       declare(name, VarInfo.new(t, writable, failed, failed, line, col, false, false, false, nil, writable ? :mut : :shared))
     end
 
-    # A pointer type as written (*T), which `const p: *T = &x` asks for.
-    def pointer_type_expr?(type)
-      type = type.inner if type.is_a?(OptType)
-      type.is_a?(PtrType)
+    # Does the declared type (nil: none) ask for a pointer, as in
+    # `const p: *T = &x` or through an alias of one? (A type named wrongly
+    # is reported once: the declaration resolves it again.)
+    def pointer_type_expr?(type, line, col)
+      return false if type.nil?
+      t = resolve_type(type, line, col)
+      t = @types[t].inner if @types[t]&.kind == :opt
+      @types[t]&.kind == :ptr
     end
 
     # ---- expressions --------------------------------------------------

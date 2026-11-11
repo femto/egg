@@ -10,6 +10,7 @@
 // expect: false
 // expect: 12
 // expect: 1 2
+// expect: 4
 
 uses io, alloc
 allow unsafe
@@ -90,4 +91,11 @@ fn main(io: Io, a: Allocator) void {
     io.print(two(ry.*, inc(&ry.*)))
     y = 1
     io.print(ry.*, " ", inc(&ry.*))
+    // An alias of a pointer type asks for a pointer too; without a type,
+    // &ry borrows the pointer variable itself.
+    const py: IntPtr = &y
+    const bry = &ry
+    io.print(py.* + bry.*)
 }
+
+const IntPtr = *i64

@@ -3661,7 +3661,7 @@ module Egg
         # parameter; a shared one only reads (and may borrow a const, such
         # as a switch capture).
         @locals.last[name] = [ty, true]
-        line("#{kind == :shared ? "const " : ""}#{c_type(ty)} *const v_#{name} = &#{lvalue(place)};")
+        line("#{c_type(ty)}#{kind == :shared ? " const" : ""} *const v_#{name} = &#{lvalue(place)};")
       in VarDecl[name:, value:, ty:]
         code = coerce(expr(value), value.ty, ty)
         declare_local(name, ty)

@@ -1105,6 +1105,11 @@ module Egg
         borrowed_param_error(path, "forgotten", line, col)
         return
       end
+      if @decl[root(path)][0] == :borrowed
+        c = @borrowed[root(path)]
+        err("E139", c.is_a?(Array) ? "'#{path}' cannot be forgotten: #{c[1]}" : "'#{path}' only borrows an element of '#{c}' for one iteration; it cannot be forgotten", line, col)
+        return
+      end
       check_iterated(path, line, col, "forgotten")
       @st[leaf] = [:moved, line]
     end
