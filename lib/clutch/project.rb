@@ -11,6 +11,9 @@
 #   term = { git = "https://...", ref = "v0.2.0" }     # a branch, tag or SHA
 #   util = { path = "../util" }                        # a directory
 #
+#   [dev-dependencies]                                 # for test/ only
+#   check = "~> 0.2"
+#
 # A git or path dependency may also give `version = "~> 1.2"`, checked
 # against its clutch.toml. A package's code is under src/: src/<name>.egg
 # is @import("<name>"), and src/main.egg the program's main, if any.
@@ -25,7 +28,7 @@ module Clutch
   Dep = Struct.new(:name, :kind, :constraint, :git, :ref, :path)
 
   class Manifest
-    attr_reader :dir, :name, :version, :deps
+    attr_reader :dir, :name, :version, :deps, :dev_deps
 
     def self.load(dir)
       path = File.join(dir, "clutch.toml")
@@ -37,7 +40,7 @@ module Clutch
       @dir = dir
       @file = file
       doc = Toml.parse(text, file)
-      known(doc, %w[package dependencies], "")
+      known(doc, %w[package dependencies dev-dependencies], "")
       pkg = doc["package"]
       raise Error, "#{file}: [package] is missing" unless pkg.is_a?(Hash)
       known(pkg, %w[name version], "[package] ")
@@ -52,7 +55,13 @@ module Clutch
       end
       deps = doc["dependencies"] || {}
       raise Error, "#{file}: [dependencies] must be a table" unless deps.is_a?(Hash)
-      @deps = deps.map { |n, spec| dep(n, spec) }
+      @deps = deps.map { |n, spec| dep(n, spec, "dependency") }
+      dev = doc["dev-dependencies"] || {}
+      raise Error, "#{file}: [dev-dependencies] must be a table" unless dev.is_a?(Hash)
+      @dev_deps = dev.map { |n, spec| dep(n, spec, "dev-dependency") }
+      if (both = @dev_deps.find { |d| @deps.any? { |x| x.name == d.name } })
+        raise Error, "#{file}: #{both.name} is in both [dependencies] and [dev-dependencies]; the tests have the dependencies already"
+      end
     end
 
     def src_dir
@@ -69,8 +78,8 @@ module Clutch
 
     private
 
-    def dep(name, spec)
-      where = "#{@file}: dependency #{name}"
+    def dep(name, spec, kind)
+      where = "#{@file}: #{kind} #{name}"
       raise Error, "#{where}: a name is a plain name such as http" unless name.match?(NAME)
       raise Error, "#{where}: std is the standard library, not a package" if name == "std"
       raise Error, "#{where}: a package cannot depend on itself" if name == @name
@@ -78,7 +87,7 @@ module Clutch
         return Dep.new(name, :index, constraint(spec, where))
       end
       raise Error, "#{where}: give a version (\"~> 1.2\") or a table ({ git = ... } or { path = ... })" unless spec.is_a?(Hash)
-      known(spec, %w[git ref path version], "dependency #{name}: ")
+      known(spec, %w[git ref path version], "#{kind} #{name}: ")
       c = spec.key?("version") ? constraint(spec["version"], where) : nil
       if spec.key?("git") == spec.key?("path")
         raise Error, "#{where}: give one of git and path"
@@ -110,8 +119,9 @@ module Clutch
   # One package as resolved. source: "index", "git" or "path"; git, ref:
   # the repository and the full commit SHA (index and git); requested: the
   # ref the manifest asked for (git); path: as the manifest wrote it;
-  # dir: the package's directory on disk.
-  Locked = Struct.new(:name, :version, :source, :git, :ref, :requested, :path, :dir)
+  # dir: the package's directory on disk; dev: needed by the root's tests
+  # only.
+  Locked = Struct.new(:name, :version, :source, :git, :ref, :requested, :path, :dir, :dev)
 
   module Lock
     HEADER = "# clutch.lock: what clutch chose for each dependency. Written by clutch; do not edit.\n"

@@ -16,7 +16,7 @@ module Clutch
       add NAME [VERSION]      depend on NAME from the index (VERSION such as
                               "~> 1.2"; the newest release's ~> by default)
       add NAME --git URL [--ref REF]
-      add NAME --path DIR
+      add NAME --path DIR     (with --dev: a dev-dependency, for the tests)
       remove NAME             drop a dependency
       check                   type-check the package (src/main.egg, or the
                               library's src/NAME.egg)
@@ -24,13 +24,16 @@ module Clutch
                               build src/main.egg into build/NAME
       run [--release] [-g] [-- ARGS]
                               build and run it
+      test [NAME...]          build and run each test/NAME.egg: it passes
+                              when it exits 0 and prints test/NAME.expected
+                              (if there is one)
       flags                   the eggc flags for the dependencies (--pkg NAME=DIR)
       lock                    resolve and write clutch.lock
       update [NAME...]        choose versions afresh, ignoring clutch.lock
       publish [--repo URL] [--dry-run]
                               add this commit as a release to the index: a
                               pull request through gh (pushed, clean, and
-                              passing clutch check first)
+                              passing clutch check and clutch test first)
 
     The commands after new work in the package holding the current
     directory. CLUTCH_INDEX names the package index, CLUTCH_CACHE the cache,
@@ -55,6 +58,7 @@ module Clutch
       when "check" then cmd_eggc("check")
       when "build" then cmd_eggc("build")
       when "run" then cmd_eggc("run")
+      when "test" then cmd_test
       when "flags" then cmd_flags
       when "lock" then @argv.empty? ? cmd_lock([]) : usage
       when "update" then cmd_lock(@argv.empty? ? true : @argv)
@@ -101,6 +105,21 @@ module Clutch
               return a + b
           }
         EGG
+        FileUtils.mkdir_p(File.join(name, "test"))
+        File.write(File.join(name, "test", "#{pkg}.egg"), <<~EGG)
+          // A test of #{pkg}, run by clutch test: it passes when main
+          // returns without an error.
+          uses io
+
+          const #{pkg} = @import("#{pkg}")
+
+          fn main(io: Io) !void {
+              if (#{pkg}.add(2, 3) != 5) {
+                  io.print("add(2, 3) is not 5")
+                  return error.Failed
+              }
+          }
+        EGG
       else
         File.write(File.join(name, "src", "main.egg"), <<~EGG)
           uses io
@@ -115,6 +134,7 @@ module Clutch
     end
 
     def cmd_add
+      dev = !@argv.delete("--dev").nil?
       name = @argv.shift
       return usage if name.nil?
       opts = {}
@@ -136,6 +156,7 @@ module Clutch
       dir = project_dir
       m = Manifest.load(dir)
       raise Error, "#{name} is already a dependency of #{m.name}" if m.deps.any? { |d| d.name == name }
+      raise Error, "#{name} is already a dev-dependency of #{m.name}" if m.dev_deps.any? { |d| d.name == name }
       spec = if opts["--git"]
                parts = ["git = #{Toml.quote(opts["--git"])}"]
                parts << "ref = #{Toml.quote(opts["--ref"])}" if opts["--ref"]
@@ -150,7 +171,7 @@ module Clutch
              end
       file = File.join(dir, "clutch.toml")
       before = File.read(file)
-      File.write(file, add_line(before, "#{name} = #{spec}"))
+      File.write(file, add_line(before, "#{name} = #{spec}", dev ? "dev-dependencies" : "dependencies"))
       begin
         pkgs = resolve(dir)
       rescue Error, TomlError
@@ -158,7 +179,7 @@ module Clutch
         raise
       end
       got = pkgs.find { |p| p.name == name }
-      @out.puts "added #{name} #{got.version}"
+      @out.puts "added #{name} #{got.version}#{dev ? " (for the tests)" : ""}"
       0
     end
 
@@ -174,7 +195,7 @@ module Clutch
       lines.each_with_index do |l, i|
         if (h = l[/\A\s*\[([^\]]*)\]/, 1])
           section = h.strip
-        elsif section == "dependencies" && l.match?(/\A\s*"?#{Regexp.escape(name)}"?\s*=/)
+        elsif %w[dependencies dev-dependencies].include?(section) && l.match?(/\A\s*"?#{Regexp.escape(name)}"?\s*=/)
           hit = i
         end
       end
@@ -194,7 +215,10 @@ module Clutch
     def cmd_lock(unlock)
       dir = project_dir
       pkgs = resolve(dir, unlock: unlock)
-      pkgs.each { |p| @out.puts "#{p.name} #{p.version}#{p.source == "index" ? "" : " (#{p.source})"}" }
+      pkgs.each do |p|
+        notes = [p.source == "index" ? nil : p.source, p.dev ? "dev" : nil].compact
+        @out.puts "#{p.name} #{p.version}#{notes.empty? ? "" : " (#{notes.join(", ")})"}"
+      end
       0
     end
 
@@ -281,14 +305,19 @@ module Clutch
       return usage unless @argv.empty?
       pub = Publish.new(project_dir, repo: repo).prepare
       text = pub.index_text
-      # The gate: the release as its users get it checks. In a copy, so
-      # neither the cache nor the package's own directory is written.
-      ok = Dir.mktmpdir("clutch-publish-") do |tmp|
+      # The gate: the release as its users get it checks and passes its
+      # tests. In a copy, so neither the cache nor the package's own
+      # directory is written.
+      Dir.mktmpdir("clutch-publish-") do |tmp|
         copy = File.join(tmp, pub.name)
         FileUtils.cp_r(pub.release_dir, copy)
-        cmd_eggc("check", copy, shown_as: pub.dir).zero?
+        unless cmd_eggc("check", copy, shown_as: pub.dir).zero?
+          raise Error, "#{pub.name} #{pub.version} does not pass clutch check; nothing was published"
+        end
+        if !test_names(copy).empty? && !run_tests(copy, [], shown_as: pub.dir).zero?
+          raise Error, "#{pub.name} #{pub.version} does not pass clutch test; nothing was published"
+        end
       end
-      raise Error, "#{pub.name} #{pub.version} does not pass clutch check; nothing was published" unless ok
       if dry
         @out.print text
         @err.puts "clutch: --dry-run: #{pub.name} #{pub.version} (#{pub.sha[0, 12]}) is ready; the index's packages/#{pub.name}.toml would be the text above"
@@ -301,6 +330,66 @@ module Clutch
         raise
       end
       0
+    end
+
+    def cmd_test
+      return usage if @argv.any? { |a| a.start_with?("-") }
+      run_tests(project_dir, @argv)
+    end
+
+    # The names of dir's tests, test/NAME.egg.
+    def test_names(dir)
+      Dir[File.join(dir, "test", "*.egg")].map { |f| File.basename(f, ".egg") }.sort
+    end
+
+    # Builds and runs dir's tests (names, or all of them); the exit status.
+    # shown_as: as for cmd_eggc.
+    def run_tests(dir, names, shown_as: nil)
+      all = test_names(dir)
+      raise Error, "no tests: a test is a program test/NAME.egg, passing when it exits 0" if all.empty?
+      if (bad = names.find { |n| !all.include?(n) })
+        raise Error, "no test #{bad} (the tests: #{all.join(", ")})"
+      end
+      names = all if names.empty?
+      m = Manifest.load(dir)
+      pkgs = resolve(dir, manifest: m, write_lock: shown_as.nil?)
+      flags = pkg_flags(pkgs, dev: true)
+      flags += ["--pkg", "#{m.name}=#{m.src_dir}"] if File.directory?(m.src_dir)
+      copies = shown_as.nil? ? [] : [File.realpath(dir), dir].uniq
+      shown = ->(t) { copies.reduce(t) { |acc, c| acc.gsub(c, shown_as) } }
+      cannot = ->(why) { raise Error, "cannot run eggc (#{eggc.join(" ")}): #{why}" }
+      failed = 0
+      names.each do |n|
+        src = File.join(dir, "test", "#{n}.egg")
+        exe = File.join(dir, "build", "test", n)
+        FileUtils.mkdir_p(File.dirname(exe))
+        out, err, st = begin
+          Open3.capture3(*eggc, "build", src, "-o", exe, *flags)
+        rescue SystemCallError => e
+          cannot.(e.message)
+        end
+        why = nil
+        if st.success?
+          out, err, st = Open3.capture3(exe, chdir: dir)
+          expected = File.join(dir, "test", "#{n}.expected")
+          if !st.success?
+            why = "exited with #{st.exitstatus || st.termsig && "signal #{st.termsig}"}"
+          elsif File.file?(expected) && File.binread(expected) != out.b
+            why = "printed other than test/#{n}.expected"
+          end
+        else
+          why = "does not build"
+        end
+        if why.nil?
+          @out.puts "  ok    #{n}"
+        else
+          failed += 1
+          @out.puts "  FAIL  #{n} (#{why})"
+          [out, err].each { |t| @out.print shown.(t).gsub(/^/, "        ") unless t.empty? }
+        end
+      end
+      @out.puts "#{names.length - failed} passed, #{failed} failed"
+      failed.zero? ? 0 : 1
     end
 
     # Resolves dir's package and writes the lock; the resolved packages.
@@ -319,8 +408,9 @@ module Clutch
       pkgs
     end
 
-    def pkg_flags(pkgs)
-      pkgs.flat_map { |p| ["--pkg", "#{p.name}=#{File.join(p.dir, "src")}"] }
+    # The --pkg flags; with dev, for the tests, the dev-dependencies too.
+    def pkg_flags(pkgs, dev: false)
+      pkgs.select { |p| dev || !p.dev }.flat_map { |p| ["--pkg", "#{p.name}=#{File.join(p.dir, "src")}"] }
     end
 
     # a, quoted for a POSIX shell when it needs to be.
@@ -344,15 +434,15 @@ module Clutch
       "~> #{top.parts[0]}.#{top.parts[1]}"
     end
 
-    # text with line added at the end of its [dependencies] table (made
-    # if there is none).
-    def add_line(text, line)
+    # text with line added at the end of its [table] (made if there is
+    # none).
+    def add_line(text, line, table = "dependencies")
       lines = text.lines
       lines[-1] += "\n" if !lines.empty? && !lines[-1].end_with?("\n")
-      start = lines.index { |l| l.match?(/\A\s*\[\s*dependencies\s*\]/) }
+      start = lines.index { |l| l.match?(/\A\s*\[\s*#{Regexp.escape(table)}\s*\]/) }
       if start.nil?
         lines << "\n" unless lines.empty? || lines[-1].strip.empty?
-        lines << "[dependencies]\n" << "#{line}\n"
+        lines << "[#{table}]\n" << "#{line}\n"
         return lines.join
       end
       stop = (start + 1...lines.length).find { |i| lines[i].match?(/\A\s*\[/) } || lines.length

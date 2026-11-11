@@ -17,6 +17,9 @@ chat/
     main.egg      a program's main
     chat.egg      a library's entry: @import("chat")
     util.egg      a part of it: @import("chat/util"), or "util.egg" inside
+  test/
+    parse.egg     a test: a program of its own, run by clutch test
+    parse.expected  what it must print (optional)
   build/          clutch build's output
 ```
 
@@ -37,12 +40,29 @@ http = "~> 0.1"                                    # from the index
 ansi = { git = "https://github.com/x/egg-ansi" }   # its default branch
 term = { git = "https://...", ref = "v0.2.0" }     # a branch, tag or commit
 util = { path = "../util" }                        # a directory
+
+[dev-dependencies]                                 # for the tests only
+check = "~> 0.2"
 ```
 
 A git or path dependency may add `version = "..."`, checked against that
 package's own `clutch.toml`. Constraints: `"1.2.0"` (exactly), `">= 1.2"`,
 `"< 2"`, `"~> 1.2"` (1.2 up to 2.0), `"~> 1.2.3"` (1.2.3 up to 1.3.0),
 `"*"`, or several joined by commas.
+
+A dev-dependency is for the package's tests: `src/` cannot import it, its
+users do not get it, and a dependency's own dev-dependencies are never
+read. It is resolved after the dependencies, so it never changes what they
+resolve to, and it is recorded in the lock like them.
+
+## Tests
+
+Each `test/NAME.egg` is a test: a program with a `main`, built with the
+package (`@import("NAME")`), its dependencies and its dev-dependencies, and
+run in the package's directory. It passes when it exits 0 (a `main` that
+returns an error fails) and, if there is a `test/NAME.expected`, prints
+exactly that. `clutch test` runs them all, `clutch test NAME...` some;
+`clutch new --lib` makes one.
 
 ## Choosing versions
 
@@ -87,8 +107,9 @@ index as the version its `clutch.toml` gives:
 - The version must be new to the index, and the name, if the index has it,
   must belong to the same repository: a name belongs to the package that
   first took it. The release is added in version order.
-- Last, `clutch check` must pass on a copy of the release (not the work
-  tree, which may hold files the repository does not).
+- Last, `clutch check` and, if it has tests, `clutch test` must pass on a
+  copy of the release (not the work tree, which may hold files the
+  repository does not).
 - Then, for an index on GitHub, clutch clones it, commits
   `packages/NAME.toml` on a branch `NAME-VERSION` (in a fork when you
   cannot push to the index), and opens the pull request with `gh`. An
@@ -119,10 +140,12 @@ clutch add http              # from the index, "~> MAJOR.MINOR" of its newest re
 clutch add http "~> 0.2"
 clutch add ansi --git URL [--ref REF]
 clutch add util --path ../util
+clutch add check --dev       # a dev-dependency (with any of the forms above)
 clutch remove http
 clutch check                 # a library is checked through a root that imports it
 clutch build [--release] [-g] [-o EXE]   # into build/NAME by default
 clutch run [--release] [-g] [-- ARGS]
+clutch test [NAME...]        # build and run test/*.egg
 clutch flags                 # the --pkg flags, for running eggc by hand
 clutch lock                  # resolve and write clutch.lock
 clutch update [NAME...]      # ignore the lock (for those packages)
@@ -139,4 +162,6 @@ clutch publish [--repo URL] [--dry-run]   # this commit as a release (a pull req
   whole program from source. The plan is Rust's: each package compiled
   once and cached, its interface being its signatures and their
   capability and inout summaries, generics instantiated by their users.
-- A package carrying C sources, and dependencies only for tests.
+- A package carrying C sources.
+- Tests inside the source (`test "name" { ... }` blocks): a test is a
+  program for now.
