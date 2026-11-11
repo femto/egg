@@ -49,9 +49,10 @@ try {
   $sumsFile = Join-Path $tmp "SHA256SUMS"
   Fetch "$base/SHA256SUMS" $sumsFile
   $sums = Get-Content -Raw $sumsFile
-  $line = ($sums -split "`n") | Where-Object { $_ -match "^([0-9a-f]+)  $([regex]::Escape("$name.zip"))\s*$" } | Select-Object -First 1
+  # "SUM  FILE", or "SUM *FILE" as sha256sum writes in binary mode.
+  $line = ($sums -split "`n") | Where-Object { $_ -match "^([0-9a-fA-F]+) [ *]$([regex]::Escape("$name.zip"))\s*$" } | Select-Object -First 1
   if (-not $line) { throw "egg: SHA256SUMS does not list $name.zip" }
-  $want = ($line -split " ")[0]
+  $want = ($line -split " ")[0].ToLower()
   $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
   if ($got -ne $want) { throw "egg: $name.zip does not match its SHA-256 sum; not installed" }
 

@@ -57,7 +57,8 @@ say "downloading Egg $version for $platform"
 fetch "$base/$name.tar.gz" "$tmp/$name.tar.gz" || die "no $name.tar.gz in release v$version"
 fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" || die "no SHA256SUMS in release v$version"
 
-want=$(sed -n "s/^\([0-9a-f]*\)  $name.tar.gz\$/\1/p" "$tmp/SHA256SUMS")
+# "SUM  FILE", or "SUM *FILE" as sha256sum writes in binary mode.
+want=$(tr -d '\r' < "$tmp/SHA256SUMS" | sed -n "s/^\([0-9a-fA-F]*\) [ *]$name.tar.gz\$/\1/p" | tr 'A-F' 'a-f')
 [ -n "$want" ] || die "SHA256SUMS does not list $name.tar.gz"
 if command -v sha256sum >/dev/null 2>&1; then
   got=$(sha256sum "$tmp/$name.tar.gz" | cut -d ' ' -f 1)
