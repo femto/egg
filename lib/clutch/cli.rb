@@ -1,6 +1,7 @@
 # clutch's commands. Everything that touches a manifest, the lock, git or
 # the network is here; eggc only gets --pkg NAME=DIR for each package.
 
+require "open3"
 require "rbconfig"
 require "shellwords"
 require "tmpdir"
@@ -204,8 +205,11 @@ module Clutch
       0
     end
 
-    # dir: the package (the one holding the current directory by default)
-    def cmd_eggc(command, dir = nil)
+    # dir: the package (the one holding the current directory by default);
+    # shown_as: for dir a copy of the package, the package's own directory,
+    # named in eggc's messages in place of the copy's (whose lock is not
+    # kept)
+    def cmd_eggc(command, dir = nil, shown_as: nil)
       program_args = []
       if (i = @argv.index("--"))
         return usage unless command == "run"
@@ -227,7 +231,7 @@ module Clutch
       end
       dir ||= project_dir
       m = Manifest.load(dir)
-      pkgs = resolve(dir, manifest: m)
+      pkgs = resolve(dir, manifest: m, write_lock: shown_as.nil?)
       flags = pkg_flags(pkgs)
       file = m.main_file
       if command == "check" && !File.file?(file) && File.file?(m.lib_file)
@@ -248,8 +252,13 @@ module Clutch
         args += ["-o", out]
       end
       args += ["--"] + program_args unless program_args.empty?
-      system(*eggc, *args)
-      $?.exitstatus || 1
+      return (system(*eggc, *args) ? 0 : $?.exitstatus || 1) if shown_as.nil?
+      out, err, st = Open3.capture3(*eggc, *args)
+      copies = [File.realpath(dir), dir].uniq
+      shown = ->(t) { copies.reduce(t) { |acc, c| acc.gsub(c, shown_as) } }
+      @out.print shown.(out)
+      @err.print shown.(err)
+      st.exitstatus || 1
     end
 
     def cmd_publish
@@ -268,7 +277,7 @@ module Clutch
       ok = Dir.mktmpdir("clutch-publish-") do |tmp|
         copy = File.join(tmp, pub.name)
         FileUtils.cp_r(pub.release_dir, copy)
-        cmd_eggc("check", copy).zero?
+        cmd_eggc("check", copy, shown_as: pub.dir).zero?
       end
       raise Error, "#{pub.name} #{pub.version} does not pass clutch check; nothing was published" unless ok
       if dry
@@ -288,7 +297,8 @@ module Clutch
     # Resolves dir's package and writes the lock; the resolved packages.
     # unlock: names to choose afresh, each a package of the program
     # (or true for all).
-    def resolve(dir, unlock: [], manifest: nil)
+    # write_lock: false to leave the lock as it is.
+    def resolve(dir, unlock: [], manifest: nil, write_lock: true)
       m = manifest || Manifest.load(dir)
       git = Git.new
       pkgs = Resolver.new(m, git, Index.new(git), lock: Lock.read(dir), unlock: unlock).resolve
@@ -296,7 +306,7 @@ module Clutch
         missing = unlock.reject { |n| pkgs.any? { |p| p.name == n } }
         raise Error, "#{missing[0]} is not a package of #{m.name} (clutch update takes the names of its packages)" unless missing.empty?
       end
-      @err.puts "clutch: wrote clutch.lock" if Lock.write(dir, pkgs)
+      @err.puts "clutch: wrote clutch.lock" if write_lock && Lock.write(dir, pkgs)
       pkgs
     end
 

@@ -12,7 +12,7 @@ require "tmpdir"
 
 module Clutch
   class Publish
-    attr_reader :name, :version, :repo, :sha, :release_dir
+    attr_reader :dir, :name, :version, :repo, :sha, :release_dir
 
     def initialize(dir, repo: nil, git: Git.new, index: nil)
       @dir = dir
