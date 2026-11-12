@@ -161,7 +161,9 @@ module Egg
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
-    INT_OPS = %w[% & | ^].freeze
+    # +% -% *% wrap: the result modulo 2^bits of the type, never a panic.
+    WRAP_OPS = %w[+% -% *%].freeze
+    INT_OPS = (%w[% & | ^] + WRAP_OPS).freeze
     SHIFT_OPS = %w[<< >>].freeze
     # Builtins and how many arguments each takes.
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
@@ -535,6 +537,10 @@ module Egg
       # Built from a constant that already failed: that error is enough.
       return "error" if !plain && failed_const_inside?(v)
       unless plain
+        if (w = wrap_inside(v))
+          err("E150", "'#{w.op}' wraps at the width of a type, and constant arithmetic is exact, on i64: write the value, or compute it in a function", w.line, w.col)
+          return "error"
+        end
         err("E150", "a top-level constant must be known when compiling: a number, bool, text or enum literal, another constant, or integer arithmetic on those", v.line, v.col)
         return "error"
       end
@@ -562,6 +568,19 @@ module Egg
       else
         other = const_ref(e)
         !other.nil? && const_type(other) == "error"
+      end
+    end
+
+    # The first wrapping operation (+% -% *%) in e, or nil.
+    def wrap_inside(e)
+      case e
+      in Binary[op:, lhs:, rhs:] then WRAP_OPS.include?(op) ? e : (wrap_inside(lhs) || wrap_inside(rhs))
+      in Unary[operand:] then wrap_inside(operand)
+      in Call | Builtin | MethodCall
+        found = nil
+        e.args.each { |x| found ||= wrap_inside(x) }
+        found
+      else nil
       end
     end
 
@@ -2477,7 +2496,7 @@ module Egg
       return true if untyped_lit?(e)
       case e
       in Unary[op: "-" | "~", operand:] then literal_math?(operand)
-      in Binary[op: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^", lhs:, rhs:] then literal_math?(lhs) && literal_math?(rhs)
+      in Binary[op: "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%" | "&" | "|" | "^", lhs:, rhs:] then literal_math?(lhs) && literal_math?(rhs)
       in Binary[op: "<<" | ">>", lhs:] then literal_math?(lhs)
       else false
       end

@@ -419,8 +419,9 @@ E002; `a | b | c` is fine):
 | 5 | `&` `\|` `^` | both the same integer type | that type |
 | 6 | `<<` `>>` | an integer, shifted by any integer type | the left side's type |
 | 7 | `+` `-` | both the same number type | that type |
+| 7 | `+%` `-%` | both the same integer type | that type |
 | 8 | `*` `/` | both the same number type | that type |
-| 8 | `%` | both the same integer type | that type |
+| 8 | `%` `*%` | both the same integer type | that type |
 | 9 | unary `-`, `!`, `~`, `try`, `&` | signed integer or float / bool / integer / `!T` / place | |
 | 10 | `a.f`, `a.m(...)`, `a.*`, `a[i]`, `a[lo..hi]`, calls | | |
 
@@ -611,15 +612,17 @@ fn main(io: Io) void {
 ### Integer arithmetic is checked
 
 Outside `allow unsafe` code (section 18, the one place it can arise), Egg
-has no undefined behaviour. Every arithmetic operation, in every
-integer type, either produces the mathematically correct result or stops
-the program with a panic; bitwise operations work on the value's bits in
+has no undefined behaviour. Every checked arithmetic operation (`+ - * /
+%`, unary `-`), in every integer type, either produces the mathematically
+correct result or stops the program with a panic; the wrapping ones
+(`+% -% *%`) give the result modulo 2^N; bitwise operations work on the value's bits in
 two's complement and are defined for every input except a shift amount
 out of range:
 
 | Operation | Result |
 | --- | --- |
 | `a + b`, `a - b`, `a * b`, `-a` | exact result, or panic `integer overflow` (for unsigned types, also when `a - b` is negative) |
+| `a +% b`, `a -% b`, `a *% b` | the result modulo 2^N for the type's N bits, as two's complement for a signed type: it wraps around and never panics (`@as(u8, 200) +% 100` is `44`, `@as(i16, 200) *% 200` is `-25536`) |
 | `a / b` | quotient truncated toward zero; panic `division by zero` if `b == 0`; panic `integer overflow` for the minimum value of a signed type divided by `-1` |
 | `a % b` | remainder with the sign of `a` (so `a == (a / b) * b + a % b`); panic `division by zero` if `b == 0`; the minimum value `% -1` is `0` |
 | `a & b`, `a \| b`, `a ^ b`, `~a` | and, or, xor and not of each bit; never panic |
@@ -652,6 +655,40 @@ uses io
 fn main(io: Io) void {
     const big = 9223372036854775807
     io.print(big + 1)
+}
+```
+
+Wrapping arithmetic, `+%`, `-%` and `*%`, is for code whose definition
+says modulo 2^N, such as hashes and ciphers; elsewhere `+ - *` catch the
+mistake instead. A top-level constant cannot use it (E150): constant
+arithmetic is exact, on i64, with no type width to wrap at.
+
+```egg
+// expect: 44 255 0
+// expect: -25536 127
+// expect: 16088033396387240377
+uses io
+
+fn main(io: Io) void {
+    const a: u8 = 200
+    const b: u32 = 0xFFFF_FFFF
+    io.print(a +% 100, " ", a -% 201, " ", b +% 1)
+    const c: i16 = 200
+    const d: i8 = -128
+    io.print(c *% c, " ", d -% 1)
+    const golden: u64 = 0x9E37_79B9_7F4A_7C15
+    io.print(golden *% golden)
+}
+```
+
+```egg
+// error: E150
+uses io
+
+const K = 0xFFFF_FFFF +% 1  // constant arithmetic is exact: write 0x1_0000_0000, or compute it in a function
+
+fn main(io: Io) void {
+    io.print(K)
 }
 ```
 

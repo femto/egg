@@ -1,0 +1,45 @@
+// +% -% *% wrap modulo 2^N for every integer type and never panic; they
+// compute in C's unsigned types, so none is undefined behaviour there
+// (u16 *% u16 in particular, which C would promote to int).
+// expect: 1 0 65535
+// expect: -25536 0 -32768
+// expect: 0 4294967295 1
+// expect: -9223372036854775808 9223372036854775807 1
+// expect: 16088033396387240377 0
+// expect: 127 -128 0 255
+// expect: 44 7
+// expect: 1501368774
+uses io
+
+fn main(io: Io) void {
+    const a: u16 = 0xFFFF
+    const z: u16 = 0
+    io.print(a *% a, " ", a +% 1, " ", z -% 1)
+    const b: i16 = 200
+    const m: i16 = -32768
+    io.print(b *% b, " ", m *% m, " ", m *% -1)
+    const c: u32 = 0xFFFF_FFFF
+    io.print(c +% 1, " ", c *% c *% c, " ", c *% c)
+    const e: i64 = 9223372036854775807
+    io.print(e +% 1, " ", (e +% 1) -% 1, " ", e *% e)
+    const f: u64 = 0x9E37_79B9_7F4A_7C15
+    const s: usize = 0
+    io.print(f *% f, " ", s +% s)
+    const g: i8 = -128
+    const u: u8 = 0
+    io.print(g -% 1, " ", g *% -1, " ", u *% 255, " ", u -% 1)
+    const h: u8 = 200 +% 100
+    io.print(h, " ", 1 +% 2 *% 3)
+    io.print(fnv1a("egg"))
+}
+
+// FNV-1a, 32 bits: the kind of code wrapping arithmetic is for.
+fn fnv1a(text: str) u32 {
+    var h: u32 = 0x811C_9DC5
+    var i = 0
+    while (i < @len(text)) {
+        h = (h ^ @as(u32, text[i])) *% 0x0100_0193
+        i = i + 1
+    }
+    return h
+}

@@ -313,7 +313,7 @@ module Egg
         i += 2
       end
       t = @tokens[i]
-      t.kind == :op && %w[+ - * / % << >> & | ^].include?(t.text)
+      t.kind == :op && %w[+ - * / % +% -% *% << >> & | ^].include?(t.text)
     end
 
     # `f(1)` after `const NAME =`: a call with a value, which no type
@@ -716,7 +716,7 @@ module Egg
 
     def parse_add
       lhs = parse_mul
-      while op?("+") || op?("-")
+      while op?("+") || op?("-") || op?("+%") || op?("-%")
         t = advance
         skip_nl
         lhs = Binary.new(t.text, lhs, parse_mul, t.line, t.col)
@@ -726,7 +726,7 @@ module Egg
 
     def parse_mul
       lhs = parse_unary
-      while op?("*") || op?("/") || op?("%")
+      while op?("*") || op?("/") || op?("%") || op?("*%")
         t = advance
         skip_nl
         lhs = Binary.new(t.text, lhs, parse_unary, t.line, t.col)

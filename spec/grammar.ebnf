@@ -82,8 +82,8 @@ cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
 bit_expr    = shift_expr , { bit_op , nl , shift_expr } ;   (* the parser allows one bit_op per bit_expr: a | b & c is E002 *)
 bit_op      = "&" | "|" | "^" ;
 shift_expr  = add_expr , { ( "<<" | ">>" ) , nl , add_expr } ;
-add_expr    = mul_expr , { ( "+" | "-" ) , nl , mul_expr } ;
-mul_expr    = unary , { ( "*" | "/" | "%" ) , nl , unary } ;
+add_expr    = mul_expr , { ( "+" | "-" | "+%" | "-%" ) , nl , mul_expr } ;
+mul_expr    = unary , { ( "*" | "/" | "%" | "*%" ) , nl , unary } ;   (* p.*%2 is p.* % 2 *)
 unary       = ( "-" | "!" | "~" | "try" | "&" ) , unary | postfix ;
 postfix     = primary , { "." , IDENT , [ args ]            (* field, method call *)
                         | "." , "*"                         (* p.*: what p points to *)
