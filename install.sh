@@ -18,6 +18,12 @@ home="${EGG_HOME:-$HOME/.egg}"
 say() { printf 'egg: %s\n' "$*"; }
 die() { printf 'egg: %s\n' "$*" >&2; exit 1; }
 
+# PATH separates its entries with ':', so it cannot hold a bin under one.
+case "$home" in /*) abs="$home" ;; *) abs="$(pwd)/$home" ;; esac
+case "$abs" in
+  *:*) die "EGG_HOME ($abs) has a ':' in it, which PATH cannot hold; pick another" ;;
+esac
+
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=macos ;;
