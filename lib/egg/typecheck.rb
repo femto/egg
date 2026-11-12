@@ -1910,6 +1910,7 @@ module Egg
       mark_root_used(obj)
       expect_type("i64", check_expr(s.lo), s.lo)
       expect_type("i64", check_expr(s.hi), s.hi) unless s.hi.nil?
+      check_bounds_writes(obj, s.lo, s.hi)
       return(s.ty = "error") if t == "error"
       info = @types[t]
       if t == "str"
@@ -3104,11 +3105,25 @@ module Egg
       end
     end
 
+    # x[lo..hi]: the bounds may not change x (E117). x may be an element of
+    # a buffer (b[i][lo..hi]), which a bound that grew b would move while
+    # it is being sliced.
+    def check_bounds_writes(obj, lo, hi)
+      root = root_name(obj)
+      return if root.nil?
+      [lo, hi].compact.each do |b|
+        if inout_writes(b).any? { |p| p.is_a?(String) && p.split(".").first == root }
+          err("E117", "'#{root}' is changed by this bound of a slice of it; compute the bound into a local first", b.line, b.col)
+        end
+      end
+    end
+
     def check_slice(e, obj, lo, hi, line, col)
       t = check_expr(obj)
       check_borrowed(obj, t)
       expect_type("i64", check_expr(lo), lo)
       expect_type("i64", check_expr(hi), hi) unless hi.nil?
+      check_bounds_writes(obj, lo, hi)
       return "error" if t == "error"
       e.info[:len] = @types[t]&.len
       return "str" if t == "str"

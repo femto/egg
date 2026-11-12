@@ -1227,7 +1227,9 @@ plain values of it (`l.push(a, l.len)`, `m.mix(m.last)`), which the method
 sees as they were before the call, but not take a slice of it. And in any
 call, a place whose owned value is moved in (to a `sink` parameter) may
 appear in no other argument, whatever that argument's mode: the callee
-could free it while the other still sees it.
+could free it while the other still sees it. Nor may the bounds of a
+slice change what is sliced: `b[i][0..grow(a, &b)]` would move `b[i]`
+while slicing it.
 
 ```egg
 // expect: 3 1
