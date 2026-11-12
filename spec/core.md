@@ -332,7 +332,8 @@ fn name(p1: T1, inout p2: T2, sink p3: T3, comptime T: type) R { ... }
 ```
 
 - A parameter is passed **by value** (the function reads it and cannot
-  assign it), **`inout`** (section 12), **`sink`** or **`comptime`**
+  assign it; eggc passes one larger than 16 bytes as a pointer to it, which
+  no program can tell apart), **`inout`** (section 12), **`sink`** or **`comptime`**
   (section 14). For an owned value (section 21) a plain parameter only
   borrows it, and `sink` takes it over; a `sink` parameter of a type that
   owns nothing is E145, except in a generic instance, where T may or may
@@ -1222,8 +1223,32 @@ other argument of the same call, so a function never sees two views of the
 same memory. Places are compared by their fields: `&v.data` and `v.len`
 are separate, `&v` and `v.len` are not. A method's `inout self` is looser,
 since the other arguments are computed before the call: they may read
-plain values of it (`l.push(a, l.len)`), but not take a slice of it or
-move an owned value out of it.
+plain values of it (`l.push(a, l.len)`, `m.mix(m.last)`), which the method
+sees as they were before the call, but not take a slice of it. And in any
+call, a place whose owned value is moved in (to a `sink` parameter) may
+appear in no other argument, whatever that argument's mode: the callee
+could free it while the other still sees it.
+
+```egg
+// expect: 3 1
+uses io
+
+const Mixer = struct {
+    state: [8]u64
+    last: [8]u64
+
+    fn mix(inout self: Mixer, x: [8]u64) void {
+        self.last = self.state      // x is still the old last
+        self.state[0] = x[0]
+    }
+}
+
+fn main(io: Io) void {
+    var m = Mixer{ .state = @splat(3), .last = @splat(1) }
+    m.mix(m.last)
+    io.print(m.last[0], " ", m.state[0])
+}
+```
 
 ```egg
 // expect: 21
