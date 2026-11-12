@@ -3538,11 +3538,12 @@ module Egg
       mode == "inout" && @types[t]&.kind != :slice
     end
 
-    # A plain parameter, a read-only borrow, larger than two words goes as
-    # a const pointer: the callee cannot change it, so the copy saves
-    # nothing. Up to two words, the 64-bit C ABIs pass a value in registers
-    # anyway; above, they copy it to memory. (An extern fn's parameters are
-    # all scalars, pointers and functions, so never above.)
+    # A plain parameter, a read-only borrow, larger than 16 bytes goes as a
+    # const pointer: the callee cannot change it, so the copy saves
+    # nothing. 16 is Egg's line, not every ABI's: SysV x86-64 and AArch64
+    # pass up to 16 bytes in registers and copy more to memory; Windows x64
+    # already passes more than 8 by reference to a copy. (An extern fn's
+    # parameters are all scalars, pointers and functions, so never above.)
     BIG_PARAM = 16
 
     def by_ptr?(t, mode)
@@ -3572,6 +3573,7 @@ module Egg
       when "i16", "u16" then [2, 2]
       when "i32", "u32", "f32" then [4, 4]
       when "i64", "u64", "f64", "usize", "str" then [t == "str" ? 16 : 8, 8]
+      when "Addr" then [32, 4] # egg_addr: 28 bytes and an int32_t
       else
         info = @types[t]
         return nil if info.nil?
@@ -3579,22 +3581,38 @@ module Egg
         when :slice then [16, 8]
         when :buf then [24, 8]
         when :ptr, :fn then [8, 8]
+        when :enum then [4, 4]
         when :array
           el = c_layout(info.elem)
           el.nil? ? nil : [el[0] * info.len, el[1]]
         when :struct
           return [8, 8] if @checker.chan_end?(t)
-          size = 0
-          align = 1
-          info.fields.each do |_, ft, _|
-            fl = c_layout(ft)
-            return nil if fl.nil?
-            size = (size + fl[1] - 1) / fl[1] * fl[1] + fl[0]
-            align = fl[1] if fl[1] > align
-          end
-          [(size + align - 1) / align * align, align]
+          record_layout(info.fields.map { |_, ft, _| c_layout(ft) })
+        when :err then info.inner == "void" ? [4, 4] : record_layout([c_layout(info.inner), [4, 4]])
+        when :opt then record_layout([c_layout(info.inner), [1, 1]])
+        when :union
+          # { int32_t tag; union { payloads } u; }
+          payloads = info.fields.reject { |_, ft, _| ft == "void" }.map { |_, ft, _| c_layout(ft) }
+          return nil if payloads.include?(nil)
+          return [4, 4] if payloads.empty?
+          align = payloads.map { |l| l[1] }.max
+          size = payloads.map { |l| l[0] }.max
+          record_layout([[4, 4], [(size + align - 1) / align * align, align]])
         end
       end
+    end
+
+    # [size, alignment] of a C struct with fields of these layouts, or nil
+    # if one is unknown.
+    def record_layout(fields)
+      return nil if fields.include?(nil)
+      size = 0
+      align = 1
+      fields.each do |fl|
+        size = (size + fl[1] - 1) / fl[1] * fl[1] + fl[0]
+        align = fl[1] if fl[1] > align
+      end
+      [(size + align - 1) / align * align, align]
     end
 
     # main's capability parameters are made here: the runtime is where
@@ -4370,12 +4388,15 @@ module Egg
         codes << case a
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
                  in AddrOf[expr: place] then "&#{lvalue(place)}"
-                 in SliceExpr then coerce(in_order(slice_expr(a), a, later), a.ty, pt)
                  else
-                   if by_ptr?(pt, mode) && a.ty == pt
+                   if by_ptr?(pt, mode) && a.ty == pt && !a.is_a?(SliceExpr)
                      big_arg(a, later, inouts)
                    else
-                     coerce(in_order(expr(a), a, later), a.ty, pt)
+                     value = a.is_a?(SliceExpr) ? slice_expr(a) : expr(a)
+                     code = coerce(in_order(value, a, later), a.ty, pt)
+                     # A converted value (x to ?T, a slice to ?[]u8) is a
+                     # temporary: a big one goes by its address.
+                     by_ptr?(pt, mode) ? "&#{hoist(code, pt)}" : code
                    end
                  end
       end
