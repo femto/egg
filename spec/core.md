@@ -612,9 +612,10 @@ fn main(io: Io) void {
 ### Integer arithmetic is checked
 
 Outside `allow unsafe` code (section 18, the one place it can arise), Egg
-has no undefined behaviour. Every arithmetic operation, in every
-integer type, either produces the mathematically correct result or stops
-the program with a panic; bitwise operations work on the value's bits in
+has no undefined behaviour. Every checked arithmetic operation (`+ - * /
+%`, unary `-`), in every integer type, either produces the mathematically
+correct result or stops the program with a panic; the wrapping ones
+(`+% -% *%`) give the result modulo 2^N; bitwise operations work on the value's bits in
 two's complement and are defined for every input except a shift amount
 out of range:
 

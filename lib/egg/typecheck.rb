@@ -576,6 +576,10 @@ module Egg
       case e
       in Binary[op:, lhs:, rhs:] then WRAP_OPS.include?(op) ? e : (wrap_inside(lhs) || wrap_inside(rhs))
       in Unary[operand:] then wrap_inside(operand)
+      in Call | Builtin | MethodCall
+        found = nil
+        e.args.each { |x| found ||= wrap_inside(x) }
+        found
       else nil
       end
     end

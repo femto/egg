@@ -1,0 +1,6 @@
+// error: E150 @3
+uses io
+const K = (@as(u8, 1 +% 2))
+fn main(io: Io) void {
+    io.print(K)
+}
