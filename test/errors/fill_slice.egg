@@ -1,0 +1,10 @@
+// error: E103 @7
+// error: E105 @8
+uses io, rand
+fn main(io: Io, rng: Random) void {
+    var k: [4]i64 = @splat(0)
+    const c: [4]u8 = @splat(0)
+    rng.fill(&k[0..])
+    rng.fill(&c[0..])
+    io.print(k[0], c[0])
+}

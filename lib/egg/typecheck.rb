@@ -2929,6 +2929,15 @@ module Egg
             return "error"
           end
           a.info = {}
+          if t == "Random" && a.expr.is_a?(SliceExpr)
+            # rng.fill(&k[0..]): random bytes straight into an array (or a
+            # part of a buffer), so a key need not pass through a Buf.
+            a.ty = check_mut_slice(a.expr)
+            if a.ty != "error" && a.ty != "[]u8"
+              err("E103", "'fill' writes random bytes to a Buf(u8) or a []u8, found #{a.ty}", a.line, a.col)
+            end
+            next
+          end
           at = check_lvalue(a.expr, "resize")
           mark_root_used(a.expr)
           a.ty = at
@@ -2943,7 +2952,7 @@ module Egg
             return "error"
           end
           if (name.start_with?("append_") || name.start_with?("read") || name == "recv_from" || name == "fill") && elem != "u8"
-            err("E103", "'#{name}' writes #{name == "fill" ? "random bytes" : "text"} to a Buf(u8), found #{at}", a.line, a.col)
+            err("E103", "'#{name}' writes #{name == "fill" ? "random bytes to a Buf(u8) or a []u8" : "text to a Buf(u8)"}, found #{at}", a.line, a.col)
             return "error"
           end
           ret = opt_type(elem) if pop

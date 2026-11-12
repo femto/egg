@@ -3,6 +3,7 @@
 // expect: true true
 // expect: true
 // expect: 32 true
+// expect: true true
 uses alloc, io, rand, time
 
 fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
@@ -20,4 +21,15 @@ fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
         any = any or x != 0
     }
     io.print(@len(b), " ", any)
+    // Straight into an array, and into a part of a buffer.
+    var key: [32]u8 = @splat(0)
+    rng.fill(&key[0..])
+    var some = false
+    for (key[0..]) |x| {
+        some = some or x != 0
+    }
+    var c: Buf(u8) = a.alloc(8, 0)
+    defer a.free(c)
+    rng.fill(&c[2..6])
+    io.print(some, " ", c[0] == 0 and c[1] == 0 and c[6] == 0 and c[7] == 0)
 }
