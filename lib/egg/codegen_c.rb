@@ -5111,7 +5111,18 @@ module Egg
     def slice_expr(e)
       obj = e.obj
       t = obj.ty
-      base = place?(obj) ? lvalue(obj) : hoist(expr(obj), t)
+      base = if place?(obj)
+               lvalue(obj)
+             elsif element_place?(obj)
+               # An element of a buffer or slice (b[i], b[i].f): sliced where
+               # it is, through a pointer taken now, so a writable slice
+               # (&b[i][0..]) writes the element itself, not a copy.
+               p = tmp
+               line("#{c_type(t)} *#{p} = &#{lvalue(obj)};")
+               "(*#{p})"
+             else
+               hoist(expr(obj), t)
+             end
       lo = hoist(expr(e.lo), "i64")
       info = @types[t]
       len = if t == "str" || %i[slice buf].include?(info.kind) then "#{base}.len" else "INT64_C(#{info.len})" end
@@ -5160,6 +5171,17 @@ module Egg
       in Deref then true
       in Field[obj:, info:] then (info.nil? || (info[:enum_index].nil? && info[:union_tag].nil?)) && place?(obj)
       in Index[obj:] then place?(obj) && obj.ty != "str" && @types[obj.ty]&.kind == :array
+      else false
+      end
+    end
+
+    # A place reached through an element of a buffer or slice: b[i],
+    # b[i].f, x.items[j][k] (with b, x places). place? leaves these out,
+    # since a buffer's elements move when it grows; lvalue reaches them.
+    def element_place?(e)
+      case e
+      in Field[obj:, info:] then (info.nil? || (info[:enum_index].nil? && info[:union_tag].nil?)) && (place?(obj) || element_place?(obj))
+      in Index[obj:] then obj.ty != "str" && %i[array buf slice].include?(@types[obj.ty]&.kind) && (place?(obj) || element_place?(obj))
       else false
       end
     end

@@ -1,0 +1,52 @@
+// A slice of an element of a buffer or slice, &b[i][lo..hi], views the
+// element where it is: written through (an inout []T, rng.fill,
+// @secureZero), the element itself changes, not a copy of it.
+// expect: 9 9 1
+// expect: 0 0 7 7
+// expect: true
+// expect: 15
+// expect: 3
+uses io, alloc, rand
+
+const Ring = struct {
+    keys: Buf([4]u8)
+}
+
+fn fill9(inout xs: []u8) void {
+    var i = 0
+    while (i < @len(xs)) {
+        xs[i] = 9
+        i = i + 1
+    }
+}
+
+fn sum_first(rows: [][4]u8) i64 {
+    var s: i64 = 0
+    for (rows[1][0..3]) |x| {
+        s = s + @as(i64, x)
+    }
+    return s
+}
+
+fn main(io: Io, a: Allocator, rng: Random) void {
+    var b = a.alloc(2, [4]u8{ 1, 1, 1, 1 })
+    defer a.free(b)
+    fill9(&b[1][0..2])
+    io.print(b[1][0], " ", b[1][1], " ", b[1][2])
+    var r = Ring{ .keys = a.alloc(2, [4]u8{ 7, 7, 7, 7 }) }
+    defer a.free(r)
+    @secureZero(&r.keys[1][0..2])
+    io.print(r.keys[1][0], " ", r.keys[1][1], " ", r.keys[1][2], " ", r.keys[0][0])
+    b[0] = [4]u8{ 0, 0, 0, 0 }
+    var tries = 0
+    while (b[0][0] == 0 and b[0][1] == 0 and tries < 8) {
+        rng.fill(&b[0][0..])
+        tries = tries + 1
+    }
+    io.print(b[0][0] != 0 or b[0][1] != 0)
+    // Read-only: a slice of an element of a read-only slice.
+    const rows = [2][4]u8{ [4]u8{ 1, 1, 1, 1 }, [4]u8{ 5, 5, 5, 0 } }
+    io.print(sum_first(rows[0..]))
+    const view = b[1][1..]
+    io.print(@len(view))
+}
