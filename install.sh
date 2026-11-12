@@ -72,6 +72,9 @@ fi
 # first (the same file system, so putting it in place is a rename), so that
 # a release that does not run here leaves what is installed alone.
 mkdir -p "$home/bin"
+# Absolute and without a trailing slash, since env and the startup files
+# name it.
+home=$(cd "$home" && pwd)
 stage=$(mktemp -d "$home/.install-XXXXXX")
 trap 'rm -rf "$tmp" "$stage"' EXIT INT TERM
 tar -xzf "$tmp/$name.tar.gz" -C "$stage"
@@ -91,18 +94,23 @@ fi
 # $EGG_HOME/env (sh, bash, zsh) and env.fish put its bin on PATH, once;
 # each shell's startup file sources them, as rustup and uv do.
 # EGG_NO_MODIFY_PATH=1 leaves the startup files alone.
+# $q is $home quoted for sh ('...'\''...'), $fq for fish, whose single
+# quotes take \' and \\.
 q=$(printf '%s' "$home" | sed "s/'/'\\\\''/g")
+fq=$(printf '%s' "$home" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")
+# ${PATH:+:$PATH}: no empty entry (the current directory) when PATH is
+# empty, and no error when it is unset under set -u.
 cat > "$home/env" <<EOF
 # Puts Egg's eggc and clutch on PATH; install.sh wrote this.
-case ":\${PATH}:" in
+case ":\${PATH-}:" in
   *:'$q/bin':*) ;;
-  *) export PATH='$q/bin':"\$PATH" ;;
+  *) export PATH='$q/bin'"\${PATH:+:\$PATH}" ;;
 esac
 EOF
 cat > "$home/env.fish" <<EOF
 # Puts Egg's eggc and clutch on PATH; install.sh wrote this.
-if not contains -- '$q/bin' \$PATH
-    set -gx PATH '$q/bin' \$PATH
+if not contains -- '$fq/bin' \$PATH
+    set -gx PATH '$fq/bin' \$PATH
 end
 EOF
 
@@ -132,8 +140,8 @@ if [ -z "${EGG_NO_MODIFY_PATH:-}" ]; then
     add_line "${ZDOTDIR:-$HOME}/.zshenv" "$line"
   fi
   fish_conf="${XDG_CONFIG_HOME:-$HOME/.config}/fish"
-  if command -v fish >/dev/null 2>&1 || [ -d "$fish_conf" ]; then
-    add_line "$fish_conf/conf.d/egg.fish" "source '$q/env.fish'"
+  if command -v fish >/dev/null 2>&1 || [ "$shell_name" = fish ] || [ -d "$fish_conf" ]; then
+    add_line "$fish_conf/conf.d/egg.fish" "source '$fq/env.fish'"
   fi
   if [ -n "$changed" ]; then
     say "put $home/bin on PATH in$changed"
@@ -148,6 +156,6 @@ case ":$PATH:" in
     else
       say "open a new terminal, or run this to use eggc and clutch in this one:"
     fi
-    printf "\n    . '%s/env'        (fish: source '%s/env.fish')\n\n" "$q" "$q"
+    printf "\n    . '%s/env'        (fish: source '%s/env.fish')\n\n" "$q" "$fq"
     ;;
 esac

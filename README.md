@@ -88,8 +88,8 @@ They install the latest release in `~/.egg` (`EGG_HOME`; `EGG_VERSION=0.1.0`
 for another release) and check it against the release's SHA-256 sums. They
 put the installation's `bin` (`$EGG_HOME/bin`, by default `~/.egg/bin`) on
 your PATH: install.sh in your shells' startup files (`~/.profile`,
-`~/.bashrc`, `~/.zshenv`, fish's `conf.d`; `EGG_NO_MODIFY_PATH=1` leaves
-them alone), install.ps1 in your user PATH. Open a new terminal and run
+`~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, fish's `conf.d`;
+`EGG_NO_MODIFY_PATH=1` leaves them alone), install.ps1 in your user PATH. Open a new terminal and run
 `eggc --version`. Or download an archive from
 [Releases](https://github.com/femto/egg/releases) yourself.
 
