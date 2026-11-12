@@ -169,7 +169,7 @@ module Egg
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
                       "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
-                      "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1 }.freeze
+                      "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1 }.freeze
     # Builtins only the standard library may call: std/text's parse_float
     # is @parseF64, which the C library's strtod rounds.
     STD_BUILTINS = %w[parseF64].freeze
@@ -4050,6 +4050,8 @@ module Egg
         expected
       when "replace", "take"
         check_swap(name, args, line, col)
+      when "secureZero"
+        check_secure_zero(a)
       when "swap"
         check_elem_swap(args, line, col)
       when "forget"
@@ -4130,6 +4132,33 @@ module Egg
         err("E117", "'#{root}' is changed by this @replace and also used by its value; compute the value into a local first", v.line, v.col)
       end
       t
+    end
+
+    # @secureZero(&x) or @secureZero(&b[lo..hi]): every byte of a place, or
+    # of a writable slice, set to zero by stores the C compiler must keep,
+    # for keys and other secrets. Nothing owned: zeroing a Buf would lose
+    # its memory, so free that instead.
+    def check_secure_zero(a)
+      unless a.is_a?(AddrOf)
+        err("E121", "'@secureZero' changes a place: pass it as &x, or a part as &x[lo..hi]", a.line, a.col)
+        check_expr(a)
+        return "void"
+      end
+      a.info = {}
+      if a.expr.is_a?(SliceExpr)
+        t = check_mut_slice(a.expr)
+        a.ty = t
+        held = t == "error" ? nil : @types[t].elem
+      else
+        t = check_lvalue(a.expr, "zero")
+        mark_root_used(a.expr)
+        a.ty = t
+        held = t == "error" ? nil : t
+      end
+      if !held.nil? && owned?(held)
+        err("E103", "'@secureZero' zeros values that own nothing; #{held} owns memory, so free it (zero its bytes first with @secureZero(&b[0..]))", a.line, a.col)
+      end
+      "void"
     end
 
     # ---- helpers ------------------------------------------------------

@@ -134,7 +134,7 @@ module Egg
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
@@ -263,6 +263,18 @@ module Egg
             if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) { fflush(stdout); fputs("egg panic: cannot read the clock\\n", stderr); abort(); }
             return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
         #endif
+        }
+      C
+      # @secureZero: zeros through a volatile pointer, which the compiler
+      # must write, so they are not removed as dead stores (as a memset
+      # right before a return or a free can be).
+      "egg_secure_zero" => <<~C,
+        static void egg_secure_zero(void *p, size_t n) {
+            volatile uint8_t *v = (volatile uint8_t *)p;
+            while (n > 0) {
+                *v++ = 0;
+                n--;
+            }
         }
       C
       # Bytes from the system's cryptographic random source: getentropy
@@ -2995,7 +3007,7 @@ module Egg
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"], "egg_args_env" => ["egg_buf_resize"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
+    NO_PANIC = %w[egg_secure_zero egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
                   egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_queue egg_chan_line egg_chan_get egg_chan_line_close
                   egg_chan_tx_close
@@ -5019,6 +5031,13 @@ module Egg
         @need_str = true
         @need_error_names = true
         "egg_error_strs[#{expr(a)}]"
+      when "secureZero"
+        if a.expr.is_a?(SliceExpr)
+          s = hoist(slice_expr(a.expr), a.ty)
+          "#{helper('egg_secure_zero')}((void *)#{s}.ptr, (size_t)#{s}.len * sizeof(#{c_type(@types[a.ty].elem)}))"
+        else
+          "#{helper('egg_secure_zero')}(&#{lvalue(a.expr)}, sizeof(#{c_type(a.ty)}))"
+        end
       when "replace", "take"
         # The place first, left to right; the value cannot change it (E117).
         t = e.ty
