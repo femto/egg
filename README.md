@@ -85,10 +85,13 @@ irm https://raw.githubusercontent.com/femto/egg/main/install.ps1 | iex
 ```
 
 They install the latest release in `~/.egg` (`EGG_HOME`; `EGG_VERSION=0.1.0`
-for another release) and check it against the release's SHA-256 sums. Then
+for another release) and check it against the release's SHA-256 sums. They
 put the installation's `bin` (`$EGG_HOME/bin`, by default `~/.egg/bin`) on
-your PATH as install.sh says (install.ps1 adds it to your
-user PATH, so open a new terminal), and run `eggc --version`. Or download an archive from
+your PATH: install.sh in your shells' startup files (`~/.profile`,
+`~/.bash_profile`, `~/.bashrc`, `~/.zshenv`, fish's `conf.d`;
+`EGG_NO_MODIFY_PATH=1` leaves them alone, so have yours run
+`. ~/.egg/env` yourself), install.ps1 in your user PATH. Open a new
+terminal and run `eggc --version`. Or download an archive from
 [Releases](https://github.com/femto/egg/releases) yourself.
 
 ## Quick start
