@@ -7,8 +7,9 @@
 # where it goes (default: ~/.egg); EGG_DOWNLOAD_BASE replaces the release's
 # download URL (a mirror, or file:// for testing). Each release unpacks to
 # $EGG_HOME/egg-VERSION-PLATFORM, and $EGG_HOME/bin/eggc and clutch link to
-# the one installed last. eggc compiles through C, so it needs a C
-# compiler (cc, or CC=...).
+# the one installed last. It puts $EGG_HOME/bin on PATH in your shells'
+# startup files (EGG_NO_MODIFY_PATH=1 leaves them alone). eggc compiles
+# through C, so it needs a C compiler (cc, or CC=...).
 set -eu
 
 repo="femto/egg"
@@ -87,10 +88,66 @@ if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
   say "note: eggc compiles through C and finds no '${CC:-cc}'; install a C compiler (Xcode's command line tools, gcc or clang), or set CC"
 fi
 
+# $EGG_HOME/env (sh, bash, zsh) and env.fish put its bin on PATH, once;
+# each shell's startup file sources them, as rustup and uv do.
+# EGG_NO_MODIFY_PATH=1 leaves the startup files alone.
+q=$(printf '%s' "$home" | sed "s/'/'\\\\''/g")
+cat > "$home/env" <<EOF
+# Puts Egg's eggc and clutch on PATH; install.sh wrote this.
+case ":\${PATH}:" in
+  *:'$q/bin':*) ;;
+  *) export PATH='$q/bin':"\$PATH" ;;
+esac
+EOF
+cat > "$home/env.fish" <<EOF
+# Puts Egg's eggc and clutch on PATH; install.sh wrote this.
+if not contains -- '$q/bin' \$PATH
+    set -gx PATH '$q/bin' \$PATH
+end
+EOF
+
+# Appends line $2 to file $1 unless it is there already.
+add_line() {
+  if [ -f "$1" ] && grep -qxF "$2" "$1"; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$1")"
+  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then
+    printf '\n' >> "$1"
+  fi
+  printf '%s\n' "$2" >> "$1"
+  changed="$changed $1"
+}
+
+if [ -z "${EGG_NO_MODIFY_PATH:-}" ]; then
+  changed=""
+  line=". '$q/env'"
+  shell_name=$(basename "${SHELL:-sh}")
+  # Login shells (sh, dash, bash without a .bash_profile) read ~/.profile.
+  add_line "$HOME/.profile" "$line"
+  if [ -f "$HOME/.bash_profile" ]; then add_line "$HOME/.bash_profile" "$line"; fi
+  if [ -f "$HOME/.bashrc" ] || [ "$shell_name" = bash ]; then add_line "$HOME/.bashrc" "$line"; fi
+  # Every zsh reads .zshenv, login or not, interactive or not.
+  if command -v zsh >/dev/null 2>&1 || [ "$shell_name" = zsh ]; then
+    add_line "${ZDOTDIR:-$HOME}/.zshenv" "$line"
+  fi
+  fish_conf="${XDG_CONFIG_HOME:-$HOME/.config}/fish"
+  if command -v fish >/dev/null 2>&1 || [ -d "$fish_conf" ]; then
+    add_line "$fish_conf/conf.d/egg.fish" "source '$q/env.fish'"
+  fi
+  if [ -n "$changed" ]; then
+    say "put $home/bin on PATH in$changed"
+  fi
+fi
+
 case ":$PATH:" in
   *":$home/bin:"*) ;;
   *)
-    say "add it to your PATH, for example in ~/.profile, ~/.bashrc or ~/.zshrc:"
-    printf '\n    export PATH="%s/bin:$PATH"\n\n' "$home"
+    if [ -n "${EGG_NO_MODIFY_PATH:-}" ]; then
+      say "to put eggc and clutch on your PATH, have your shell's startup file run:"
+    else
+      say "open a new terminal, or run this to use eggc and clutch in this one:"
+    fi
+    printf "\n    . '%s/env'        (fish: source '%s/env.fish')\n\n" "$q" "$q"
     ;;
 esac

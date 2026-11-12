@@ -81,7 +81,10 @@ jobs:
         run: |
           cd dist && shasum -a 256 egg-*.tar.gz > SHA256SUMS && cd ..
           version=$(ruby -e 'require "./lib/egg/home"; require "./lib/egg/version"; print Egg::VERSION')
-          EGG_VERSION=$version EGG_HOME="$RUNNER_TEMP/egg" EGG_DOWNLOAD_BASE="file://$PWD/dist" sh install.sh
+          mkdir -p "$RUNNER_TEMP/home"
+          HOME="$RUNNER_TEMP/home" EGG_VERSION=$version EGG_HOME="$RUNNER_TEMP/egg" EGG_DOWNLOAD_BASE="file://$PWD/dist" sh install.sh
+          # A new shell finds eggc through the startup files install.sh wrote.
+          HOME="$RUNNER_TEMP/home" bash -lc 'eggc --version'
           export PATH="$RUNNER_TEMP/egg/bin:$PATH"
           cd "$RUNNER_TEMP" && clutch new --lib smoke && cd smoke && clutch test
       - if: inputs.release
