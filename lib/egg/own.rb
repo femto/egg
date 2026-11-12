@@ -928,6 +928,17 @@ module Egg
       in Builtin[name: "forget", args:, line:, col:]
         path = path_of(args[0])
         path.nil? ? walk(args[0]) : forget(path, line, col)
+      in Builtin[name: "secureZero", args:, line:, col:]
+        # A write to the place (or the slice's variable): no slice of it
+        # may be in use.
+        target = args[0].expr
+        place = target.is_a?(SliceExpr) ? target.obj : target
+        check_slices(place_path(place), line, col, "zeroed", place_root(place))
+        walk_place(place)
+        if target.is_a?(SliceExpr)
+          walk(target.lo)
+          walk(target.hi) unless target.hi.nil?
+        end
       in Builtin[name: "replace" | "take" => name, args:, line:, col:]
         place = args[0].expr
         check_slices(place_path(place), line, col, "changed", place_root(place))

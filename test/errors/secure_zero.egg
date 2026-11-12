@@ -1,0 +1,15 @@
+// error: E111 @7
+// error: E121 @11
+// error: E105 @12
+// error: E103 @13
+uses io, alloc
+fn main(io: Io, a: Allocator) void {
+    var k: [4]u8 = @splat(1)
+    const c: [4]u8 = @splat(1)
+    var b = a.alloc(4, @as(u8, 1))
+    defer a.free(b)
+    @secureZero(k)
+    @secureZero(&c)
+    @secureZero(&b)
+    io.print(k[0], c[0])
+}

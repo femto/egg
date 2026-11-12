@@ -1227,7 +1227,9 @@ plain values of it (`l.push(a, l.len)`, `m.mix(m.last)`), which the method
 sees as they were before the call, but not take a slice of it. And in any
 call, a place whose owned value is moved in (to a `sink` parameter) may
 appear in no other argument, whatever that argument's mode: the callee
-could free it while the other still sees it.
+could free it while the other still sees it. Nor may the bounds of a
+slice change what is sliced: `b[i][0..grow(a, &b)]` would move `b[i]`
+while slicing it.
 
 ```egg
 // expect: 3 1
@@ -1655,6 +1657,7 @@ Builtins start with `@`; any other name is E112.
 | `@take(&p)` | `@replace(&p, Buf(T).empty)` for a buffer place p (section 21) |
 | `@swap(&xs, i, j)` | exchanges elements i and j of a buffer, array or inout slice (section 21) |
 | `@forget(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
+| `@secureZero(&x)`, `@secureZero(&x[lo..hi])` | sets every byte of a place, or of a writable slice, to zero with stores the C compiler must keep, even when nothing reads the place again (where it may drop a plain assignment): for keys and other secrets, usually as `defer @secureZero(&key)`; the place must own nothing (E103: free a `Buf`, after zeroing its bytes with `&b[0..]`) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 | `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
@@ -1670,6 +1673,26 @@ Builtins for pointers, which need `allow unsafe` (section 18):
 | `@strPtr(t)` | a `*u8` to the bytes of the text t, a `str`, `[]u8` or `Buf(u8)` (not 0-terminated; do not write through it) |
 | `@bufPtr(b)` | a `*T` to the elements of the buffer `b: Buf(T)`, which may be written up to `@len(b)` |
 | `@sliceFromPtr(p, n)` | the `n: i64` elements at `p: *T` as a `[]T`: an argument or a local slice only (E116); a negative n panics |
+
+```egg
+// expect: 7
+// expect: 0 0
+// expect: 5 0 0 5
+uses io, alloc
+
+fn main(io: Io, a: Allocator) void {
+    var key: [32]u8 = @splat(7)
+    defer @secureZero(&key)          // zeroed when main returns
+    io.print(key[0])
+    var pair = [2]i64{ 3, 4 }
+    @secureZero(&pair)
+    io.print(pair[0], " ", pair[1])
+    var b = a.alloc(8, @as(u8, 5))
+    defer a.free(b)
+    @secureZero(&b[2..6])
+    io.print(b[1], " ", b[2], " ", b[5], " ", b[6])
+}
+```
 
 v1's `@print` is gone: printing is io, so it is `io.print(x)` with the io
 capability (section 17). `@print` is E112.

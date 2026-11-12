@@ -1,0 +1,24 @@
+// error: E117 @20
+// error: E117 @22
+// A bound that changes the variable being sliced: growing b would move
+// b[1] while it is sliced.
+uses io, alloc
+
+fn grow(a: Allocator, inout b: Buf([4]u8)) i64 {
+    a.push(&b, [4]u8{ 1, 1, 1, 1 })
+    return 2
+}
+
+fn fill9(inout xs: []u8) void {
+    xs[0] = 9
+}
+
+fn main(io: Io, a: Allocator) void {
+    var b = a.alloc(2, [4]u8{ 1, 1, 1, 1 })
+    defer a.free(b)
+    const n = grow(a, &b)
+    fill9(&b[1][0..grow(a, &b)])
+    io.print(b[1][0], n)
+    const s = b[0][grow(a, &b)..]
+    io.print(@len(s))
+}

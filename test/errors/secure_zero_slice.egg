@@ -1,0 +1,8 @@
+// error: E149 @6
+uses io
+fn main(io: Io) void {
+    var k: [4]u8 = @splat(1)
+    const s = k[0..2]
+    @secureZero(&k)
+    io.print(s[0])
+}
