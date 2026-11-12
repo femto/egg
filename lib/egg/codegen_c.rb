@@ -21,7 +21,8 @@
 # Value types map to C types passed by value: a struct to a C struct, an
 # array to a struct wrapping a C array (so it copies like a value), an
 # error union !T to { T value; int32_t err; } (err 0 = no error). A slice
-# is { const T *ptr; int64_t len; }; an inout parameter is a pointer. A
+# is { const T *ptr; int64_t len; }; an inout parameter is a pointer, and
+# so is a plain one larger than 16 bytes (const: by_ptr?). A
 # pointer *T is a C pointer, a function type a C function pointer, an
 # integer type its <stdint.h> type (usize is size_t). Structs and unions
 # are tagged and declared first, so a struct may point to itself.
@@ -3477,7 +3478,7 @@ module Egg
         emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
       when :fn
         (info.fields + [info.inner]).each { |t| emit_type(t, done) unless %i[struct union].include?(@types[t]&.kind) }
-        params = info.fields.empty? ? "void" : info.fields.each_with_index.map { |t, i| by_ref?(t, info.modes[i]) ? "#{c_type(t)} *" : c_type(t) }.join(", ")
+        params = info.fields.empty? ? "void" : info.fields.each_with_index.map { |t, i| param_c_type(t, info.modes[i]) }.join(", ")
         @out << "typedef #{c_type(info.inner)} (*#{info.c_name})(#{params});\n"
       end
     end
@@ -3490,7 +3491,10 @@ module Egg
         t, mode = sig.params[i]
         # restrict: GCC, for one, reloads a Buf's length after every byte
         # written through its pointer, since a u8 may alias anything.
-        by_ref?(t, mode) ? "#{c_type(t)} *EGG_RESTRICT v_#{p.name}" : "#{c_type(t)} v_#{p.name}"
+        if by_ref?(t, mode) then "#{c_type(t)} *EGG_RESTRICT v_#{p.name}"
+        elsif by_ptr?(t, mode) then "const #{c_type(t)} *v_#{p.name}"
+        else "#{c_type(t)} v_#{p.name}"
+        end
       end
       params_text = params.empty? ? "void" : params.join(", ")
       # Not static: an unused function is not an error in Egg, and external
@@ -3513,7 +3517,7 @@ module Egg
       runtime = sig.func.params.reject { |p| p.mode == "comptime" }
       runtime.each_with_index do |p, i|
         t, mode = sig.params[i]
-        @locals.last[p.name] = [t, by_ref?(t, mode)]
+        @locals.last[p.name] = [t, by_ref?(t, mode) || by_ptr?(t, mode)]
       end
       mark(sig.func.line)
       @out << signature(sig) << " {\n"
@@ -3532,6 +3536,65 @@ module Egg
     # passed by value and its elements are written through it.
     def by_ref?(t, mode)
       mode == "inout" && @types[t]&.kind != :slice
+    end
+
+    # A plain parameter, a read-only borrow, larger than two words goes as
+    # a const pointer: the callee cannot change it, so the copy saves
+    # nothing. Up to two words, the 64-bit C ABIs pass a value in registers
+    # anyway; above, they copy it to memory. (An extern fn's parameters are
+    # all scalars, pointers and functions, so never above.)
+    BIG_PARAM = 16
+
+    def by_ptr?(t, mode)
+      mode.nil? && (c_size(t) || 0) > BIG_PARAM
+    end
+
+    # The C type of a parameter in a function type: a pointer for inout or
+    # a big plain one, else the value.
+    def param_c_type(t, mode)
+      if by_ref?(t, mode) then "#{c_type(t)} *"
+      elsif by_ptr?(t, mode) then "const #{c_type(t)} *"
+      else c_type(t)
+      end
+    end
+
+    # The size of t's C type on a 64-bit target, or nil for a kind not
+    # sized here (which then stays by value).
+    def c_size(t)
+      (@c_sizes ||= {})[t] ||= [c_layout(t)]
+      @c_sizes[t][0]&.first
+    end
+
+    # [size, alignment] of t's C type, or nil.
+    def c_layout(t)
+      case t
+      when "i8", "u8", "bool" then [1, 1]
+      when "i16", "u16" then [2, 2]
+      when "i32", "u32", "f32" then [4, 4]
+      when "i64", "u64", "f64", "usize", "str" then [t == "str" ? 16 : 8, 8]
+      else
+        info = @types[t]
+        return nil if info.nil?
+        case info.kind
+        when :slice then [16, 8]
+        when :buf then [24, 8]
+        when :ptr, :fn then [8, 8]
+        when :array
+          el = c_layout(info.elem)
+          el.nil? ? nil : [el[0] * info.len, el[1]]
+        when :struct
+          return [8, 8] if @checker.chan_end?(t)
+          size = 0
+          align = 1
+          info.fields.each do |_, ft, _|
+            fl = c_layout(ft)
+            return nil if fl.nil?
+            size = (size + fl[1] - 1) / fl[1] * fl[1] + fl[0]
+            align = fl[1] if fl[1] > align
+          end
+          [(size + align - 1) / align * align, align]
+        end
+      end
     end
 
     # main's capability parameters are made here: the runtime is where
@@ -4074,9 +4137,14 @@ module Egg
       in MethodCall[obj:, info:]
         recv = []
         unless info[:static]
-          recv << (info[:self_inout] ? "&#{lvalue(obj)}" : in_order(expr(obj), obj, info[:args]))
+          self_t, self_mode = info[:sig].params[0]
+          recv << if info[:self_inout] then "&#{lvalue(obj)}"
+                  elsif by_ptr?(self_t, self_mode) then big_arg(obj, info[:args], [])
+                  else in_order(expr(obj), obj, info[:args])
+                  end
         end
-        call(info[:c_name], info[:args], info[:params], recv, e.ty)
+        writes = info[:self_inout] ? [obj] : []
+        call(info[:c_name], info[:args], info[:params], recv, e.ty, writes)
       in Builtin[name:, args:]
         builtin(e, name, args)
       in Field[obj:, name:, info:]
@@ -4290,22 +4358,54 @@ module Egg
       @wanted << sig
     end
 
-    def call(c_name, args, params, receiver, ret)
+    # writes: the places the call changes besides its &x arguments (an
+    # inout self's receiver).
+    def call(c_name, args, params, receiver, ret, writes = [])
       want(c_name)
       codes = receiver.dup
+      inouts = writes + args.filter_map { |a| a.expr if a.is_a?(AddrOf) && !a.expr.is_a?(SliceExpr) }
       args.each_with_index do |a, i|
-        pt = params[i][0]
+        pt, mode = params[i]
         later = args[(i + 1)..]
         codes << case a
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
                  in AddrOf[expr: place] then "&#{lvalue(place)}"
                  in SliceExpr then coerce(in_order(slice_expr(a), a, later), a.ty, pt)
-                 else coerce(in_order(expr(a), a, later), a.ty, pt)
+                 else
+                   if by_ptr?(pt, mode) && a.ty == pt
+                     big_arg(a, later, inouts)
+                   else
+                     coerce(in_order(expr(a), a, later), a.ty, pt)
+                   end
                  end
       end
       text = "#{c_name}(#{codes.join(', ')})"
       return text if ret == "void"
       hoist(text, ret)
+    end
+
+    # A big plain argument, passed by pointer: to the place itself when it
+    # is one and nothing in the call changes it, else to a copy. A copy is
+    # needed when a later argument writes it (as in_order hoists), and when
+    # the call changes the variable it is part of (only an inout self may,
+    # E117: m.mix(m.last) must see m.last as it was before the call).
+    def big_arg(a, later, inouts)
+      root = place_root(a)
+      unless root.nil? || later.any? { |l| !@checker.inout_writes(l).empty? } || inouts.any? { |w| place_root(w) != root ? false : true }
+        return "&#{lvalue(a)}"
+      end
+      "&#{hoist(expr(a), a.ty)}"
+    end
+
+    # The variable a place expression (x, x.f, x[i], x.f[i].g) is part of,
+    # or nil when it is not such a place.
+    def place_root(e)
+      case e
+      in Var[name:, info:] then info && (info[:fn_ref] || info[:const]) ? nil : name
+      in Field[obj:, info:] then info && (info[:buf_empty] || info[:union_tag] || info[:enum_index] || info[:const]) ? nil : place_root(obj)
+      in Index[obj:] then @types[obj.ty]&.kind == :slice ? nil : place_root(obj)
+      else nil
+      end
     end
 
     # The error id of what an egg_fs_ helper returned; 0 is success.
@@ -4427,7 +4527,7 @@ module Egg
                ft = @types[args[0].ty]
                name = "egg_spawn_#{@spawns.length}"
                fields = ["#{c_type(args[0].ty)} f;"] + ft.fields.each_with_index.map { |t, i| "#{c_type(t)} a#{i};" }
-               call_args = ft.fields.each_index.map { |i| "c.a#{i}" }.join(", ")
+               call_args = ft.fields.each_with_index.map { |t, i| by_ptr?(t, ft.modes[i]) ? "&c.a#{i}" : "c.a#{i}" }.join(", ")
                helper("egg_thread_base")
                @spawns << <<~C
                  typedef struct { #{fields.join(' ')} } #{name};
