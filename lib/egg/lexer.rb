@@ -12,7 +12,7 @@ module Egg
                 struct enum union switch select for break continue try catch orelse error inout sink comptime uses allow extern link owned null defer errdefer].freeze
 
   # Longest operators first so "==" wins over "=" and ".." over ".".
-  OPERATORS = %w[== != <= >= => << >> .. ( ) { } [ ] , : = < > + - * / % ! ? . | & ^ ~].freeze
+  OPERATORS = %w[== != <= >= => << >> .. +% -% *% ( ) { } [ ] , : = < > + - * / % ! ? . | & ^ ~].freeze
 
   # For the lexer's lookups: a hash finds a keyword or an operator at once,
   # where scanning the lists costs a comparison (and for operators a
@@ -272,7 +272,8 @@ module Egg
 
     # Longest first, as OPERATORS is ordered: "==" wins over "=".
     def lex_operator
-      if (op = OPERATORS_2[@src[@pos, 2]])
+      # p.*%2 is p.* % 2: after a ".", "*" is a dereference.
+      if (op = OPERATORS_2[@src[@pos, 2]]) && !(op == "*%" && @tokens.last&.kind == :op && @tokens.last.text == ".")
         push(:op, op)
         @col += 2
         @pos += 2

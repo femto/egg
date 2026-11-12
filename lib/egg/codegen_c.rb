@@ -3003,6 +3003,10 @@ module Egg
 
     ARITH_FN = { "+" => "egg_add", "-" => "egg_sub", "*" => "egg_mul", "/" => "egg_div", "%" => "egg_mod" }.freeze
     ARITH_NAME = { "+" => "add", "-" => "sub", "*" => "mul", "/" => "div", "%" => "mod" }.freeze
+    WRAP_C = { "+%" => "+", "-%" => "-", "*%" => "*" }.freeze
+    # The unsigned C type a wrapping operation computes in; 8 and 16 bits
+    # use unsigned int.
+    WRAP_UNSIGNED = { "i32" => "uint32_t", "u32" => "uint32_t", "i64" => "uint64_t", "u64" => "uint64_t", "usize" => "size_t" }.freeze
 
     # Integer types: [C type, minimum, maximum]. i64 uses the helpers above;
     # the others get theirs generated (int_helper) when used.
@@ -4207,6 +4211,16 @@ module Egg
         b = expr(rhs)
         return "(#{a} #{op} #{b})" if FLOAT_C.key?(lhs.ty)
         return "#{int_op(op, lhs.ty)}(#{a}, #{b})"
+      end
+      if WRAP_C.key?(op)
+        # In the unsigned type of the width, which wraps in C, then back
+        # (to a signed type, two's complement in every C compiler eggc
+        # uses). 8 and 16 bits go through unsigned int: C would promote
+        # them to int, where 65535 * 65535 overflows.
+        a = in_order(expr(lhs), lhs, [rhs])
+        ct = INT_C[lhs.ty][0]
+        ut = WRAP_UNSIGNED[lhs.ty] || "unsigned int"
+        return "((#{ct})((#{ut})(#{a}) #{WRAP_C[op]} (#{ut})(#{expr(rhs)})))"
       end
       if op == "&" || op == "|" || op == "^"
         a = in_order(expr(lhs), lhs, [rhs])

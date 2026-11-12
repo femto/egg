@@ -1,0 +1,7 @@
+// error: E103 @5
+// error: E103 @6
+uses io
+fn main(io: Io) void {
+    io.print(1.5 +% 2.0)
+    io.print(@as(u8, 1) *% @as(u16, 2))
+}

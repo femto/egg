@@ -128,7 +128,7 @@
         { "name": "keyword.operator.bitwise.egg", "match": "<<|>>|\\^|~|(?<=\\s)[&|](?=\\s)" },
         { "name": "keyword.operator.comparison.egg", "match": "==|!=|<=|>=|<|>" },
         { "name": "keyword.operator.assignment.egg", "match": "=" },
-        { "name": "keyword.operator.arithmetic.egg", "match": "\\+|-|\\*|/|%" },
+        { "name": "keyword.operator.arithmetic.egg", "match": "\\+%|-%|\\*%|\\+|-|\\*|/|%" },
         { "name": "keyword.operator.logical.egg", "match": "!" },
         { "name": "keyword.operator.type.egg", "match": "\\?" }
       ]
