@@ -4496,7 +4496,9 @@ module Egg
     def cap_call(m, obj, args, ret)
       recv = expr(obj)
       return chan_call(m, obj, recv, args, ret) if m.start_with?("Sender.", "Receiver.") || m == "Threads.channel"
-      codes = args.each_with_index.map { |a, i| in_order(expr(a), a, args[(i + 1)..]) }
+      codes = args.each_with_index.map do |a, i|
+        a.is_a?(AddrOf) && a.expr.is_a?(SliceExpr) ? slice_expr(a.expr) : in_order(expr(a), a, args[(i + 1)..])
+      end
       text = case m
              when "Io.print"
                # All arguments are computed first (codes), then printed one
@@ -4535,8 +4537,14 @@ module Egg
                "#{helper('egg_clock_monotonic')}()"
              when "Random.fill"
                b = tmp
-               line("#{c_type(args[0].ty)} *#{b} = #{codes[0]};")
-               "#{helper('egg_random_fill')}(#{b}->ptr, #{b}->len)"
+               if args[0].expr.is_a?(SliceExpr)
+                 # A writable view: its pointer is const only in the type.
+                 line("#{c_type(args[0].ty)} #{b} = #{codes[0]};")
+                 "#{helper('egg_random_fill')}((uint8_t *)#{b}.ptr, #{b}.len)"
+               else
+                 line("#{c_type(args[0].ty)} *#{b} = #{codes[0]};")
+                 "#{helper('egg_random_fill')}(#{b}->ptr, #{b}->len)"
+               end
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
              when "Args.env"
