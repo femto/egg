@@ -270,19 +270,22 @@ module Egg
       # and clobbers memory, so the compiler must assume the zeros are read;
       # the memset itself stays wide stores, 8 to 15 times faster than a
       # volatile byte loop (glibc's explicit_bzero, BoringSSL's
-      # OPENSSL_cleanse). MSVC has no GNU asm, so there the bytes are
-      # written through a volatile pointer.
+      # OPENSSL_cleanse). A compiler without GNU asm (MSVC, a plain C99
+      # one) writes the bytes through a volatile pointer instead. An empty
+      # slice of a Buf may pass NULL, which memset may not be given.
       "egg_secure_zero" => <<~C,
         static void egg_secure_zero(void *p, size_t n) {
-        #if defined(_MSC_VER) && !defined(__clang__)
+        #if defined(__GNUC__) || defined(__clang__)
+            if (n > 0) {
+                memset(p, 0, n);
+                __asm__ __volatile__("" : : "r"(p) : "memory");
+            }
+        #else
             volatile uint8_t *v = (volatile uint8_t *)p;
             while (n > 0) {
                 *v++ = 0;
                 n--;
             }
-        #else
-            memset(p, 0, n);
-            __asm__ __volatile__("" : : "r"(p) : "memory");
         #endif
         }
       C
