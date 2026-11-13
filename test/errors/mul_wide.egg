@@ -1,0 +1,13 @@
+// error: E103 @9
+// error: E103 @10
+// error: E103 @11
+uses io
+
+fn main(io: Io) void {
+    const x: u32 = 3
+    const y: i64 = 4
+    const a = @mulWide(x, @as(u64, 2))
+    const b = @mulWide(@as(u64, 2), y)
+    const c = @mulWide(1.5, @as(u64, 2))
+    io.print(a[0], b[0], c[0])
+}
