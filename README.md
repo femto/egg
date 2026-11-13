@@ -13,7 +13,7 @@ Egg compiles to portable C99. It is designed to be written by AI and read by peo
 - **Capabilities, not ambient power.** The core language can't do IO or allocate. A file declares `uses io, alloc`, and `main` passes the values down, so a signature shows what a function can touch.
 - **Ownership without a GC.** A buffer has one owner. Use after free, double free and leaks are compile errors, with no lifetime annotations.
 - **No undefined behaviour** outside `allow unsafe` code. Integer overflow, integer division by zero and out-of-bounds indexing panic.
-- **Fast enough to be a systems language.** Near C on most programs, with every check on ([numbers](#performance)).
+- **Fast enough to be a systems language.** Near C on most programs, with every check on, and 1.3 to 5.6 times the Rust port's throughput on a real web app ([numbers](#performance)).
 - **Threads without shared data.** Owned values move between threads over channels.
 
 ## Performance
@@ -43,17 +43,27 @@ A larger program: [once-campfire-egg](https://github.com/femto/once-campfire-egg
 ports Basecamp's ONCE Campfire chat to Egg, measured with Basecamp's
 [benchmark harness](https://github.com/basecamp/once-campfire-verification)
 against the Rust port, whose HTML it matches byte for byte. So far it serves
-the benchmark's routes, not the whole app. With both apps' caches on, on
-GitHub's ubuntu-latest (2 cores for the app), in requests per second
-([run 41987883777](https://github.com/femto/once-campfire-egg/actions/runs/41987883777),
-2026-11-05, Egg at `f9ae6bf`, Rust's published image at `6dae2fd`):
+the benchmark's routes, not the whole app. With both apps' caches on, in
+requests per second (i7-9700K, OrbStack Linux VM, app on 4 vCPUs and load
+generator on the other 4, 3 alternating rounds, 16 clients; Egg at `e152b5b`,
+Rust's published image at `6dae2fd`;
+[upstream PR](https://github.com/basecamp/once-campfire-verification/pull/14)):
 
-| route | Rust | Egg |
-| --- | ---: | ---: |
-| room page | 12,710 | 41,833 |
-| search | 14,138 | 50,540 |
-| static CSS | 48,060 | 108,761 |
-| post a message | 1,818 | 1,771 |
+| route | Rust | Egg | Egg/Rust |
+| --- | ---: | ---: | ---: |
+| room page | 13,789 | 49,051 | **3.6×** |
+| messages page | 11,807 | 45,301 | **3.8×** |
+| sidebar | 12,613 | 61,308 | **4.9×** |
+| search | 12,620 | 52,558 | **4.2×** |
+| avatar | 42,810 | 56,726 | **1.3×** |
+| static CSS | 49,718 | 99,995 | **2.0×** |
+| /up | 21,688 | 120,968 | **5.6×** |
+| post a message | 1,452 | 2,409 | **1.7×** |
+
+Every response was valid, and the harness's write audit verified every
+acknowledged post. With 1,000 WebSocket clients on one busy room, Egg
+delivered 209 messages/s to every client against Rust's 186, at 47 MiB peak
+memory against 136.
 
 Without its caches Egg renders and gzips every page and is far slower on
 them; the [benchmark notes](https://github.com/femto/once-campfire-egg/blob/main/docs/benchmark.md)
