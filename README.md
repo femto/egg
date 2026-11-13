@@ -263,10 +263,17 @@ with `PREFIX/lib/std`), and a native clutch runs the eggc beside it.
 `eggc --version` and `clutch --version` say the one version they share.
 
 **Releasing.** Set `VERSION` in `lib/egg/version.rb`, merge it, then push
-the tag `v` + that version (`git tag v0.1.0 && git push origin v0.1.0`). The
-Release workflow refuses a tag that is not the version, builds and checks
-the binaries on every platform (the Native workflow), and publishes them
-with `SHA256SUMS`, `install.sh` and `install.ps1` as a GitHub release.
+the tag `v` + that version:
+
+```sh
+v=v$(ruby -Ilib -regg/version -e 'print Egg::VERSION')
+git tag "$v" && git push origin "$v"
+```
+
+The Release workflow refuses a tag that is not the version, builds and
+checks the binaries on every platform (the Native workflow), and
+publishes them with `SHA256SUMS`, `install.sh` and `install.ps1` as a
+GitHub release.
 
 The VS Code extension prefers `build/bin/eggc` while it is newer than every
 compiler source, and falls back to `bin/eggc` on Ruby once you edit one;
