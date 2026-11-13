@@ -125,9 +125,12 @@ def bad_line_marks(c_source, src, path, skipped = [])
   prev = ""
   texts.each_with_index do |text, i|
     next if text.empty?
-    # A line continues the previous one after "," "(" "[" or an operator, and
-    # when it is a `.field = value` line of a multi-line struct literal.
-    continued = prev.match?(/(,|\(|\[|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/)
+    # A line continues the previous one after "," "(" "[" or an operator,
+    # when it is a `.field = value` line of a multi-line struct literal, and
+    # when it is the first element of a multi-line array literal (after
+    # `[N]T{`, a type right against its brace, unlike a block's `) {`).
+    continued = prev.match?(/(,|\(|\[|\band|\bor|[-+*\/%<>=!])\z/) || text.match?(/\A\.\w+\s*=(?![=>])/) ||
+                prev.match?(/\[\w*\][\w\[\].]*\{\z/)
     # An if with a value split over lines: its branches and its else.
     # (String literals are blanked first, so a " else " in one does not count.)
     bare = prev.gsub(/"(?:\\.|[^"\\])*"/, '""')

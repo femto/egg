@@ -1,0 +1,60 @@
+// @mulWide(a, b): the 128-bit product of two u64 as [2]u64{ low, high },
+// against products computed with Ruby integers: zero, one, the largest
+// u64 squared, 2^32 squared, and random values; and two products added
+// as 128-bit numbers, carry and all. The test suite runs it
+// built normally (unsigned __int128 under gcc and clang) and in debug
+// with EGG_PORTABLE (four 32-bit products), so both paths are checked.
+// expect: 0 0
+// expect: 1 0
+// expect: 1 18446744073709551614
+// expect: 18446744073709551614 1
+// expect: 0 1
+// expect: 18446744065119617025 0
+// expect: 2465395958572223728 81621149086635842
+// expect: 16045690984503098046 8022845492251549023
+// expect: 4309411784670170944 2542121028733760735
+// expect: 12083834523784442848 4401719692785025457
+// expect: 3847022776394158601 2558360027420055359
+// expect: 4922045381849030062 6493344754380044663
+// expect: carried: 2^128 - 2^64
+uses io
+
+fn main(io: Io) void {
+    const pairs = [12][2]u64{
+        [2]u64{ 0, 0 },
+        [2]u64{ 1, 1 },
+        [2]u64{ 18446744073709551615, 18446744073709551615 },
+        [2]u64{ 18446744073709551615, 2 },
+        [2]u64{ 4294967296, 4294967296 },
+        [2]u64{ 4294967295, 4294967295 },
+        [2]u64{ 81985529216486895, 18364758544493064720 },
+        [2]u64{ 16045690984503098046, 9223372036854775809 },
+        [2]u64{ 3617264691084272032, 12963899528013399522 },
+        [2]u64{ 7631265484108281488, 10640095908876739470 },
+        [2]u64{ 13426863218838564065, 3514850185411256873 },
+        [2]u64{ 10572164659388749870, 11329852752533506881 },
+    }
+    for (pairs) |p| {
+        const w = @mulWide(p[0], p[1])
+        io.print(w[0], " ", w[1])
+    }
+    io.print(carried())
+}
+
+// (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 2^64, from the halves: the low ones,
+// 1 and 2^64 - 1, wrap to 0 and carry 1 into the high one, 2^64 - 2.
+fn carried() str {
+    const m: u64 = 18446744073709551615
+    const p = @mulWide(m, m)
+    const q = @mulWide(m, 1)
+    const low = p[0] +% q[0]
+    var carry: u64 = 0
+    if (low < p[0]) {
+        carry = 1
+    }
+    const high = p[1] + q[1] + carry
+    if (carry == 1 and low == 0 and high == m) {
+        return "carried: 2^128 - 2^64"
+    }
+    return "wrong"
+}

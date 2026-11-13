@@ -1658,6 +1658,7 @@ Builtins start with `@`; any other name is E112.
 | `@swap(&xs, i, j)` | exchanges elements i and j of a buffer, array or inout slice (section 21) |
 | `@forget(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
 | `@secureZero(&x)`, `@secureZero(&x[lo..hi])` | sets every byte of a place, or of a writable slice, to zero with stores the C compiler must keep, even when nothing reads the place again (where it may drop a plain assignment): for keys and other secrets, usually as `defer @secureZero(&key)`; the place must own nothing (E103: free a `Buf`, after zeroing its bytes with `&b[0..]`) |
+| `@mulWide(a, b)` | the whole product of two `u64`, which can need 128 bits, as `[2]u64{ low, high }`: `a * b` is `low + high * 2^64`; for bignum and field arithmetic, whose limbs are then 64 bits (`*` panics past 64 bits and `*%` drops the high half) |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 | `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
@@ -1691,6 +1692,20 @@ fn main(io: Io, a: Allocator) void {
     defer a.free(b)
     @secureZero(&b[2..6])
     io.print(b[1], " ", b[2], " ", b[5], " ", b[6])
+}
+```
+
+```egg
+// expect: 1 18446744073709551614
+// expect: 6 0
+uses io
+
+fn main(io: Io) void {
+    const m: u64 = 18446744073709551615            // 2^64 - 1
+    const w = @mulWide(m, m)                       // 2^128 - 2^65 + 1
+    io.print(w[0], " ", w[1])
+    const small = @mulWide(2, 3)
+    io.print(small[0], " ", small[1])
 }
 ```
 

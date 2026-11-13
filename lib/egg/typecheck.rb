@@ -169,7 +169,8 @@ module Egg
     BUILTIN_ARITY = { "len" => 1, "sizeOf" => 1, "typeName" => 1, "splat" => 1, "as" => 2,
                       "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
-                      "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1 }.freeze
+                      "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1,
+                      "mulWide" => 2 }.freeze
     # Builtins only the standard library may call: std/text's parse_float
     # is @parseF64, which the C library's strtod rounds.
     STD_BUILTINS = %w[parseF64].freeze
@@ -4038,6 +4039,17 @@ module Egg
         end
         e.info[:len] = @types[t]&.len
         "i64"
+      when "mulWide"
+        # @mulWide(a, b): the whole 128-bit product of two u64, as
+        # [2]u64{ low half, high half }; for bignum and field arithmetic.
+        args.each do |x|
+          t = check_expr(x, "u64")
+          err("E103", "@mulWide multiplies two u64, found #{t}", x.line, x.col) unless t == "u64" || t == "error"
+        end
+        info = register("[2]u64", :array, line, col)
+        info.elem = "u64"
+        info.len = 2
+        "[2]u64"
       when "sizeOf"
         t = type_arg(a)
         e.info[:type] = t

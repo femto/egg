@@ -134,7 +134,7 @@ module Egg
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_mul_wide egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
@@ -286,6 +286,40 @@ module Egg
                 *v++ = 0;
                 n--;
             }
+        #endif
+        }
+      C
+      # @mulWide: the 128-bit product of two u64, low half returned, high
+      # half through hi. gcc and clang have unsigned __int128 (one mul
+      # instruction, or mul and umulh); MSVC has _umul128 on x64 and
+      # __umulh on arm64. Elsewhere, and with EGG_PORTABLE (so the test
+      # suite's debug build checks it), four 32-bit products.
+      "egg_mul_wide" => <<~C,
+        #if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_ARM64))
+        #include <intrin.h>
+        #endif
+        #if defined(__SIZEOF_INT128__) && !defined(EGG_PORTABLE)
+        /* __extension__: -std=c99 -pedantic -Werror (the default build)
+           otherwise rejects the type as not ISO C. */
+        __extension__ typedef unsigned __int128 egg_u128;
+        #endif
+        static uint64_t egg_mul_wide(uint64_t a, uint64_t b, uint64_t *hi) {
+        #if defined(__SIZEOF_INT128__) && !defined(EGG_PORTABLE)
+            egg_u128 p = (egg_u128)a * b;
+            *hi = (uint64_t)(p >> 64);
+            return (uint64_t)p;
+        #elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64) && !defined(EGG_PORTABLE)
+            return _umul128(a, b, hi);
+        #elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_ARM64) && !defined(EGG_PORTABLE)
+            *hi = __umulh(a, b);
+            return a * b;
+        #else
+            uint64_t a0 = a & 0xFFFFFFFFu, a1 = a >> 32, b0 = b & 0xFFFFFFFFu, b1 = b >> 32;
+            uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+            /* The middle column: at most 3 (2^32 - 1), no overflow. */
+            uint64_t mid = (p00 >> 32) + (p01 & 0xFFFFFFFFu) + (p10 & 0xFFFFFFFFu);
+            *hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+            return (mid << 32) | (p00 & 0xFFFFFFFFu);
         #endif
         }
       C
@@ -3019,7 +3053,7 @@ module Egg
                     "egg_udp_send" => %w[egg_net_base egg_net_last],
                     "egg_args_len" => ["egg_args_state"], "egg_args_get" => ["egg_args_state"], "egg_args_env" => ["egg_buf_resize"] }.freeze
     # Helpers that never panic, so need no egg_panic.
-    NO_PANIC = %w[egg_secure_zero egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
+    NO_PANIC = %w[egg_secure_zero egg_mul_wide egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
                   egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_queue egg_chan_line egg_chan_get egg_chan_line_close
                   egg_chan_tx_close
@@ -5047,6 +5081,13 @@ module Egg
         line("#{helper('egg_slice_check')}(0, #{n}, #{n});")
         "((#{c_type(e.ty)}){ #{p}, #{n} })"
       when "intFromPtr" then "((size_t)(uintptr_t)#{expr(a)})"
+      when "mulWide"
+        x = hoist(expr(a), "u64")
+        y = hoist(expr(args[1]), "u64")
+        r = tmp
+        line("#{c_type(e.ty)} #{r};")
+        line("#{r}.a[0] = #{helper('egg_mul_wide')}(#{x}, #{y}, &#{r}.a[1]);")
+        r
       when "parseF64"
         t = hoist(expr(a), a.ty)
         x = tmp
