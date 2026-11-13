@@ -4181,7 +4181,7 @@ module Egg
         unless info[:static]
           self_t, self_mode = info[:sig].params[0]
           recv << if info[:self_inout] then "&#{lvalue(obj)}"
-                  elsif by_ptr?(self_t, self_mode) then big_arg(obj, info[:args], [])
+                  elsif by_ptr?(self_t, self_mode) then big_arg(obj, info[:args], addr_args(info[:args]))
                   else in_order(expr(obj), obj, info[:args])
                   end
         end
@@ -4379,8 +4379,16 @@ module Egg
     # the earlier value is taken into a temporary first. (A borrow of what
     # a later operand changes is E117, so copying it here is sound.)
     def in_order(code, e, later)
-      return code if constant?(e) || e.is_a?(AddrOf) || later.none? { |l| !@checker.inout_writes(l).empty? }
+      return code if constant?(e) || e.is_a?(AddrOf) || later.none? { |l| writes_first?(l) }
       hoist(code, e.ty)
+    end
+
+    # Does evaluating argument l write anything before the call? A plain
+    # &x (or &x[lo..hi]) is only an address until the callee writes through
+    # it, which is after every argument is evaluated; what is in it, such
+    # as a call in a bound, may write.
+    def writes_first?(l)
+      !@checker.inout_writes(l.is_a?(AddrOf) ? l.expr : l).empty?
     end
 
     def constant?(e)
@@ -4405,7 +4413,7 @@ module Egg
     def call(c_name, args, params, receiver, ret, writes = [])
       want(c_name)
       codes = receiver.dup
-      inouts = writes + args.filter_map { |a| a.expr if a.is_a?(AddrOf) && !a.expr.is_a?(SliceExpr) }
+      inouts = writes + addr_args(args)
       args.each_with_index do |a, i|
         pt, mode = params[i]
         later = args[(i + 1)..]
@@ -4431,15 +4439,31 @@ module Egg
 
     # A big plain argument, passed by pointer: to the place itself when it
     # is one and nothing in the call changes it, else to a copy. A copy is
-    # needed when a later argument writes it (as in_order hoists), and when
-    # the call changes the variable it is part of (only an inout self may,
-    # E117: m.mix(m.last) must see m.last as it was before the call).
+    # needed when evaluating a later argument writes something (as in_order
+    # hoists), and when the call changes the variable it is part of (only
+    # an inout self may, E117: m.mix(m.last) must see m.last as it was
+    # before the call). A later &y alone writes nothing until the call, and
+    # then only y, which inouts covers: so seal(self.key, n, &buf[0..])
+    # passes &self.key.
     def big_arg(a, later, inouts)
       root = place_root(a)
-      unless root.nil? || later.any? { |l| !@checker.inout_writes(l).empty? } || inouts.any? { |w| place_root(w) != root ? false : true }
+      unless root.nil? || later.any? { |l| writes_first?(l) } || inouts.any? { |w| (r = write_root(w)).nil? || r == root }
         return "&#{lvalue(a)}"
       end
       "&#{hoist(expr(a), a.ty)}"
+    end
+
+    # The places a call's &x and &x[lo..hi] arguments give it to write.
+    def addr_args(args)
+      args.filter_map { |a| a.expr if a.is_a?(AddrOf) }
+    end
+
+    # The variable a call writes through the place w: x for x.f or
+    # x[lo..hi] (x may be a slice parameter, which E117 kept apart from
+    # every other argument at its own call), or nil when it cannot be
+    # named, as through a pointer, and may be anything.
+    def write_root(w)
+      place_root(w.is_a?(SliceExpr) ? w.obj : w)
     end
 
     # The variable a place expression (x, x.f, x[i], x.f[i].g) is part of,
