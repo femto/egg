@@ -298,9 +298,14 @@ module Egg
         #if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_ARM64))
         #include <intrin.h>
         #endif
+        #if defined(__SIZEOF_INT128__) && !defined(EGG_PORTABLE)
+        /* __extension__: -std=c99 -pedantic -Werror (the default build)
+           otherwise rejects the type as not ISO C. */
+        __extension__ typedef unsigned __int128 egg_u128;
+        #endif
         static uint64_t egg_mul_wide(uint64_t a, uint64_t b, uint64_t *hi) {
         #if defined(__SIZEOF_INT128__) && !defined(EGG_PORTABLE)
-            unsigned __int128 p = (unsigned __int128)a * b;
+            egg_u128 p = (egg_u128)a * b;
             *hi = (uint64_t)(p >> 64);
             return (uint64_t)p;
         #elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64) && !defined(EGG_PORTABLE)
