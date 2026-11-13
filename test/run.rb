@@ -932,6 +932,54 @@ def check_restrict
   report(ok, "inout parameters by pointer are restrict", c.lines.grep(/^void fn_(bump|fill)\(/).join)
 end
 
+# A big plain argument that is a place goes to the callee by its address,
+# with nothing copied, when only &-arguments follow it: they write nothing
+# until the call. One whose &-argument is part of the same variable is
+# still copied, and so is one a later argument changes as it is computed.
+def check_big_args
+  src = <<~EGG
+    const Keys = struct {
+        key: [32]u8
+        other: [32]u8
+
+        fn seal(self: Keys, inout buf: []u8) void {
+            buf[0] = self.key[0]
+        }
+    }
+    fn seal(key: [32]u8, inout buf: []u8) void {
+        buf[0] = key[0]
+    }
+    fn next(inout k: Keys) i64 {
+        k.key[0] = 9
+        return 0
+    }
+    fn by_address(inout k: Keys, inout buf: []u8) void {
+        seal(k.key, &buf[0..])
+        k.seal(&buf[0..])
+    }
+    fn same_root(inout k: Keys) void {
+        seal(k.key, &k.other[0..])
+    }
+    fn changed_first(inout k: Keys, inout buf: []u8) void {
+        seal(k.key, &buf[next(&k)..])
+    }
+    fn main() void {
+        var k = Keys{ .key = @splat(1), .other = @splat(2) }
+        var b: [4]u8 = @splat(0)
+        by_address(&k, &b[0..])
+        same_root(&k)
+        changed_first(&k, &b[0..])
+    }
+  EGG
+  c = Egg.compile_to_c(src).c_source.to_s
+  body = ->(name) { c[/^void fn_#{name}\([^\n]*\) \{\n.*?^\}/m].to_s }
+  ok = body.("by_address").include?("fn_seal(&(*v_k).f_key, ") &&
+       body.("by_address").include?("fn_Keys__seal(&(*v_k), ") &&
+       body.("same_root").include?("ty__32_u8 _t1 = (*v_k).f_key;") &&
+       body.("changed_first").match?(/ty__32_u8 _t\d+ = \(\*v_k\)\.f_key;/)
+  report(ok, "a big argument goes by address unless the call changes it", %w[by_address same_root changed_first].map(&body).join("\n"))
+end
+
 # What a program sees on its command line, and the order of its two output
 # streams: eprint must not overtake what print wrote before it.
 def check_args(dir)
@@ -1902,6 +1950,7 @@ Dir.mktmpdir do |dir|
   check_http_server(dir)
   check_args(dir)
   check_restrict
+  check_big_args
   check_locale(dir)
   check_stdin(dir)
   check_utf8(dir)
