@@ -13,7 +13,7 @@ Egg compiles to portable C99. It is designed to be written by AI and read by peo
 - **Capabilities, not ambient power.** The core language can't do IO or allocate. A file declares `uses io, alloc`, and `main` passes the values down, so a signature shows what a function can touch.
 - **Ownership without a GC.** A buffer has one owner. Use after free, double free and leaks are compile errors, with no lifetime annotations.
 - **No undefined behaviour** outside `allow unsafe` code. Integer overflow, integer division by zero and out-of-bounds indexing panic.
-- **Fast enough to be a systems language.** Near C on most programs, with every check on, and 1.3 to 5.6 times the Rust port's throughput on a real web app ([numbers](#performance)).
+- **Fast enough to be a systems language.** Near C on most programs, with every check on, and 1.3 to 5.6 times the Rust port's throughput on a real web app's benchmark routes, both with caches on ([numbers](#performance)).
 - **Threads without shared data.** Owned values move between threads over channels.
 
 ## Performance
