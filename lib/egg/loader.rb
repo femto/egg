@@ -17,6 +17,13 @@
 # eggc reads no manifest. The names hold for the whole program: a package
 # imports the packages it needs from the same list.
 #
+# What differs by platform goes in files of its own: when m.egg (or a
+# module's file) does not exist, the import is m_windows.egg on Windows
+# and m_unix.egg elsewhere, whichever exists. Only that file is loaded,
+# so only its `link` and `extern fn` lines count, and the other is never
+# compiled (as Go's file name suffixes). m.egg, if it exists, is used on
+# every platform.
+#
 # Every module gets a prefix: "" for the root file, the file's base name
 # for the others ("m", or "m_2" if two files share a name). The top-level
 # functions and types of an imported module are renamed to "m.f" and
@@ -45,9 +52,12 @@ module Egg
 
   class Loader
     # root: the root file already parsed (by a tool that also needs its
-    # AST), or nil to parse src here; pkgs: package name -> its directory
-    def initialize(src, path, root = nil, pkgs = {})
+    # AST), or nil to parse src here; pkgs: package name -> its directory;
+    # windows: which platform's files (m_windows.egg or m_unix.egg) an
+    # import falls back to
+    def initialize(src, path, root = nil, pkgs = {}, windows = Gem.win_platform?)
       @src = src
+      @windows = windows
       @pkgs = {}
       pkgs.each { |name, dir| @pkgs[name] = File.expand_path(dir) }
       @root = root
@@ -100,11 +110,19 @@ module Egg
       # holding it, so a package nested in another one's directory keeps
       # its own boundary.
       root = owning_root(abs, root)
+      # The module is named for the import, not the platform's file.
+      prefix_path = abs
+      unless File.file?(abs)
+        suffix = @windows ? "_windows.egg" : "_unix.egg"
+        alt = abs.chomp(".egg") + suffix
+        unless File.file?(alt)
+          fail_at(mod, imp, "E129", "cannot find \"#{imp.path}\" (looked for #{abs}, and #{alt} on this platform)")
+        end
+        abs = alt
+        file = file.chomp(".egg") + suffix
+      end
       found = @by_path[abs]
       return found unless found.nil?
-      unless File.file?(abs)
-        fail_at(mod, imp, "E129", "cannot find \"#{imp.path}\" (looked for #{abs})")
-      end
       # A symlink under the root may lead out of it: check where it goes.
       unless inside?(real(abs), real(root))
         fail_outside(mod, imp, root)
@@ -120,7 +138,7 @@ module Egg
         e.diagnostic.file = file
         raise e
       end
-      target = add_module(unique_prefix(abs), abs, file, prog, root)
+      target = add_module(unique_prefix(prefix_path), abs, file, prog, root)
       queue << [target, prog]
       target
     end

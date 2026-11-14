@@ -1414,6 +1414,45 @@ def check_loader(dir)
   end
   r = Egg.compile_to_c("fn main() void {\n}\n", nil, debug: true)
   report(r.diagnostics.empty? && !r.c_source.include?("#line"), "debug without a path builds without #line marks")
+  check_platform_files(dir)
+end
+
+# m.egg missing: m_windows.egg on Windows, m_unix.egg elsewhere, each with
+# its own `link`; m.egg itself wins where it exists.
+def check_platform_files(dir)
+  plat = File.join(dir, "plat")
+  FileUtils.mkdir_p(File.join(plat, "pkg"))
+  File.write(File.join(plat, "sys_unix.egg"), "allow unsafe\nlink \"unixlib\"\n\nfn name() str {\n    return \"unix\"\n}\n")
+  File.write(File.join(plat, "sys_windows.egg"), "allow unsafe\nlink \"windowslib\"\n\nfn name() str {\n    return \"windows\"\n}\n")
+  File.write(File.join(plat, "pkg", "pkg.egg"), "const part = @import(\"pkg/part\")\n")
+  File.write(File.join(plat, "pkg", "part_windows.egg"), "fn w() void {\n}\n")
+  File.write(File.join(plat, "pkg", "part_unix.egg"), "fn u() void {\n}\n")
+  main = File.join(plat, "main.egg")
+  src = "const sys = @import(\"sys.egg\")\n\nfn main() void {\n    _ = sys.name()\n}\n"
+  [[false, "unix"], [true, "windows"]].each do |windows, os|
+    prog = Egg::Loader.new(src, main, nil, {}, windows).load
+    mod = prog.modules["sys"]
+    links = Egg.links(prog)
+    report(mod && mod.path == File.join(plat, "sys_#{os}.egg") && links == ["#{os}lib"],
+      "on #{os}, sys.egg is sys_#{os}.egg, with its link alone", "#{mod&.path} #{links.inspect}")
+    prog = Egg::Loader.new("const pkg = @import(\"pkg\")\nfn main() void {\n}\n", main, nil, { "pkg" => File.join(plat, "pkg") }, windows).load
+    names = prog.funcs.map(&:name)
+    want = windows ? "part.w" : "part.u"
+    report(names.include?(want) && names.length == 2, "on #{os}, a module's part falls back the same way", names.inspect)
+  end
+  File.write(File.join(plat, "sys.egg"), "fn name() str {\n    return \"all\"\n}\n")
+  prog = Egg::Loader.new(src, main, nil, {}, true).load
+  report(prog.modules["sys"].path == File.join(plat, "sys.egg"), "sys.egg, where it exists, is used everywhere", prog.modules["sys"].path)
+  r = Egg.compile_to_c("const n = @import(\"none.egg\")\nfn main() void {\n}\n", main)
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("none_") && d.message.include?("on this platform"), "a missing import names the platform's file too", d&.to_text("main.egg"))
+  # Through eggc's own entry, as the host it runs on.
+  host = File.join(dir, "plat_host")
+  FileUtils.mkdir_p(host)
+  FileUtils.cp(Dir[File.join(plat, "sys_*.egg")], host)
+  r = Egg.compile_to_c(src, File.join(host, "main.egg"))
+  want = Gem.win_platform? ? "windowslib" : "unixlib"
+  report(r.diagnostics.empty? && r.links == [want], "eggc links the host platform's file", r.diagnostics.map { |x| x.to_text("main.egg") }.join + r.links.inspect)
 end
 
 # Pointer expressions (p.*, null), also inside a defer, are indexed
