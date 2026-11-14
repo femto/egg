@@ -454,6 +454,21 @@ def check_net(dir)
         c.close()
     }
   EGG
+  # Sockets and both clocks in one program: on Windows their declarations
+  # must agree (winsock2.h brings windows.h).
+  check_program("net_and_clocks", <<~EGG, dir)
+    // expect: ConnectionRefused true true
+    uses io, net, time
+
+    fn main(io: Io, net: Net, clock: Clock) void {
+        const t0 = clock.monotonic()
+        const c = net.tcp_connect("127.0.0.1", #{free_port}) catch |e| {
+            io.print(@errorName(e), " ", clock.now() > 1700000000000000000, " ", clock.monotonic() >= t0)
+            return
+        }
+        c.close()
+    }
+  EGG
   check_program("net_bad_host", <<~EGG, dir)
     // expect: HostNotFound
     uses io, net

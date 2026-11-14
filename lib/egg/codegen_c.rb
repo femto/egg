@@ -224,18 +224,22 @@ module Egg
       C
       # Unix time in nanoseconds. Windows counts 100 ns from 1601. A failure
       # panics without egg_panic, which Windows' clocks would leave unused.
+      # windows.h, not declarations of our own: net and threads include it
+      # too, and its types would then conflict with ours.
       "egg_clock_now" => <<~C,
         #ifdef _WIN32
-        typedef struct { unsigned long lo, hi; } egg_filetime;
-        __declspec(dllimport) void __stdcall GetSystemTimePreciseAsFileTime(egg_filetime *);
+        #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+        #endif
+        #include <windows.h>
         #else
         #include <time.h>
         #endif
         static int64_t egg_clock_now(void) {
         #ifdef _WIN32
-            egg_filetime ft;
+            FILETIME ft;
             GetSystemTimePreciseAsFileTime(&ft);
-            return ((int64_t)(((uint64_t)ft.hi << 32) | ft.lo) - INT64_C(116444736000000000)) * 100;
+            return ((int64_t)(((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime) - INT64_C(116444736000000000)) * 100;
         #else
             struct timespec t;
             if (clock_gettime(CLOCK_REALTIME, &t) != 0) { fflush(stdout); fputs("egg panic: cannot read the clock\\n", stderr); abort(); }
@@ -246,16 +250,19 @@ module Egg
       # Nanoseconds from an unspecified start, never going back.
       "egg_clock_monotonic" => <<~C,
         #ifdef _WIN32
-        __declspec(dllimport) int __stdcall QueryPerformanceCounter(int64_t *);
-        __declspec(dllimport) int __stdcall QueryPerformanceFrequency(int64_t *);
+        #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+        #endif
+        #include <windows.h>
         #else
         #include <time.h>
         #endif
         static int64_t egg_clock_monotonic(void) {
         #ifdef _WIN32
-            int64_t n, f;
-            QueryPerformanceCounter(&n);
-            QueryPerformanceFrequency(&f);
+            LARGE_INTEGER pn, pf;
+            QueryPerformanceCounter(&pn);
+            QueryPerformanceFrequency(&pf);
+            int64_t n = pn.QuadPart, f = pf.QuadPart;
             /* Whole seconds and the rest apart, so n * 1e9 cannot overflow. */
             return n / f * 1000000000 + n % f * 1000000000 / f;
         #else
