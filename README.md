@@ -422,6 +422,10 @@ From v2:
 - Modules: `const m = @import("m.egg")`, then `m.f()`, `m.Point`,
   `m.Pair(i64)`; each file loaded once, cycles allowed; diagnostics name
   the file
+- Per-platform files: where `m.egg` does not exist, `@import("m.egg")`
+  (or a module's part) is `m_windows.egg` on Windows and `m_unix.egg`
+  elsewhere; only that file is compiled, so its `link` and `extern fn`
+  lines apply on its platform alone
 - Capabilities: a file declares `uses alloc, io`; `main` receives the
   capability values (`fn main(io: Io, a: Allocator)`) and passes them
   down; `io.print(x)` replaces `@print`; `a.concat(s, t, ...)`,

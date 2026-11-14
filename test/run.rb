@@ -454,6 +454,21 @@ def check_net(dir)
         c.close()
     }
   EGG
+  # Sockets and both clocks in one program: on Windows their declarations
+  # must agree (winsock2.h brings windows.h).
+  check_program("net_and_clocks", <<~EGG, dir)
+    // expect: ConnectionRefused true true
+    uses io, net, time
+
+    fn main(io: Io, net: Net, clock: Clock) void {
+        const t0 = clock.monotonic()
+        const c = net.tcp_connect("127.0.0.1", #{free_port}) catch |e| {
+            io.print(@errorName(e), " ", clock.now() > 1700000000000000000, " ", clock.monotonic() >= t0)
+            return
+        }
+        c.close()
+    }
+  EGG
   check_program("net_bad_host", <<~EGG, dir)
     // expect: HostNotFound
     uses io, net
@@ -1414,6 +1429,60 @@ def check_loader(dir)
   end
   r = Egg.compile_to_c("fn main() void {\n}\n", nil, debug: true)
   report(r.diagnostics.empty? && !r.c_source.include?("#line"), "debug without a path builds without #line marks")
+  check_platform_files(dir)
+end
+
+# m.egg missing: m_windows.egg on Windows, m_unix.egg elsewhere, each with
+# its own `link`; m.egg itself wins where it exists.
+def check_platform_files(dir)
+  plat = File.join(dir, "plat")
+  FileUtils.mkdir_p(File.join(plat, "pkg"))
+  File.write(File.join(plat, "sys_unix.egg"), "allow unsafe\nlink \"unixlib\"\n\nfn name() str {\n    return \"unix\"\n}\n")
+  File.write(File.join(plat, "sys_windows.egg"), "allow unsafe\nlink \"windowslib\"\n\nfn name() str {\n    return \"windows\"\n}\n")
+  File.write(File.join(plat, "pkg", "pkg.egg"), "const part = @import(\"pkg/part\")\n")
+  File.write(File.join(plat, "pkg", "part_windows.egg"), "fn w() void {\n}\n")
+  File.write(File.join(plat, "pkg", "part_unix.egg"), "fn u() void {\n}\n")
+  main = File.join(plat, "main.egg")
+  src = "const sys = @import(\"sys.egg\")\n\nfn main() void {\n    _ = sys.name()\n}\n"
+  [[false, "unix"], [true, "windows"]].each do |windows, os|
+    prog = Egg::Loader.new(src, main, nil, {}, windows).load
+    mod = prog.modules["sys"]
+    links = Egg.links(prog)
+    report(mod && mod.path == File.join(plat, "sys_#{os}.egg") && links == ["#{os}lib"],
+      "on #{os}, sys.egg is sys_#{os}.egg, with its link alone", "#{mod&.path} #{links.inspect}")
+    prog = Egg::Loader.new("const pkg = @import(\"pkg\")\nfn main() void {\n}\n", main, nil, { "pkg" => File.join(plat, "pkg") }, windows).load
+    names = prog.funcs.map(&:name)
+    want = windows ? "part.w" : "part.u"
+    report(names.include?(want) && names.length == 2, "on #{os}, a module's part falls back the same way", names.inspect)
+  end
+  File.write(File.join(plat, "sys.egg"), "fn name() str {\n    return \"all\"\n}\n")
+  prog = Egg::Loader.new(src, main, nil, {}, true).load
+  report(prog.modules["sys"].path == File.join(plat, "sys.egg"), "sys.egg, where it exists, is used everywhere", prog.modules["sys"].path)
+  r = Egg.compile_to_c("const n = @import(\"none.egg\")\nfn main() void {\n}\n", main)
+  d = r.diagnostics.first
+  report(d && d.code == "E129" && d.message.include?("none_") && d.message.include?("on this platform"), "a missing import names the platform's file too", d&.to_text("main.egg"))
+  # Through eggc's own entry, as the host it runs on.
+  host = File.join(dir, "plat_host")
+  FileUtils.mkdir_p(host)
+  FileUtils.cp(Dir[File.join(plat, "sys_*.egg")], host)
+  r = Egg.compile_to_c(src, File.join(host, "main.egg"))
+  want = Gem.win_platform? ? "windowslib" : "unixlib"
+  report(r.diagnostics.empty? && r.links == [want], "compile_to_c links the host platform's file", r.diagnostics.map { |x| x.to_text("main.egg") }.join + r.links.inspect)
+  # The eggc command itself (the native one, under EGGC) picks it too.
+  run_dir = File.join(dir, "plat_run")
+  FileUtils.mkdir_p(run_dir)
+  %w[unix windows].each { |os| File.write(File.join(run_dir, "sys_#{os}.egg"), "fn name() str {\n    return \"#{os}\"\n}\n") }
+  File.write(File.join(run_dir, "main.egg"), "uses io\n\nconst sys = @import(\"sys.egg\")\n\nfn main(io: Io) void {\n    io.print(sys.name())\n}\n")
+  out, err, st = Open3.capture3(*eggc_command, "run", File.join(run_dir, "main.egg"))
+  host_os = Gem.win_platform? ? "windows" : "unix"
+  report(st.success? && out == "#{host_os}\n", "eggc run picks the host platform's file", "#{out}#{err}")
+  # A file already loaded but not on disk (an unsaved root) imported back:
+  # the loaded one, not a platform fallback.
+  back = File.join(dir, "plat_back")
+  FileUtils.mkdir_p(back)
+  File.write(File.join(back, "a.egg"), "const m = @import(\"main.egg\")\n")
+  r = Egg.compile_to_c("const a = @import(\"a.egg\")\nfn main() void {\n}\n", File.join(back, "main.egg"))
+  report(r.diagnostics.empty?, "an unsaved root imported back is the loaded one", r.diagnostics.map { |x| x.to_text("main.egg") }.join)
 end
 
 # Pointer expressions (p.*, null), also inside a defer, are indexed
