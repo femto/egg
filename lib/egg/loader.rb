@@ -112,7 +112,8 @@ module Egg
       root = owning_root(abs, root)
       # The module is named for the import, not the platform's file.
       prefix_path = abs
-      unless File.file?(abs)
+      # A loaded file need not be on disk (the root of an unsaved buffer).
+      unless File.file?(abs) || @by_path.key?(abs)
         suffix = @windows ? "_windows.egg" : "_unix.egg"
         alt = abs.chomp(".egg") + suffix
         unless File.file?(alt)

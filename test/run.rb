@@ -1467,7 +1467,22 @@ def check_platform_files(dir)
   FileUtils.cp(Dir[File.join(plat, "sys_*.egg")], host)
   r = Egg.compile_to_c(src, File.join(host, "main.egg"))
   want = Gem.win_platform? ? "windowslib" : "unixlib"
-  report(r.diagnostics.empty? && r.links == [want], "eggc links the host platform's file", r.diagnostics.map { |x| x.to_text("main.egg") }.join + r.links.inspect)
+  report(r.diagnostics.empty? && r.links == [want], "compile_to_c links the host platform's file", r.diagnostics.map { |x| x.to_text("main.egg") }.join + r.links.inspect)
+  # The eggc command itself (the native one, under EGGC) picks it too.
+  run_dir = File.join(dir, "plat_run")
+  FileUtils.mkdir_p(run_dir)
+  %w[unix windows].each { |os| File.write(File.join(run_dir, "sys_#{os}.egg"), "fn name() str {\n    return \"#{os}\"\n}\n") }
+  File.write(File.join(run_dir, "main.egg"), "uses io\n\nconst sys = @import(\"sys.egg\")\n\nfn main(io: Io) void {\n    io.print(sys.name())\n}\n")
+  out, err, st = Open3.capture3(*eggc_command, "run", File.join(run_dir, "main.egg"))
+  host_os = Gem.win_platform? ? "windows" : "unix"
+  report(st.success? && out == "#{host_os}\n", "eggc run picks the host platform's file", "#{out}#{err}")
+  # A file already loaded but not on disk (an unsaved root) imported back:
+  # the loaded one, not a platform fallback.
+  back = File.join(dir, "plat_back")
+  FileUtils.mkdir_p(back)
+  File.write(File.join(back, "a.egg"), "const m = @import(\"main.egg\")\n")
+  r = Egg.compile_to_c("const a = @import(\"a.egg\")\nfn main() void {\n}\n", File.join(back, "main.egg"))
+  report(r.diagnostics.empty?, "an unsaved root imported back is the loaded one", r.diagnostics.map { |x| x.to_text("main.egg") }.join)
 end
 
 # Pointer expressions (p.*, null), also inside a defer, are indexed
