@@ -4,7 +4,7 @@
 require "open3"
 
 module Egg
-  VERSION = "0.2.0"
+  VERSION = "0.2.1"
 
   # VERSION, or VERSION-dev+COMMIT when running from a git checkout that is
   # not the release's tag. A native binary says VERSION: it is built from
