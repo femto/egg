@@ -1191,10 +1191,14 @@ fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, bo
 }
 
 // Where a redirect from base to location goes, as an absolute URL, or
-// null if it cannot be told.
+// null if it cannot be told or is to a scheme other than http:// or
+// https:// (ftp:, mailto:, ...), which fetch does not follow.
 fn resolve(a: Allocator, base: []u8, location: []u8) ?Buf(u8) {
     if (@len(location) >= 7 and (same(location[0..7], "http://") or (@len(location) >= 8 and same(location[0..8], "https://")))) {
         return a.concat(location, "")
+    }
+    if (has_scheme(location)) {
+        return null
     }
     const u = parse_url(base) catch { return null }
     if (text.starts_with(location, "//")) {
@@ -1224,6 +1228,25 @@ fn resolve(a: Allocator, base: []u8, location: []u8) ?Buf(u8) {
     return a.concat(base[0..dir], location)
 }
 
+// Does reference start with a scheme (RFC 3986, 3.1: a letter, then
+// letters, digits, + - and ., then :)? A relative one cannot: a colon in
+// its first segment needs "./" before it (4.2).
+fn has_scheme(reference: []u8) bool {
+    var i = 0
+    while (i < @len(reference)) {
+        const c = reference[i]
+        if (c == ':') {
+            return i > 0
+        }
+        const letter = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+        if (!letter and (i == 0 or !((c >= '0' and c <= '9') or c == '+' or c == '-' or c == '.'))) {
+            return false
+        }
+        i = i + 1
+    }
+    return false
+}
+
 fn is_redirect(status: i64) bool {
     return status == 301 or status == 302 or status == 303 or status == 307 or status == 308
 }
@@ -1239,7 +1262,8 @@ fn same_origin(x: []u8, y: []u8) bool {
 // Content-Length or Connection, which fetch writes) and body, on a
 // connection of its own. With opts.redirects above 0 it follows that
 // many redirects: a 303, or a 301 or 302 after a POST, as a GET without
-// the body; a 307 or 308 as it was. A redirect to another host or port
+// the body; a 307 or 308 as it was; one to another scheme (ftp:, ...)
+// is returned. A redirect to another host or port
 // goes without the caller's headers, which may hold credentials
 // (Authorization, Cookie). A 3xx without a Location is returned. Fails as
 // parse_url, net.tcp_connect and read_response do.
