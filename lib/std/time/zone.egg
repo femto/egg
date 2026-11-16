@@ -119,10 +119,10 @@ const Zone = struct {
         // Before the first change first, then after the last: the keys
         // need not ascend (a change can come sooner than the offset it
         // undoes), and Python asks in this order.
-        if (n > 0 and wall < self.wall_key(0)) {
+        if (n > 0 and self.before_key(0, wall)) {
             return self.types[0]
         }
-        if (n == 0 or wall > self.wall_key(n - 1)) {
+        if (n == 0 or self.past_key(n - 1, wall)) {
             if (self.rule) |r| {
                 return rule_wall_type(r, wall)
             }
@@ -132,7 +132,7 @@ const Zone = struct {
         var hi = n
         while (lo < hi) {
             const mid = (lo + hi) / 2
-            if (wall < self.wall_key(mid)) {
+            if (self.before_key(mid, wall)) {
                 hi = mid
             } else {
                 lo = mid + 1
@@ -141,11 +141,24 @@ const Zone = struct {
         return self.types[@as(i64, self.kinds[lo - 1])]
     }
 
-    // The local time from which change i counts.
-    fn wall_key(self: Zone, i: i64) i64 {
+    // Change i counts from the local time times[i] plus the larger of the
+    // offsets either side of it. That sum can pass the ends of an i64 (a
+    // TZif file may date a change anywhere), so wall, which t.fits() keeps
+    // far from them, moves instead.
+    fn key_offset(self: Zone, i: i64) i64 {
         const after = self.types[@as(i64, self.kinds[i])].offset
         const before = if (i == 0) self.types[0].offset else self.types[@as(i64, self.kinds[i - 1])].offset
-        return self.times[i] + (if (after > before) after else before)
+        return if (after > before) after else before
+    }
+
+    // Is wall before the local time change i counts from?
+    fn before_key(self: Zone, i: i64, wall: i64) bool {
+        return wall - self.key_offset(i) < self.times[i]
+    }
+
+    // Is wall past it?
+    fn past_key(self: Zone, i: i64, wall: i64) bool {
+        return wall - self.key_offset(i) > self.times[i]
     }
 
     // The local date and time at the instant ns.
