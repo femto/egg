@@ -647,8 +647,9 @@ fn strong(tag: []u8) []u8 {
 // "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n". RFC 9110 asks a server with a
 // clock to send it with every 2xx, 3xx and 4xx response.
 fn append_date(a: Allocator, inout out: Buf(u8), now: i64) void {
+    const d = time.http_date(now)
     a.append_str(&out, "Date: ")
-    time.append_http_date(a, &out, now)
+    a.append_str(&out, d[0..])
     a.append_str(&out, "\r\n")
 }
 
@@ -656,6 +657,8 @@ fn append_date(a: Allocator, inout out: Buf(u8), now: i64) void {
 // If-None-Match decides when it is there; otherwise If-Modified-Since,
 // when modified is known: not modified if it is no later than that date,
 // to the second (RFC 9110, 13.2.2). A date that cannot be read is no date.
+// conditional asks this; a caller can ask first, to skip making a body a
+// 304 would not send (reading a file, say).
 fn fresh(req: Request, tag: []u8, modified: ?i64) bool {
     if (req.method != "GET" and req.method != "HEAD") {
         return false
@@ -675,7 +678,8 @@ fn fresh(req: Request, tag: []u8, modified: ?i64) bool {
     const m = modified orelse return false
     const since = header(req, "If-Modified-Since") orelse return false
     const t = time.parse_http_date(since) orelse return false
-    return time.floor_div(m, time.SECOND) * time.SECOND <= t
+    // Whole seconds on both sides: an HTTP date has no fraction.
+    return time.floor_div(m, time.SECOND) <= time.floor_div(t, time.SECOND)
 }
 
 // A 200 response with its validators, or 304 Not Modified if the GET or
@@ -684,18 +688,14 @@ fn fresh(req: Request, tag: []u8, modified: ?i64) bool {
 // digest of body, a version, a file's size and time ("W/\"1a2b-5f00\"")...
 // with its quotes; modified is in nanoseconds since 1970, as fs.stat's.
 fn conditional(c: TcpConn, a: Allocator, req: Request, tag: []u8, modified: ?i64, own: []u8, headers: []u8, body: []u8) !void {
-    var tagged = a.concat(headers, "")
-    defer a.free(tagged)
-    if (@len(tag) > 0) {
-        a.append_str(&tagged, "ETag: ")
-        a.append_str(&tagged, tag)
-        a.append_str(&tagged, "\r\n")
-    }
+    // Made in one go: this runs for every response that has validators.
+    var date: [29]u8 = @splat(' ')
     if (modified) |m| {
-        a.append_str(&tagged, "Last-Modified: ")
-        time.append_http_date(a, &tagged, m)
-        a.append_str(&tagged, "\r\n")
+        date = time.http_date(m)
     }
+    const dated = modified != null
+    const tagged = a.concat(headers, if (@len(tag) > 0) "ETag: " else "", tag, if (@len(tag) > 0) "\r\n" else "", if (dated) "Last-Modified: " else "", date[0..if (dated) 29 else 0], if (dated) "\r\n" else "")
+    defer a.free(tagged)
     if (fresh(req, tag, modified)) {
         return respond(c, a, req, "304 Not Modified", own, tagged, "")
     }

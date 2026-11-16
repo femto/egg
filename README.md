@@ -311,9 +311,12 @@ v3 (memory without GC, and what realistic programs needed):
   `keep` and `upgrade`, and every header (`http.header(req, "Origin")` is
   a `?[]u8` of the request, not a copy). Responses are written
   whole (`write_response`, `append_response`), with validators the caller
-  makes (`conditional(c, a, req, tag, modified, ...)`: ETag and
-  Last-Modified, and 304 when If-None-Match has the tag or, without it,
-  If-Modified-Since is no earlier than `modified`), a Date header
+  makes (`conditional(c, a, req, tag, modified, ...)`: ETag unless the
+  tag is empty, Last-Modified unless `modified` is null, and 304 when
+  If-None-Match has the tag or, without it, If-Modified-Since is no
+  earlier than `modified`, to the second; a null `modified` never makes
+  a 304 by date; `fresh(req, tag, modified)` asks first, before the
+  body is made), a Date header
   (`append_date(a, &own, clock.now())`) and byte ranges (`ranged`); forms, cookies and multipart uploads are
   read with `field`, `fields`, `cookie` and `file`. Its client is
   `http://` only: `fetch(net, a, "GET", url, headers, body, opts)` on a

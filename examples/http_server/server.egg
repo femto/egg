@@ -12,6 +12,7 @@ uses alloc, args, fs, io, net, thread, time
 
 const text = @import("std/text")
 const http = @import("std/http")
+const time = @import("std/time")
 
 const Worker = owned struct {
     t: Thread
@@ -59,11 +60,10 @@ fn plain(s: []u8) bool {
     return true
 }
 
-// The Date header for now.
+// The Date header for now, made in one go.
 fn dated(clock: Clock, a: Allocator) Buf(u8) {
-    var own: Buf(u8) = .empty
-    http.append_date(a, &own, clock.now())
-    return own
+    const d = time.http_date(clock.now())
+    return a.concat("Date: ", d[0..], "\r\n")
 }
 
 fn respond(c: TcpConn, clock: Clock, a: Allocator, req: http.Request, status: str, kind: str, body: []u8) !void {
@@ -83,21 +83,26 @@ fn serve_file(c: TcpConn, files: Fs, clock: Clock, a: Allocator, root: str, req:
     if (st.kind != .file) {
         return missing(c, clock, a, req, error.IsDirectory)
     }
-    const body = files.read(a, full) catch |e| {
-        return missing(c, clock, a, req, e)
-    }
-    defer a.free(body)
     // Weak: the same size and time do not prove the same bytes.
-    var tag = a.concat("W/\"", "")
+    const size = a.int_str(st.size)
+    defer a.free(size)
+    const modified = a.int_str(st.modified)
+    defer a.free(modified)
+    const tag = a.concat("W/\"", size, "-", modified, "\"")
     defer a.free(tag)
-    a.append_int(&tag, st.size)
-    a.push(&tag, '-')
-    a.append_int(&tag, st.modified)
-    a.push(&tag, '"')
     const own = dated(clock, a)
     defer a.free(own)
     const headers = a.concat("Content-Type: ", content_type(path), "\r\n")
     defer a.free(headers)
+    // A client that has the file is answered without reading it.
+    if (http.fresh(req, tag, st.modified)) {
+        try http.conditional(c, a, req, tag, st.modified, own, headers, "")
+        return 304
+    }
+    const body = files.read(a, full) catch |e| {
+        return missing(c, clock, a, req, e)
+    }
+    defer a.free(body)
     try http.conditional(c, a, req, tag, st.modified, own, headers, body)
     return 200
 }

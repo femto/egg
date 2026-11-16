@@ -19,13 +19,14 @@
 // expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
 // expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|ETag: "v1"|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
 // expect: HTTP/1.1 304 Not Modified|Date: Sun, 06 Nov 1994 08:49:37 GMT|ETag: "v1"|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Connection: keep-alive||
+// expect: HTTP/1.1 304 Not Modified|Last-Modified: Tue, 21 Sep 1677 00:12:43 GMT|Connection: keep-alive||
 // expect: HTTP/1.1 200 OK|Content-Length: 3|Connection: close||bye
-// expect: served 16
+// expect: served 17
 uses alloc, io, net, thread
 
 const http = @import("std/http")
 
-const REQUESTS = "GET /etag HTTP/1.1\r\nHost: x\r\n\r\nHEAD /etag HTTP/1.1\r\n\r\nHEAD /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /etag HTTP/1.1\r\nIf-None-Match: \"v0\", W/\"v1\"\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=-3\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=20-\r\n\r\nPOST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n3\r\ncde\r\n0\r\n\r\nGET /dated HTTP/1.1\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:36 GMT\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: yesterday\r\n\r\nPOST /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\nContent-Length: 0\r\n\r\nGET /both HTTP/1.1\r\nIf-None-Match: \"v0\"\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /both HTTP/1.1\r\nIf-None-Match: \"v1\"\r\n\r\nGET /bye HTTP/1.1\r\nConnection: close\r\n\r\n"
+const REQUESTS = "GET /etag HTTP/1.1\r\nHost: x\r\n\r\nHEAD /etag HTTP/1.1\r\n\r\nHEAD /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /etag HTTP/1.1\r\nIf-None-Match: \"v0\", W/\"v1\"\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=-3\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=20-\r\n\r\nPOST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n3\r\ncde\r\n0\r\n\r\nGET /dated HTTP/1.1\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:36 GMT\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: yesterday\r\n\r\nPOST /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\nContent-Length: 0\r\n\r\nGET /both HTTP/1.1\r\nIf-None-Match: \"v0\"\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /both HTTP/1.1\r\nIf-None-Match: \"v1\"\r\n\r\nGET /ancient HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /bye HTTP/1.1\r\nConnection: close\r\n\r\n"
 
 fn client(net: Net, port: i64, a: Allocator, sink out: Sender(Buf(u8))) void {
     defer out.close()
@@ -65,6 +66,11 @@ fn answer(c: TcpConn, a: Allocator, req: http.Request) !void {
         const body = a.concat(req.body, " ", req.peer_ip)
         defer a.free(body)
         return http.respond(c, a, req, "200 OK", "", "", body)
+    }
+    if (req.path == "/ancient") {
+        // As old as an i64 of nanoseconds goes: compared in seconds, so
+        // nothing underflows.
+        return http.conditional(c, a, req, "", -9223372036854775807 - 1, "", "", "old")
     }
     return http.respond(c, a, req, "200 OK", "", "", "bye")
 }
