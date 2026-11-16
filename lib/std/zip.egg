@@ -1,0 +1,407 @@
+// std/zip: zip archives (PKWARE APPNOTE), read and written in memory.
+// Entries are stored or deflated (std/flate); ZIP64, encryption and
+// archives split over several files are not supported.
+// const zip = @import("std/zip")
+// var ar = try zip.open(a, data)        // data: the bytes of a .zip
+// defer a.free(ar)
+// const i = ar.find("dir/hello.txt") orelse return error.NotFound
+// try ar.read(a, &out, data, i)          // appends the file's contents
+// ar.entries[i].size is its size, ar.name(i) its name, ar.is_dir(i) whether
+// it is a directory.
+//
+// var w = zip.builder()
+// errdefer a.free(w)                     // finish ends it otherwise
+// try w.add(a, "hello.txt", "hi\n", flate.DEFAULT_LEVEL)
+// try w.add_dir(a, "docs/")
+// const bytes = w.finish(a)              // the whole archive
+//
+// Names are as the archive has them, with '/' between parts: before using
+// one as a path, refuse those that are absolute or have ".." parts, or a
+// crafted archive can write anywhere ("zip slip"). safe_name checks this.
+uses alloc
+
+const flate = @import("std/flate")
+const time = @import("std/time")
+
+// Mode bits, as Unix has them: a regular file rw-r--r-- (0o100644) and a
+// directory rwxr-xr-x (0o40755), which builder() gives entries by default.
+const FILE_MODE = 0x81A4
+const DIR_MODE = 0x41ED
+
+// 1980-01-01 00:00:00, the earliest time an MS-DOS date can hold.
+const DOS_EPOCH = 315532800
+
+// One file or directory in an archive: its name is names[name_at..] for
+// name_len bytes; method 0 is stored, 8 deflated; size is its length,
+// packed what it takes in the archive; mtime its time of last change, in
+// seconds since 1970 (zip records local time without a zone, read here
+// as UTC); mode its Unix mode bits, 0 when the archive was not made on
+// Unix; offset where its local header starts.
+const Entry = struct {
+    name_at: i64
+    name_len: i64
+    method: i64
+    flags: i64
+    crc: u32
+    size: i64
+    packed: i64
+    offset: i64
+    mtime: i64
+    mode: i64
+
+    fn encrypted(self: Entry) bool {
+        return self.flags & 1 != 0
+    }
+}
+
+// The entries of an archive, in the order of its central directory, and
+// the archive's comment. It owns its buffers: free it with a.free.
+const Archive = struct {
+    entries: Buf(Entry)
+    names: Buf(u8)
+    comment: Buf(u8)
+
+    fn len(self: Archive) i64 {
+        return @len(self.entries)
+    }
+
+    fn name(self: Archive, i: i64) []u8 {
+        const e = self.entries[i]
+        return self.names[e.name_at..e.name_at + e.name_len]
+    }
+
+    // Directories are entries whose names end with '/'.
+    fn is_dir(self: Archive, i: i64) bool {
+        const e = self.entries[i]
+        return e.name_len > 0 and self.names[e.name_at + e.name_len - 1] == '/'
+    }
+
+    // The first entry called name, if there is one.
+    fn find(self: Archive, name: []u8) ?i64 {
+        var i = 0
+        while (i < @len(self.entries)) {
+            if (self.name(i) == name) {
+                return i
+            }
+            i = i + 1
+        }
+        return null
+    }
+
+    // Appends the contents of entry i to out; data is the archive open
+    // read. error.BadZip if the entry's data is not where and what the
+    // archive says, error.BadChecksum if its CRC-32 is wrong,
+    // error.Unsupported for an encrypted entry or one compressed some other
+    // way than deflate. On an error, out is left as it was.
+    fn read(self: Archive, a: Allocator, inout out: Buf(u8), data: []u8, i: i64) !void {
+        const e = self.entries[i]
+        if (e.encrypted() or (e.method != 0 and e.method != 8)) {
+            return error.Unsupported
+        }
+        const p = e.offset
+        if (p < 0 or p + 30 > @len(data) or le(data, p, 4) != 0x04034b50) {
+            return error.BadZip
+        }
+        const at = p + 30 + le(data, p + 26, 2) + le(data, p + 28, 2)
+        if (at + e.packed > @len(data)) {
+            return error.BadZip
+        }
+        const raw = data[at..at + e.packed]
+        const start = @len(out)
+        errdefer a.resize(&out, start, 0)
+        if (e.method == 0) {
+            if (e.packed != e.size) {
+                return error.BadZip
+            }
+            a.append_str(&out, raw)
+        } else {
+            _ = flate.inflate(a, &out, raw, e.size) catch |err| {
+                if (err == error.TooBig) {
+                    return error.BadZip
+                }
+                return err
+            }
+            if (@len(out) - start != e.size) {
+                return error.BadZip
+            }
+        }
+        if (flate.crc32(0, out[start..]) != e.crc) {
+            return error.BadChecksum
+        }
+    }
+}
+
+// The n-byte little-endian number at data[p].
+fn le(data: []u8, p: i64, n: i64) i64 {
+    var v = 0
+    var i = n - 1
+    while (i >= 0) {
+        v = v << 8 | @as(i64, data[p + i])
+        i = i - 1
+    }
+    return v
+}
+
+// The entries of the archive data. error.BadZip if it is not one,
+// error.Unsupported for ZIP64 and archives over several disks. Data may
+// have other bytes before the archive, as self-extracting ones do.
+fn open(a: Allocator, data: []u8) !Archive {
+    // The end of central directory record: 22 bytes and a comment of up to
+    // 65535, so the last signature in that reach.
+    const n = @len(data)
+    var p = n - 22
+    const low = if (n - 22 - 65535 > 0) n - 22 - 65535 else 0
+    var found = -1
+    while (p >= low) {
+        if (data[p] == 0x50 and le(data, p, 4) == 0x06054b50 and p + 22 + le(data, p + 20, 2) <= n) {
+            found = p
+            break
+        }
+        p = p - 1
+    }
+    if (found < 0) {
+        return error.BadZip
+    }
+    p = found
+    const count = le(data, p + 10, 2)
+    const size = le(data, p + 12, 4)
+    const offset = le(data, p + 16, 4)
+    if (p >= 20 and le(data, p - 20, 4) == 0x07064b50) {
+        return error.Unsupported
+    }
+    if (le(data, p + 4, 2) != 0 or le(data, p + 6, 2) != 0 or le(data, p + 8, 2) != count) {
+        return error.Unsupported
+    }
+    // Where the archive starts in data: where its central directory is,
+    // less where the archive says it is.
+    const base = p - size - offset
+    if (base < 0) {
+        return error.BadZip
+    }
+    var ar = Archive{ .entries = .empty, .names = .empty, .comment = .empty }
+    errdefer a.free(ar)
+    a.append_str(&ar.comment, data[p + 22..p + 22 + le(data, p + 20, 2)])
+    var q = base + offset
+    var i = 0
+    while (i < count) {
+        if (q + 46 > p or le(data, q, 4) != 0x02014b50) {
+            return error.BadZip
+        }
+        const made_by = le(data, q + 4, 2)
+        const nlen = le(data, q + 28, 2)
+        const elen = le(data, q + 30, 2)
+        const clen = le(data, q + 32, 2)
+        const next = q + 46 + nlen + elen + clen
+        if (next > p) {
+            return error.BadZip
+        }
+        const packed = le(data, q + 20, 4)
+        const unpacked = le(data, q + 24, 4)
+        const local = le(data, q + 42, 4)
+        if (packed == 0xFFFFFFFF or unpacked == 0xFFFFFFFF or local == 0xFFFFFFFF) {
+            return error.Unsupported
+        }
+        const e = Entry{
+            .name_at = @len(ar.names),
+            .name_len = nlen,
+            .method = le(data, q + 10, 2),
+            .flags = le(data, q + 8, 2),
+            .crc = @as(u32, le(data, q + 16, 4)),
+            .size = unpacked,
+            .packed = packed,
+            .offset = base + local,
+            .mtime = from_dos(le(data, q + 14, 2), le(data, q + 12, 2)),
+            .mode = if (made_by >> 8 == 3) le(data, q + 38, 4) >> 16 else 0,
+        }
+        a.append_str(&ar.names, data[q + 46..q + 46 + nlen])
+        a.push(&ar.entries, e)
+        q = next
+        i = i + 1
+    }
+    return ar
+}
+
+// Seconds since 1970 for an MS-DOS date and time.
+fn from_dos(date: i64, t: i64) i64 {
+    const dt = time.DateTime{ .year = 1980 + (date >> 9), .month = (date >> 5) & 15, .day = date & 31, .hour = t >> 11, .minute = (t >> 5) & 63, .second = (t & 31) * 2, .nano = 0 }
+    return dt.unix()
+}
+
+// The MS-DOS date and time of secs, which keeps even seconds only and
+// years 1980 to 2107: earlier times are 1980-01-01, later ones the end of
+// 2107. As date << 16 | time.
+fn to_dos(secs: i64) i64 {
+    var s = secs
+    if (s < DOS_EPOCH) {
+        s = DOS_EPOCH
+    }
+    // 2108-01-01 00:00:00, less 2 seconds.
+    if (s > 4354819198) {
+        s = 4354819198
+    }
+    const t = time.utc_s(s)
+    const date = (t.year - 1980) << 9 | t.month << 5 | t.day
+    return date << 16 | t.hour << 11 | t.minute << 5 | t.second / 2
+}
+
+// Whether name can be used as a relative path under a directory without
+// leaving it: not empty, not absolute ('/' or '\' first, or a drive
+// such as "C:"), no "." or ".." parts, no '\' (a separator on Windows)
+// and no zero byte.
+fn safe_name(name: []u8) bool {
+    if (@len(name) == 0 or name[0] == '/') {
+        return false
+    }
+    var start = 0
+    var i = 0
+    while (i <= @len(name)) {
+        if (i == @len(name) or name[i] == '/') {
+            const part = name[start..i]
+            // A trailing '/' marks a directory; empty parts are not allowed.
+            if ((@len(part) == 0 and i != @len(name)) or part == "." or part == "..") {
+                return false
+            }
+            start = i + 1
+        } else if (name[i] == '\\' or name[i] == 0 or name[i] == ':') {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// Builds an archive in memory. mtime (seconds since 1970) and mode are
+// those given to the entries added after they are set; they start as
+// 1980-01-01 and FILE_MODE. It owns its buffers: end it with finish, or
+// free it with a.free.
+const Builder = struct {
+    out: Buf(u8)
+    central: Buf(u8)
+    count: i64
+    mtime: i64
+    mode: i64
+
+    // A file called name holding data, deflated at this level (0 stores
+    // it), or stored if deflating would not make it smaller.
+    // error.BadName for an empty name, error.TooBig for a name over 65535
+    // bytes or for what needs ZIP64: more than 65535 entries, or sizes or
+    // offsets past 4 GiB.
+    fn add(inout self: Builder, a: Allocator, name: []u8, data: []u8, level: i64) !void {
+        try self.check(name, @len(data))
+        var packed: Buf(u8) = .empty
+        defer a.free(packed)
+        var method = 0
+        if (level > 0 and @len(data) > 0) {
+            flate.deflate(a, &packed, data, level)
+            if (@len(packed) < @len(data)) {
+                method = 8
+            }
+        }
+        const crc = flate.crc32(0, data)
+        if (method == 8) {
+            self.entry(a, name, packed, method, crc, @len(data), self.mode)
+        } else {
+            self.entry(a, name, data, method, crc, @len(data), self.mode)
+        }
+    }
+
+    // A directory: name with a '/' at the end, added if it has none.
+    fn add_dir(inout self: Builder, a: Allocator, name: []u8) !void {
+        var full = a.concat(name, "")
+        defer a.free(full)
+        if (@len(full) == 0 or full[@len(full) - 1] != '/') {
+            a.push(&full, '/')
+        }
+        try self.check(full, 0)
+        self.entry(a, full, "", 0, 0, 0, DIR_MODE)
+    }
+
+    fn check(self: Builder, name: []u8, size: i64) !void {
+        if (@len(name) == 0) {
+            return error.BadName
+        }
+        if (@len(name) > 65535 or self.count >= 65535 or size >= 0xFFFFFFFF or @len(self.out) + size + @len(name) + 30 >= 0xFFFFFFFF) {
+            return error.TooBig
+        }
+    }
+
+    // The local header and data of an entry, and its central directory
+    // record for later.
+    fn entry(inout self: Builder, a: Allocator, name: []u8, body: []u8, method: i64, crc: u32, size: i64, mode: i64) void {
+        const offset = @len(self.out)
+        // General purpose flag 11: the name is UTF-8 (set only when it has
+        // bytes outside ASCII, as Go does).
+        var flags = 0
+        for (name) |c| {
+            if (c >= 0x80) {
+                flags = 0x800
+            }
+        }
+        const dos = to_dos(self.mtime)
+        put(a, &self.out, 0x04034b50, 4)
+        put(a, &self.out, 20, 2)
+        put(a, &self.out, flags, 2)
+        put(a, &self.out, method, 2)
+        put(a, &self.out, dos & 0xFFFF, 2)
+        put(a, &self.out, dos >> 16, 2)
+        put(a, &self.out, @as(i64, crc), 4)
+        put(a, &self.out, @len(body), 4)
+        put(a, &self.out, size, 4)
+        put(a, &self.out, @len(name), 2)
+        put(a, &self.out, 0, 2)
+        a.append_str(&self.out, name)
+        a.append_str(&self.out, body)
+        // Made by Unix (3), version 3.0, so readers take the mode from the
+        // high half of the external attributes; the low byte keeps MS-DOS's
+        // directory bit.
+        put(a, &self.central, 0x02014b50, 4)
+        put(a, &self.central, 0x031E, 2)
+        put(a, &self.central, 20, 2)
+        put(a, &self.central, flags, 2)
+        put(a, &self.central, method, 2)
+        put(a, &self.central, dos & 0xFFFF, 2)
+        put(a, &self.central, dos >> 16, 2)
+        put(a, &self.central, @as(i64, crc), 4)
+        put(a, &self.central, @len(body), 4)
+        put(a, &self.central, size, 4)
+        put(a, &self.central, @len(name), 2)
+        put(a, &self.central, 0, 2)
+        put(a, &self.central, 0, 2)
+        put(a, &self.central, 0, 2)
+        put(a, &self.central, 0, 2)
+        put(a, &self.central, mode << 16 | (if (mode == DIR_MODE) 0x10 else 0), 4)
+        put(a, &self.central, offset, 4)
+        a.append_str(&self.central, name)
+        self.count = self.count + 1
+    }
+
+    // The archive: the entries, the central directory and its end.
+    fn finish(sink self: Builder, a: Allocator) Buf(u8) {
+        var out = self.out
+        const at = @len(out)
+        a.append_str(&out, self.central)
+        put(a, &out, 0x06054b50, 4)
+        put(a, &out, 0, 2)
+        put(a, &out, 0, 2)
+        put(a, &out, self.count, 2)
+        put(a, &out, self.count, 2)
+        put(a, &out, @len(self.central), 4)
+        put(a, &out, at, 4)
+        put(a, &out, 0, 2)
+        a.free(self.central)
+        return out
+    }
+}
+
+fn builder() Builder {
+    return Builder{ .out = .empty, .central = .empty, .count = 0, .mtime = DOS_EPOCH, .mode = FILE_MODE }
+}
+
+// v as n little-endian bytes.
+fn put(a: Allocator, inout out: Buf(u8), v: i64, n: i64) void {
+    var i = 0
+    while (i < n) {
+        a.push(&out, @as(u8, (v >> (i * 8)) & 0xFF))
+        i = i + 1
+    }
+}

@@ -1,0 +1,165 @@
+// std/flate: checksums, DEFLATE at every level, and zlib and gzip streams
+// made by other tools (GNU gzip, Python's zlib).
+// expect: 3421780262 3421780262 0
+// expect: 300286872 1
+// expect: stored true
+// expect: levels true true
+// expect: 2 2 kept
+// expect: x
+// expect: 34 Hello from gzip!
+// expect: 80 egg egg
+// expect: abc
+// expect: raw deflate, raw deflate | TAIL
+// expect: 8 onetwo
+// expect: TooBig before
+// expect: TooBig before
+// expect: BadData before
+// expect: BadChecksum before
+// expect: BadData before
+// expect: BadData before
+// expect: BadData before
+uses alloc, io
+
+const flate = @import("std/flate")
+const codec = @import("std/codec")
+
+// hello.txt, made by `gzip -9`, so the header has its name and time.
+const GZ_NAMED = "H4sICCXZsWMCA2hlbGxvLnR4dADzSM3JyVdIK8rPVUivyixQ5PJAFwAA6/+SwCIAAAA="
+// zlib.compress(b"egg " * 20, 9): a fixed Huffman block.
+const ZLIB_FIXED = "eNpLTU9XSKUiBgA5QBp9"
+// zlib.compress(b"abc", 0): a stored block.
+const ZLIB_STORED = "eAEBAwD8/2FiYwJNASc="
+// A raw stream for "raw deflate, raw deflate", then "TAIL".
+const RAW_TAIL = "K0osV0hJTctJLEnVUShCcABUQUlM"
+// Two gzip members, "one\n" and "two\n", one after the other.
+const GZ_TWO = "H4sIAAAAAAACE8vPS+UCAJ+oF/gEAAAAH4sIAAAAAAACEyspz+cCAHQIF5YEAAAA"
+
+fn b64(a: Allocator, s: []u8) Buf(u8) {
+    var out: Buf(u8) = .empty
+    _ = codec.base64_decode(a, &out, s)
+    return out
+}
+
+// Text that compresses, with some bytes that do not.
+fn sample(a: Allocator) Buf(u8) {
+    var s: Buf(u8) = .empty
+    var x: u32 = 12345
+    var i = 0
+    while (i < 3000) {
+        a.append_str(&s, "line ")
+        a.append_int(&s, i % 97)
+        a.append_str(&s, if (i % 3 == 0) " of the sample\n" else " egg\n")
+        if (i % 50 == 0) {
+            var k = 0
+            while (k < 40) {
+                x = x *% 1103515245 +% 12345
+                a.push(&s, @as(u8, (x >> 16) & 0xFF))
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    return s
+}
+
+fn main(io: Io, a: Allocator) !void {
+    io.print(flate.crc32(0, "123456789"), " ", flate.crc32(flate.crc32(0, "1234"), "56789"), " ", flate.crc32(0, ""))
+    io.print(flate.adler32(1, "Wikipedia"), " ", flate.adler32(1, ""))
+
+    // Every level, raw and wrapped, gives back the data.
+    const data = sample(a)
+    defer a.free(data)
+    var level = 0
+    var ok = true
+    var smallest = @len(data)
+    while (level <= 9) {
+        var z: Buf(u8) = .empty
+        defer a.free(z)
+        flate.zlib_compress(a, &z, data, level)
+        var back: Buf(u8) = .empty
+        defer a.free(back)
+        try flate.zlib_decompress(a, &back, z, flate.NO_LIMIT)
+        var g: Buf(u8) = .empty
+        defer a.free(g)
+        flate.gzip_compress(a, &g, data, level)
+        var gback: Buf(u8) = .empty
+        defer a.free(gback)
+        try flate.gzip_decompress(a, &gback, g, flate.NO_LIMIT)
+        ok = ok and back == data and gback == data
+        if (level == 0) {
+            io.print("stored ", @len(z) > @len(data))
+        } else if (@len(z) < smallest) {
+            smallest = @len(z)
+        }
+        level = level + 1
+    }
+    io.print("levels ", ok, " ", smallest * 4 < @len(data))
+
+    // Nothing, and one byte.
+    var e: Buf(u8) = .empty
+    defer a.free(e)
+    flate.deflate(a, &e, "", flate.DEFAULT_LEVEL)
+    var eback = a.concat("kept", "")
+    defer a.free(eback)
+    const used = try flate.inflate(a, &eback, e, flate.NO_LIMIT)
+    io.print(@len(e), " ", used, " ", eback)
+    var one: Buf(u8) = .empty
+    defer a.free(one)
+    flate.gzip_compress(a, &one, "x", 9)
+    var oneback: Buf(u8) = .empty
+    defer a.free(oneback)
+    try flate.gzip_decompress(a, &oneback, one, 1)
+    io.print(oneback)
+
+    // Made elsewhere.
+    const named = b64(a, GZ_NAMED)
+    defer a.free(named)
+    var text: Buf(u8) = .empty
+    defer a.free(text)
+    try flate.gzip_decompress(a, &text, named, flate.NO_LIMIT)
+    io.print(@len(text), " ", text[0..16])
+    const fixed = b64(a, ZLIB_FIXED)
+    defer a.free(fixed)
+    var eggs: Buf(u8) = .empty
+    defer a.free(eggs)
+    try flate.zlib_decompress(a, &eggs, fixed, flate.NO_LIMIT)
+    io.print(@len(eggs), " ", eggs[0..7])
+    const stored = b64(a, ZLIB_STORED)
+    defer a.free(stored)
+    var abc: Buf(u8) = .empty
+    defer a.free(abc)
+    try flate.zlib_decompress(a, &abc, stored, flate.NO_LIMIT)
+    io.print(abc)
+    const raw = b64(a, RAW_TAIL)
+    defer a.free(raw)
+    var r: Buf(u8) = .empty
+    defer a.free(r)
+    const n = try flate.inflate(a, &r, raw, flate.NO_LIMIT)
+    io.print(r, " | ", raw[n..])
+    const two = b64(a, GZ_TWO)
+    defer a.free(two)
+    var both: Buf(u8) = .empty
+    defer a.free(both)
+    try flate.gzip_decompress(a, &both, two, flate.NO_LIMIT)
+    io.print(@len(both), " ", both[0..3], both[4..7])
+
+    // Errors leave out as it was.
+    var kept = a.concat("before", "")
+    defer a.free(kept)
+    flate.gzip_decompress(a, &kept, named, 33) catch |err| io.print(@errorName(err), " ", kept)
+    flate.gzip_decompress(a, &kept, two, 7) catch |err| io.print(@errorName(err), " ", kept)
+    flate.gzip_decompress(a, &kept, named[0..@len(named) - 1], flate.NO_LIMIT) catch |err| io.print(@errorName(err), " ", kept)
+    var bad = a.concat(named, "")
+    defer a.free(bad)
+    bad[@len(bad) - 6] = bad[@len(bad) - 6] ^ 1
+    flate.gzip_decompress(a, &kept, bad, flate.NO_LIMIT) catch |err| io.print(@errorName(err), " ", kept)
+    flate.zlib_decompress(a, &kept, "\x78\x9c\xff\xff\xff\xff", flate.NO_LIMIT) catch |err| io.print(@errorName(err), " ", kept)
+    const tail = a.concat(fixed, "!")
+    defer a.free(tail)
+    flate.zlib_decompress(a, &kept, tail, flate.NO_LIMIT) catch |err| io.print(@errorName(err), " ", kept)
+    // A back reference before the start of the stream.
+    _ = flate.inflate(a, &kept, "\x03\x02\x00\x00", flate.NO_LIMIT) catch |err| {
+        io.print(@errorName(err), " ", kept)
+        return
+    }
+}
