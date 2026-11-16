@@ -23,11 +23,13 @@
 // expect: GET 200 100000 decoded=true encoding=gzip vary=- length=132 [0000]
 // expect: GET 200 4 decoded=false encoding=- vary=- length=4 [none]
 // expect: GET 200 4 decoded=false encoding=- vary=- length=4 [gzip]
+// expect: GET 400 0 decoded=false encoding=- vary=- length=0 []
 uses io, alloc, net, thread
 
 const http = @import("std/http")
 const flate = @import("std/flate")
 const codec = @import("std/codec")
+const text = @import("std/text")
 
 // 3500 bytes that compress well.
 fn page(a: Allocator) Buf(u8) {
@@ -56,10 +58,18 @@ fn answer(c: TcpConn, a: Allocator, req: http.Request) !void {
     }
     if (p == "/cross") {
         // To /accept on the server at port `to`.
-        const to = http.form_value(a, req.query, "to") orelse a.concat("0", "")
+        // Only a port number goes into the header: a decoded value could
+        // hold CR LF and add headers of its own.
+        const to = http.form_value(a, req.query, "to") orelse a.concat("", "")
         defer a.free(to)
-        const location = a.concat("Location: http://127.0.0.1:", to, "/accept\r\n")
+        const port = text.parse_int(to) orelse 0
+        if (port < 1 or port > 65535) {
+            return http.respond(c, a, req, "400 Bad Request", "", "", "")
+        }
+        var location = a.concat("Location: http://127.0.0.1:", "")
         defer a.free(location)
+        a.append_int(&location, port)
+        a.append_str(&location, "/accept\r\n")
         return http.respond(c, a, req, "307 Temporary Redirect", "", location, "")
     }
     if (p == "/short") {
@@ -172,6 +182,10 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
     follow.redirects = 1
     show(io, net, a, "GET", cross, "Accept-Encoding: identity\r\n", follow)
     show(io, net, a, "GET", cross, "", follow)
+    // A port that is not one (CR LF and a header) is refused.
+    const injected = a.concat(base, "/cross?to=80%0d%0aX-Injected:%20yes")
+    defer a.free(injected)
+    show(io, net, a, "GET", injected, "", follow)
 }
 
 fn show_etag(io: Io, net: Net, a: Allocator, url: []u8, opts: http.Options) void {
