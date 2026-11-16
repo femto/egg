@@ -687,6 +687,12 @@ module Egg
       # What an Fs method failed with: the index into FS_ERRORS, plus 1.
       "egg_fs_class" => <<~C,
         #include <errno.h>
+        /* On Windows, removing, renaming, making and listing directories and
+           stat classify Windows' own errors (egg_fs_win_class), so a program
+           that does only those leaves this unused there. */
+        #ifdef __GNUC__
+        __attribute__((unused))
+        #endif
         static int egg_fs_class(int e) {
             /* ISO C names none of these, so each may be missing. */
         #ifdef ENOENT
@@ -1045,12 +1051,16 @@ module Egg
       C
       # kind is FileKind's index: file, dir, other. The size of a file only.
       # modified: the last write, in nanoseconds since 1970 as the clock's,
-      # held to what an int64_t of them reaches (1677 to 2262): a file may
+      # held to what an int64_t of them reaches (1677-09-21 to 2262-04-11): a file may
       # be dated anywhere, and multiplying past that would be undefined.
       "egg_fs_stat" => <<~C,
         static int64_t egg_fs_ns(int64_t sec, int64_t ns) {
-            if (sec > INT64_MAX / 1000000000 - 1) return INT64_MAX;
-            if (sec < INT64_MIN / 1000000000 + 1) return INT64_MIN;
+            /* INT64_MAX is 9223372036 s + 854775807 ns, INT64_MIN
+               -9223372037 s + 145224192 ns; ns is 0 to 999999999. */
+            if (sec > INT64_C(9223372036) || (sec == INT64_C(9223372036) && ns > 854775807)) return INT64_MAX;
+            if (sec < INT64_C(-9223372037) || (sec == INT64_C(-9223372037) && ns < 145224192)) return INT64_MIN;
+            /* One second less first, so INT64_MIN is reached without passing it. */
+            if (sec < 0) return (sec + 1) * 1000000000 + (ns - 1000000000);
             return sec * 1000000000 + ns;
         }
         static int egg_fs_stat(egg_str path, int32_t *kind, int64_t *size, int64_t *modified) {

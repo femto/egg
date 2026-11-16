@@ -391,23 +391,34 @@ end
 def check_fs_modified(dir)
   work = File.join(dir, "fs_modified")
   FileUtils.mkdir_p(work)
-  dates = { "now.txt" => Time.at(1_500_000_000, 250_000_000, :nsec), "late.txt" => Time.utc(3000, 1, 1) }
+  dates = { "now.txt" => Time.at(1_500_000_000, 250_000_000, :nsec), "late.txt" => Time.utc(3000, 1, 1),
+            "edge.txt" => Time.at(9_223_372_036, 854_775_806, :nsec) }
   dates["early.txt"] = Time.utc(1600, 1, 1) unless Gem.win_platform?
-  dates.each do |name, t|
+  # A file system keeps what it can: ext4 dates nothing before 1901, so the
+  # time to expect is the one it kept, held to an i64 of nanoseconds.
+  want = dates.keys.to_h do |name|
     path = File.join(work, name)
     File.write(path, "x")
-    File.utime(t, t, path)
+    File.utime(dates[name], dates[name], path)
+    kept = File.mtime(path)
+    [name, (kept.to_i * 1_000_000_000 + kept.nsec).clamp(-2**63, 2**63 - 1)]
   end
   check_program("fs_modified_range", <<~EGG, work)
-    // expect: 1500000000250000000
-    // expect: 9223372036854775807
-    // expect: #{Gem.win_platform? ? "skipped" : "-9223372036854775808"}
+    // expect: #{want["now.txt"]}
+    // expect: #{want["late.txt"]}
+    // expect: #{want["edge.txt"]}
+    // expect: #{want.fetch("early.txt", "skipped")}
     uses fs, io
 
     fn main(io: Io, files: Fs) !void {
         io.print((try files.stat("now.txt")).modified)
         io.print((try files.stat("late.txt")).modified)
-        const early = files.stat("early.txt") catch {
+        io.print((try files.stat("edge.txt")).modified)
+        // Not made on Windows; any other failure fails the test.
+        const early = files.stat("early.txt") catch |e| {
+            if (e != error.NotFound) {
+                return e
+            }
             io.print("skipped")
             return
         }
