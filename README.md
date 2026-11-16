@@ -298,7 +298,7 @@ v3 (memory without GC, and what realistic programs needed):
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
   `std/text` searches and takes text apart (`find`, `find_from`, `contains`,
-  `starts_with`, `ends_with`, `trim`, `strip` (a part, not a copy), `split`,
+  `starts_with`, `ends_with`, `is_utf8`, `trim`, `strip` (a part, not a copy), `split`,
   `parse_int`, `parse_float` (rounded to the nearest f64; inf when too big)).
   `std/sort` sorts, reverses and checks a mutable slice in place, also of
   elements that own buffers
@@ -331,9 +331,14 @@ v3 (memory without GC, and what realistic programs needed):
   `parse_response` on received bytes. A `Response` has `status`, `body`,
   `keep`, `decoded` (fetch decompressed the body), `r.header(name)` and
   `r.reason()`.
-  `std/ws` is WebSocket for servers: `is_handshake` and `handshake` (the
-  101 response), frames out, and messages in with `take` (from received
-  bytes) or `read_message`. `std/codec` has Base64, hex and form escaping;
+  `std/ws` is WebSocket (`ws://` only): a server answers with
+  `is_handshake` and `handshake` (the 101 response) and keeps a
+  `ws.server(inbox)`; a client makes a `ws.client(rng, a)` and
+  `connect(net, a, &conn, url, protocols, headers)`. Either end sends with
+  `send` and `close`, or builds frames with `frame` and `close_frame`, and
+  gets messages with `take` (from bytes given to `received`, as a Poller
+  reads them) or `read_message`, which answers pings and the close
+  handshake; text is checked to be UTF-8. `std/codec` has Base64, hex and form escaping;
   `std/sha1` SHA-1, in Egg, for the WebSocket handshake.
   `std/time` is the calendar in UTC: `time.utc(ns)` takes an instant
   (nanoseconds since 1970, as `clock.now()` gives it) apart into a
