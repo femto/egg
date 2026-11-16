@@ -1,6 +1,7 @@
 // std/zip: zip archives (PKWARE APPNOTE), read and written in memory.
-// Entries are stored or deflated (std/flate); ZIP64, encryption and
-// archives split over several files are not supported.
+// Entries are stored or deflated (std/flate). ZIP64 archives are read (as
+// `zip -` writes them, for one) but not written; encryption and archives
+// split over several files are not supported.
 // const zip = @import("std/zip")
 // var ar = try zip.open(a, data)        // data: the bytes of a .zip
 // defer a.free(ar)
@@ -145,9 +146,18 @@ fn le(data: []u8, p: i64, n: i64) i64 {
     return v
 }
 
-// The entries of the archive data. error.BadZip if it is not one,
-// error.Unsupported for ZIP64 and archives over several disks. Data may
-// have other bytes before the archive, as self-extracting ones do.
+// The 8-byte little-endian number at data[p]; error.BadZip past what an
+// i64 holds.
+fn le64(data: []u8, p: i64) !i64 {
+    if (data[p + 7] >= 0x80) {
+        return error.BadZip
+    }
+    return le(data, p, 8)
+}
+
+// The entries of the archive data, ZIP64 or not. error.BadZip if it is not
+// one, error.Unsupported for archives over several disks. Data may have
+// other bytes before the archive, as self-extracting ones do.
 fn open(a: Allocator, data: []u8) !Archive {
     // The end of central directory record: 22 bytes and a comment of up to
     // 65535, so the last signature in that reach.
@@ -166,19 +176,54 @@ fn open(a: Allocator, data: []u8) !Archive {
         return error.BadZip
     }
     p = found
-    const count = le(data, p + 10, 2)
-    const size = le(data, p + 12, 4)
-    const offset = le(data, p + 16, 4)
+    var count = le(data, p + 10, 2)
+    var size = le(data, p + 12, 4)
+    var offset = le(data, p + 16, 4)
+    // The central directory ends where the records after it start.
+    var end = p
+    var base = 0
     if (p >= 20 and le(data, p - 20, 4) == 0x07064b50) {
-        return error.Unsupported
+        // ZIP64: a locator just before gives where the ZIP64 end record
+        // is; its counts and sizes are 8 bytes. With bytes before the
+        // archive the record is not there, but just before the locator
+        // (unless it has extensible data, which nothing writes).
+        if (le(data, p - 16, 4) != 0) {
+            return error.Unsupported
+        }
+        const rec = try le64(data, p - 12)
+        var z = -1
+        if (rec <= p - 76 and le(data, rec, 4) == 0x06064b50) {
+            z = rec
+        } else if (p >= 76 and le(data, p - 76, 4) == 0x06064b50) {
+            z = p - 76
+        }
+        if (z < 0 or rec > z) {
+            return error.BadZip
+        }
+        if (le(data, z + 16, 4) != 0 or le(data, z + 20, 4) != 0) {
+            return error.Unsupported
+        }
+        count = try le64(data, z + 32)
+        const here = try le64(data, z + 24)
+        if (here != count) {
+            return error.Unsupported
+        }
+        size = try le64(data, z + 40)
+        offset = try le64(data, z + 48)
+        end = z
+        base = z - rec
+    } else {
+        if (le(data, p + 4, 2) != 0 or le(data, p + 6, 2) != 0 or le(data, p + 8, 2) != count) {
+            return error.Unsupported
+        }
+        // Where the archive starts in data: where its central directory
+        // is, less where the archive says it is.
+        if (size + offset > p) {
+            return error.BadZip
+        }
+        base = p - size - offset
     }
-    if (le(data, p + 4, 2) != 0 or le(data, p + 6, 2) != 0 or le(data, p + 8, 2) != count) {
-        return error.Unsupported
-    }
-    // Where the archive starts in data: where its central directory is,
-    // less where the archive says it is.
-    const base = p - size - offset
-    if (base < 0) {
+    if (offset > end - base) {
         return error.BadZip
     }
     var ar = Archive{ .entries = .empty, .names = .empty, .comment = .empty }
@@ -187,7 +232,7 @@ fn open(a: Allocator, data: []u8) !Archive {
     var q = base + offset
     var i = 0
     while (i < count) {
-        if (q + 46 > p or le(data, q, 4) != 0x02014b50) {
+        if (q + 46 > end or le(data, q, 4) != 0x02014b50) {
             return error.BadZip
         }
         const made_by = le(data, q + 4, 2)
@@ -195,14 +240,58 @@ fn open(a: Allocator, data: []u8) !Archive {
         const elen = le(data, q + 30, 2)
         const clen = le(data, q + 32, 2)
         const next = q + 46 + nlen + elen + clen
-        if (next > p) {
+        if (next > end) {
             return error.BadZip
         }
-        const packed = le(data, q + 20, 4)
-        const unpacked = le(data, q + 24, 4)
-        const local = le(data, q + 42, 4)
+        var packed = le(data, q + 20, 4)
+        var unpacked = le(data, q + 24, 4)
+        var local = le(data, q + 42, 4)
         if (packed == 0xFFFFFFFF or unpacked == 0xFFFFFFFF or local == 0xFFFFFFFF) {
-            return error.Unsupported
+            // The ZIP64 extra field (id 1) has 8 bytes for each of these
+            // that is all ones, in this order.
+            var x = q + 46 + nlen
+            const xend = x + elen
+            var r = -1
+            var rend = -1
+            while (x + 4 <= xend) {
+                const len = le(data, x + 2, 2)
+                if (x + 4 + len > xend) {
+                    return error.BadZip
+                }
+                if (le(data, x, 2) == 1) {
+                    r = x + 4
+                    rend = x + 4 + len
+                    break
+                }
+                x = x + 4 + len
+            }
+            if (r < 0) {
+                return error.BadZip
+            }
+            if (unpacked == 0xFFFFFFFF) {
+                if (r + 8 > rend) {
+                    return error.BadZip
+                }
+                unpacked = try le64(data, r)
+                r = r + 8
+            }
+            if (packed == 0xFFFFFFFF) {
+                if (r + 8 > rend) {
+                    return error.BadZip
+                }
+                packed = try le64(data, r)
+                r = r + 8
+            }
+            if (local == 0xFFFFFFFF) {
+                if (r + 8 > rend) {
+                    return error.BadZip
+                }
+                local = try le64(data, r)
+            }
+        }
+        // Neither can reach past data (read checks the exact bounds).
+        if (packed > n or local > n) {
+            return error.BadZip
         }
         const e = Entry{
             .name_at = @len(ar.names),
