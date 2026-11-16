@@ -155,24 +155,53 @@ fn has_word(list: []u8, word: []u8) bool {
     return false
 }
 
-// Do the parameters of a word (";q=0", say) give it a weight of 0?
+// Do the parameters of a word (";q=0", say) give it a weight of 0? The
+// name q is in any case, as RFC 9110 has it.
 fn refused(params: []u8) bool {
-    const at = text.find(params, "q=") orelse -1
-    if (at < 0) {
-        return false
-    }
-    var i = at + 2
-    if (i >= @len(params) or params[i] != '0') {
-        return false
-    }
-    i = i + 1
-    if (i < @len(params) and params[i] == '.') {
-        i = i + 1
-        while (i < @len(params) and params[i] == '0') {
-            i = i + 1
+    var at = 0
+    while (at < @len(params)) {
+        const end = text.find_from(params, ";", at + 1) orelse @len(params)
+        var lo = at
+        if (params[lo] == ';') {
+            lo = lo + 1
         }
+        const param = unblank(params[lo..end])
+        if (@len(param) >= 2 and lower(param[0]) == 'q' and param[1] == '=') {
+            const v = param[2..]
+            if (@len(v) == 0 or v[0] != '0') {
+                return false
+            }
+            var i = 1
+            if (i < @len(v) and v[i] == '.') {
+                i = i + 1
+                while (i < @len(v) and v[i] == '0') {
+                    i = i + 1
+                }
+            }
+            return i == @len(v)
+        }
+        at = end
     }
-    return i == @len(params) or is_blank(params[i]) or params[i] == ';'
+    return false
+}
+
+// How the comma-separated list weighs word: 1 if it takes it, 0 if it has
+// it with q=0, -1 if it does not name it.
+fn weight(list: []u8, word: []u8) i64 {
+    var w = -1
+    var i = 0
+    while (i <= @len(list)) {
+        const end = text.find_from(list, ",", i) orelse @len(list)
+        const semi = text.find_from(list[0..end], ";", i) orelse end
+        if (same(unblank(list[i..semi]), word)) {
+            if (!refused(list[semi..end])) {
+                return 1
+            }
+            w = 0
+        }
+        i = end + 1
+    }
+    return w
 }
 
 // A decimal number of up to 18 digits, all of s, or null.
@@ -560,8 +589,51 @@ fn lists(req: Request, name: []u8, word: []u8) bool {
 }
 
 // Does the client take the body in this content coding ("gzip", say)?
+// Accept-Encoding names it without q=0, or names it not at all but has
+// "*" without q=0.
 fn accepts(req: Request, coding: []u8) bool {
-    return lists(req, "Accept-Encoding", coding)
+    var named = -1
+    var any = -1
+    for (req.headers) |h| {
+        if (same(req.head[h.name_lo..h.name_hi], "Accept-Encoding")) {
+            const list = req.head[h.value_lo..h.value_hi]
+            const w = weight(list, coding)
+            if (w > named) {
+                named = w
+            }
+            const star = weight(list, "*")
+            if (star > any) {
+                any = star
+            }
+        }
+    }
+    return if (named >= 0) named == 1 else any == 1
+}
+
+// headers with a strong ETag ("x") made weak (W/"x"): the gzipped body is
+// other bytes, so it cannot have the same strong validator. A weak one
+// still matches If-None-Match, whose comparison is weak.
+fn weakened(a: Allocator, headers: []u8) Buf(u8) {
+    var out: Buf(u8) = .empty
+    var at = 0
+    while (at < @len(headers)) {
+        const nl = text.find_from(headers, "\n", at) orelse @len(headers) - 1
+        const line = headers[at..nl + 1]
+        const colon = text.find(line, ":") orelse -1
+        if (colon > 0 and same(unblank(line[0..colon]), "ETag")) {
+            const lo = skip_blank(line, colon + 1, @len(line))
+            if (lo < @len(line) and line[lo] == '"') {
+                a.append_str(&out, line[0..lo])
+                a.append_str(&out, "W/")
+                a.append_str(&out, line[lo..])
+                at = nl + 1
+                continue
+            }
+        }
+        a.append_str(&out, line)
+        at = nl + 1
+    }
+    return out
 }
 
 // A body shorter than this is not worth compressing: it fits in one packet
@@ -570,8 +642,9 @@ const MIN_COMPRESS = 1024
 
 // The response to req as respond gives it, but with the body gzipped
 // (Content-Encoding: gzip) when the client takes gzip, the body is at least
-// MIN_COMPRESS bytes and gzip makes it smaller. Either way it says Vary:
-// Accept-Encoding, so a cache keeps the two apart. Not for a body already
+// MIN_COMPRESS bytes and gzip makes it smaller; a strong ETag in headers
+// is then made weak. Either way it says Vary: Accept-Encoding, so a cache
+// keeps the two apart. Not for a body already
 // compressed (an image, a .zip), which gzip cannot shrink, or for a 206:
 // ranges are of the body as sent.
 fn compressed(c: TcpConn, a: Allocator, req: Request, status: []u8, own: []u8, headers: []u8, body: []u8) !void {
@@ -590,8 +663,9 @@ fn append_compressed(a: Allocator, inout out: Buf(u8), req: Request, status: []u
         flate.gzip_compress(a, &gz, body, flate.DEFAULT_LEVEL)
     }
     const zipped = @len(gz) > 0 and @len(gz) < @len(body)
-    const all = a.concat(headers, if (zipped) "Vary: Accept-Encoding\r\nContent-Encoding: gzip\r\n" else "Vary: Accept-Encoding\r\n")
+    var all = if (zipped) weakened(a, headers) else a.concat(headers, "")
     defer a.free(all)
+    a.append_str(&all, if (zipped) "Vary: Accept-Encoding\r\nContent-Encoding: gzip\r\n" else "Vary: Accept-Encoding\r\n")
     const sent = if (zipped) gz[0..] else body
     append_head(a, &out, status, own, all, @len(sent), req.keep)
     if (!bodiless(status) and req.method != "HEAD") {
@@ -1296,12 +1370,12 @@ fn read_response(c: TcpConn, a: Allocator, inout inbox: Buf(u8), max_body: i64, 
 }
 
 // One request on a connection of its own, closed after the response.
-fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options) !Response {
+// gzip: ask for gzip and decompress it.
+fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options, gzip: bool) !Response {
     const u = try parse_url(url)
     const c = try net.tcp_connect(url_host(url, u), u.port)
     defer c.close()
     try c.set_timeout(opts.timeout_ms)
-    const gzip = opts.decompress and !names(headers, "Accept-Encoding")
     const all = a.concat(headers, if (gzip) "Accept-Encoding: gzip\r\n" else "", "Connection: close\r\n")
     defer a.free(all)
     const target = url_target(url, u)
@@ -1403,9 +1477,12 @@ fn fetch(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: [
     defer a.free(current)
     var get = false
     var hops = 0
+    // Decided once from the caller's headers, which a redirect to another
+    // server goes without.
+    const gzip = opts.decompress and !names(headers, "Accept-Encoding")
     while (true) {
         const own = if (same_origin(url, current)) headers else ""
-        const resp = try fetch_once(net, a, if (get) "GET" else method, current, own, if (get) "" else body, opts)
+        const resp = try fetch_once(net, a, if (get) "GET" else method, current, own, if (get) "" else body, opts, gzip)
         if (hops >= opts.redirects or !is_redirect(resp.status)) {
             return resp
         }

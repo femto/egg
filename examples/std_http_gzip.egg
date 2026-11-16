@@ -1,19 +1,28 @@
 // gzip in std/http: a server thread answers with compressed, and fetch asks
 // for gzip and decompresses it, unless the caller sends an Accept-Encoding
 // of its own or turns decompress off; a body too short, a client that does
-// not take gzip and a HEAD; a damaged gzip body and one that grows past
-// max_body.
+// not take gzip, q=0 in either case, "*", a HEAD and a strong ETag; a
+// damaged gzip body and one that grows past max_body; and the caller's
+// Accept-Encoding kept across a redirect to another server.
 // expect: GET 200 3500 decoded=true encoding=gzip vary=Accept-Encoding length=272 [<li>an egg, an egg, ]
 // expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
 // expect: GET 200 272 decoded=false encoding=gzip vary=Accept-Encoding length=272 [1f8b]
 // expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
 // expect: HEAD 200 0 decoded=false encoding=gzip vary=Accept-Encoding length=272 []
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: GET 200 272 decoded=false encoding=gzip vary=Accept-Encoding length=272 [1f8b]
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: etag W/"v1" encoding=gzip
+// expect: etag "v1" encoding=-
 // expect: GET 200 17 decoded=false encoding=- vary=Accept-Encoding length=17 [too short to gzip]
 // expect: GET 200 4 decoded=false encoding=- vary=- length=4 [gzip]
 // expect: GET 200 4 decoded=false encoding=- vary=- length=4 [none]
 // expect: GET -> BadResponse
 // expect: GET -> BodyTooLarge
 // expect: GET 200 100000 decoded=true encoding=gzip vary=- length=132 [0000]
+// expect: GET 200 4 decoded=false encoding=- vary=- length=4 [none]
+// expect: GET 200 4 decoded=false encoding=- vary=- length=4 [gzip]
 uses io, alloc, net, thread
 
 const http = @import("std/http")
@@ -39,6 +48,19 @@ fn answer(c: TcpConn, a: Allocator, req: http.Request) !void {
         const body = page(a)
         defer a.free(body)
         return http.compressed(c, a, req, "200 OK", "", "Content-Type: text/html\r\n", body)
+    }
+    if (p == "/etag") {
+        const body = page(a)
+        defer a.free(body)
+        return http.compressed(c, a, req, "200 OK", "", "etag: \"v1\"\r\n", body)
+    }
+    if (p == "/cross") {
+        // To /accept on the server at port `to`.
+        const to = http.form_value(a, req.query, "to") orelse a.concat("0", "")
+        defer a.free(to)
+        const location = a.concat("Location: http://127.0.0.1:", to, "/accept\r\n")
+        defer a.free(location)
+        return http.respond(c, a, req, "307 Temporary Redirect", "", location, "")
     }
     if (p == "/short") {
         return http.compressed(c, a, req, "200 OK", "", "", "too short to gzip")
@@ -114,6 +136,16 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
     show(io, net, a, "GET", pg, "accept-encoding: gzip\r\n", opts)
     show(io, net, a, "GET", pg, "Accept-Encoding: gzip;q=0\r\n", opts)
     show(io, net, a, "HEAD", pg, "", opts)
+    // q in either case; "*" takes gzip unless gzip itself is refused.
+    show(io, net, a, "GET", pg, "Accept-Encoding: gzip;Q=0\r\n", opts)
+    show(io, net, a, "GET", pg, "Accept-Encoding: *\r\n", raw)
+    show(io, net, a, "GET", pg, "Accept-Encoding: *, gzip; q=0\r\n", raw)
+    show(io, net, a, "GET", pg, "Accept-Encoding: identity, *;q=0\r\n", raw)
+    // A strong ETag is made weak when the body is gzipped.
+    const etag = a.concat(base, "/etag")
+    defer a.free(etag)
+    show_etag(io, net, a, etag, opts)
+    show_etag(io, net, a, etag, raw)
     const short = a.concat(base, "/short")
     defer a.free(short)
     show(io, net, a, "GET", short, "", opts)
@@ -128,4 +160,25 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
     defer a.free(bomb)
     show(io, net, a, "GET", bomb, "", small)
     show(io, net, a, "GET", bomb, "", opts)
+
+    // The caller's own Accept-Encoding holds after a redirect to another
+    // server, which gets none of the caller's headers: fetch adds none.
+    const other = try net.tcp_listen("127.0.0.1", 0)
+    var cross = a.concat(base, "/cross?to=")
+    defer a.free(cross)
+    a.append_int(&cross, other.port())
+    threads.spawn(server, other, a).detach()
+    var follow = http.options()
+    follow.redirects = 1
+    show(io, net, a, "GET", cross, "Accept-Encoding: identity\r\n", follow)
+    show(io, net, a, "GET", cross, "", follow)
+}
+
+fn show_etag(io: Io, net: Net, a: Allocator, url: []u8, opts: http.Options) void {
+    const r = http.fetch(net, a, "GET", url, "", "", opts) catch |e| {
+        io.print("etag -> ", @errorName(e))
+        return
+    }
+    defer r.deinit(a)
+    io.print("etag ", r.header("ETag") orelse "-", " encoding=", r.header("Content-Encoding") orelse "-")
 }
