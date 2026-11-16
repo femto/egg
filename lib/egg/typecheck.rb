@@ -421,15 +421,6 @@ module Egg
       "; declare #{base_name(info.canon)} as an extern struct for C to see it"
     end
 
-    # An extern struct holds only C types, so C sees it field by field.
-    def check_extern_fields(d, info)
-      info.fields.each do |name, t, line|
-        next if c_type?(t)
-        m = d.members.find { |f| f.name == name }
-        err("E154", "field '#{name}' of an extern struct cannot be a #{t}: its fields are integers, floats, bool, pointers to C types, function values, arrays of them and extern structs#{c_why(t)}", line, m&.col || d.col)
-      end
-    end
-
     # `uses alloc, io`: known capabilities, each named once.
     def check_uses(m)
       seen = {}
@@ -916,8 +907,7 @@ module Egg
           add_method(d.name, m, {}, d.name)
         end
       else
-        with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members) }
-        check_extern_fields(d, info) if info.ext
+        with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members, false, info.ext) }
         d.fns.each do |m|
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
@@ -961,7 +951,8 @@ module Egg
 
     # Struct fields, or union members (a union member may have no payload:
     # its type is "void").
-    def resolve_fields(members, union = false)
+    # ext: an extern struct's, which hold only C types (E154).
+    def resolve_fields(members, union = false, ext = false)
       fields = []
       members.each do |f|
         if fields.any? { |n, _| n == f.name }
@@ -975,6 +966,9 @@ module Egg
         t = resolve_type(f.type, f.line, f.col)
         if t == "void" || t == "type"
           err("E108", "a field cannot have type #{t}", f.line, f.col)
+          t = "error"
+        elsif ext && !c_type?(t)
+          err("E154", "field '#{f.name}' of an extern struct cannot be a #{t}: its fields are integers, floats, bool, pointers to C types, function values, arrays of them and extern structs#{c_why(t)}", f.line, f.col)
           t = "error"
         elsif !slice_in(t).nil?
           err("E116", "a struct cannot hold a slice (#{t}); slices exist only as parameters, local consts and results", f.line, f.col)
