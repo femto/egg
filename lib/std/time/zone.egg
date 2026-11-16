@@ -105,24 +105,47 @@ const Zone = struct {
         return self.names[t.abbr..t.abbr + t.abbr_len]
     }
 
-    // The k-th offset the zone may have: each of its types, then its
-    // rule's standard and daylight saving time (UTC's 0 for a zone with
-    // neither); null past them.
-    fn candidate(self: Zone, k: i64) ?i64 {
-        const n = @len(self.types)
-        if (k < n) {
-            return self.types[k].offset
+    // The type in force at the local time wall (seconds, as t.unix()
+    // counts them). A change at T counts from the local time T plus the
+    // larger of the offsets on either side of it: a time a change skips
+    // or repeats then still has the type from before. The last change
+    // that counts by wall is found by halving (Python's bisect_right),
+    // so the answer depends on the changes alone.
+    fn wall_type(self: Zone, wall: i64) ZoneType {
+        const n = @len(self.times)
+        if (@len(self.types) == 0 and self.rule == null) {
+            return ZoneType{ .offset = 0, .dst = false, .abbr = 0, .abbr_len = 0 }
         }
-        if (self.rule) |r| {
-            if (k == n) {
-                return r.std.offset
-            }
-            if (k == n + 1 and r.has_dst) {
-                return r.dst.offset
-            }
-            return null
+        // Before the first change first, then after the last: the keys
+        // need not ascend (a change can come sooner than the offset it
+        // undoes), and Python asks in this order.
+        if (n > 0 and wall < self.wall_key(0)) {
+            return self.types[0]
         }
-        return if (k == n and n == 0) 0 else null
+        if (n == 0 or wall > self.wall_key(n - 1)) {
+            if (self.rule) |r| {
+                return rule_wall_type(r, wall)
+            }
+            return if (n == 0) self.types[0] else self.types[@as(i64, self.kinds[n - 1])]
+        }
+        var lo = 0
+        var hi = n
+        while (lo < hi) {
+            const mid = (lo + hi) / 2
+            if (wall < self.wall_key(mid)) {
+                hi = mid
+            } else {
+                lo = mid + 1
+            }
+        }
+        return self.types[@as(i64, self.kinds[lo - 1])]
+    }
+
+    // The local time from which change i counts.
+    fn wall_key(self: Zone, i: i64) i64 {
+        const after = self.types[@as(i64, self.kinds[i])].offset
+        const before = if (i == 0) self.types[0].offset else self.types[@as(i64, self.kinds[i - 1])].offset
+        return self.times[i] + (if (after > before) after else before)
     }
 
     // The local date and time at the instant ns.
@@ -137,53 +160,14 @@ const Zone = struct {
     // nanoseconds cannot hold it. When clocks go back, a time that happens
     // twice is the first of the two; when they go forward, a time that is
     // skipped is taken with the offset from before, so 02:30 on the day New
-    // York skips to 03:00 is 03:30. Python's fold=0 does the same.
+    // York skips to 03:00 is 03:30. This is Python's fold=0, done as its
+    // zoneinfo does it.
     fn instant(self: Zone, t: time.DateTime) ?i64 {
         if (!t.fits()) {
             return null
         }
         const wall = t.unix()
-        // Every offset the zone has is tried: one that is in force at
-        // wall - offset gives an instant with the local time t, and the
-        // earliest of those is taken.
-        var found = false
-        var u = 0
-        var least = 0
-        var most = 0
-        var k = 0
-        while (k < @len(self.types) + 2) {
-            if (self.candidate(k)) |o| {
-                if (k == 0 or o < least) {
-                    least = o
-                }
-                if (k == 0 or o > most) {
-                    most = o
-                }
-                const at = wall - o
-                if (self.lookup(at).offset == o and (!found or at < u)) {
-                    u = at
-                    found = true
-                }
-            }
-            k = k + 1
-        }
-        if (!found) {
-            // A gap: the local time u + offset(u) jumps over wall at some
-            // change between wall - most (below wall) and wall - least
-            // (above it). Halving finds that change; the offset in force
-            // just before it is the one from before.
-            var lo = wall - most
-            var hi = wall - least
-            while (hi - lo > 1) {
-                const mid = lo + (hi - lo) / 2
-                if (mid + self.lookup(mid).offset < wall) {
-                    lo = mid
-                } else {
-                    hi = mid
-                }
-            }
-            u = wall - self.lookup(lo).offset
-        }
+        const u = wall - self.wall_type(wall).offset
         return time.from_parts(u, time.floor_mod(t.nano, time.SECOND))
     }
 }
@@ -230,6 +214,44 @@ fn rule_type(r: Rule, secs: i64) ZoneType {
         }
         const start = rule_day(r.start, y) - r.std.offset
         if (start <= secs and (!found or start >= last)) {
+            last = start
+            in_dst = true
+            found = true
+        }
+        y = y + 1
+    }
+    return if (in_dst) r.dst else r.std
+}
+
+// The type a rule gives at the local time wall, as Zone.wall_type: the
+// start counts from its time plus the change, the end from its time, if
+// daylight saving time is ahead (and the other way round for negative
+// daylight saving time), so skipped and repeated times have the type from
+// before. The years around wall's count too, as in rule_type.
+fn rule_wall_type(r: Rule, wall: i64) ZoneType {
+    if (!r.has_dst) {
+        return r.std
+    }
+    const diff = r.dst.offset - r.std.offset
+    const year = time.utc_s(wall).year
+    var last = 0
+    var in_dst = false
+    var found = false
+    var y = year - 1
+    while (y <= year + 1) {
+        var start = rule_day(r.start, y)
+        var end = rule_day(r.end, y)
+        if (diff >= 0) {
+            start = start + diff
+        } else {
+            end = end - diff
+        }
+        if (end <= wall and (!found or end > last)) {
+            last = end
+            in_dst = false
+            found = true
+        }
+        if (start <= wall and (!found or start >= last)) {
             last = start
             in_dst = true
             found = true
