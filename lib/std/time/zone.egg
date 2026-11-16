@@ -145,32 +145,44 @@ const Zone = struct {
         const wall = t.unix()
         // Every offset the zone has is tried: one that is in force at
         // wall - offset gives an instant with the local time t, and the
-        // earliest of those is taken. In a gap none is. The offset from
-        // before it lands past the change, where a larger offset holds,
-        // and is in force again that much earlier, before the change.
+        // earliest of those is taken.
         var found = false
         var u = 0
-        var skipped = false
-        var gap = 0
+        var least = 0
+        var most = 0
         var k = 0
         while (k < @len(self.types) + 2) {
             if (self.candidate(k)) |o| {
+                if (k == 0 or o < least) {
+                    least = o
+                }
+                if (k == 0 or o > most) {
+                    most = o
+                }
                 const at = wall - o
-                const there = self.lookup(at).offset
-                if (there == o) {
-                    if (!found or at < u) {
-                        u = at
-                    }
+                if (self.lookup(at).offset == o and (!found or at < u)) {
+                    u = at
                     found = true
-                } else if (there > o and self.lookup(at - (there - o)).offset == o and (!skipped or at < gap)) {
-                    gap = at
-                    skipped = true
                 }
             }
             k = k + 1
         }
         if (!found) {
-            u = if (skipped) gap else wall - self.lookup(wall - 86400).offset
+            // A gap: the local time u + offset(u) jumps over wall at some
+            // change between wall - most (below wall) and wall - least
+            // (above it). Halving finds that change; the offset in force
+            // just before it is the one from before.
+            var lo = wall - most
+            var hi = wall - least
+            while (hi - lo > 1) {
+                const mid = lo + (hi - lo) / 2
+                if (mid + self.lookup(mid).offset < wall) {
+                    lo = mid
+                } else {
+                    hi = mid
+                }
+            }
+            u = wall - self.lookup(lo).offset
         }
         return time.from_parts(u, time.floor_mod(t.nano, time.SECOND))
     }
@@ -466,6 +478,7 @@ fn parse_tzif(a: Allocator, data: []u8) !Zone {
     var z = utc()
     errdefer a.free(z)
     a.append_str(&z.names, data[cp..cp + charcnt])
+    var lens: [256]i64 = @splat(-1)
     var i = 0
     while (i < typecnt) {
         const q = yp + i * 6
@@ -474,9 +487,15 @@ fn parse_tzif(a: Allocator, data: []u8) !Zone {
         if (idx >= charcnt or data[q + 4] > 1 or be(data, q, 4) == -2147483648) {
             return error.BadZone
         }
-        var n = 0
-        while (idx + n < charcnt and data[cp + idx + n] != 0) {
-            n = n + 1
+        // An index is one byte, so at most 256 names: each measured once,
+        // however many types share it.
+        var n = lens[idx]
+        if (n < 0) {
+            n = 0
+            while (idx + n < charcnt and data[cp + idx + n] != 0) {
+                n = n + 1
+            }
+            lens[idx] = n
         }
         a.push(&z.types, ZoneType{ .offset = be(data, q, 4), .dst = data[q + 4] == 1, .abbr = idx, .abbr_len = n })
         i = i + 1
