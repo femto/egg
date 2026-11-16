@@ -1,0 +1,45 @@
+// Extern structs cross into C by value and by pointer, in both directions.
+// expect: 2
+// expect: 1
+// expect: 63
+// expect: 4.5
+// expect: 7
+// expect: 8
+// expect: 9
+// expect: 0.25
+// expect: 602
+uses io
+allow unsafe
+link "linktest"
+
+const Pair = extern struct { a: i64, b: i64 }
+const Big = extern struct { a: i64, b: i64, c: i64, d: [2]i32 }
+const Nest = extern struct { tag: u8, p: Pair, w: f64 }
+
+extern fn lt_swap(p: Pair) Pair
+extern fn lt_big_sum(b: Big) i64
+extern fn lt_big_make(x: i64) Big
+extern fn lt_nest_sum(n: Nest) f64
+extern fn lt_nest_fill(n: *Nest) void
+extern fn lt_apply(f: fn(Big) i64, x: i64) i64
+
+// Called by C with a Big by value: more than 16 bytes, which an Egg
+// function otherwise takes by pointer.
+fn sum(b: Big) i64 {
+    return b.a + b.b + b.c + @as(i64, b.d[1])
+}
+
+fn main(io: Io) void {
+    const p = lt_swap(Pair{ .a = 1, .b = 2 })
+    io.print(p.a)
+    io.print(p.b)
+    io.print(lt_big_sum(lt_big_make(10)))
+    io.print(lt_nest_sum(Nest{ .tag = 1, .p = p, .w = 0.5 }))
+    var n = Nest{ .tag = 0, .p = p, .w = 0.0 }
+    lt_nest_fill(&n)
+    io.print(n.tag)
+    io.print(n.p.a)
+    io.print(n.p.b)
+    io.print(n.w)
+    io.print(lt_apply(sum, 100))
+}

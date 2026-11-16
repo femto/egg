@@ -45,8 +45,9 @@ module Egg
 
   # const Name = struct { ... } / enum { ... } / union(enum) { ... }
   # members: FieldDecl list (a union member with no payload has type nil);
-  # fns: Func list, the methods (struct and union)
-  TypeDecl  = Struct.new(:name, :kind, :members, :fns, :line, :col, :mod, :owned)
+  # fns: Func list, the methods (struct and union); owned: an `owned
+  # struct`; ext: an `extern struct`, laid out as C lays it out
+  TypeDecl  = Struct.new(:name, :kind, :members, :fns, :line, :col, :mod, :owned, :ext)
   FieldDecl = Struct.new(:name, :type, :line, :col)
   # uses alloc, io: one entry per capability named
   UsesItem   = Struct.new(:name, :line, :col)

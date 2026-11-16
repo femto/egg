@@ -37,7 +37,7 @@ fn_param    = [ "inout" | "sink" ] , type ;
 
 type_decl   = "const" , IDENT , "=" , ( struct_body_kw | enum_body | union_body ) ;
 type_alias  = "const" , IDENT , "=" , type , NL ;
-struct_body_kw = [ "owned" ] , "struct" , struct_body ;
+struct_body_kw = [ "owned" | "extern" ] , "struct" , struct_body ;
 struct_body = "{" , { NL } , { ( field | func ) , [ "," ] , { NL } } , "}" ;
 field       = IDENT , ":" , type ;
 enum_body   = "enum" , "{" , { NL } , IDENT , { [ "," ] , { NL } , IDENT } , [ "," ] , { NL } , "}" ;

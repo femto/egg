@@ -1,0 +1,26 @@
+// error: E154 @12
+// error: E154 @13
+// error: E154 @14
+// error: E154 @15
+// error: E132 @18
+// error: E132 @19
+// error: E132 @20
+// error: E132 @21
+allow unsafe
+const Plain = struct { a: i64 }
+const Bad = extern struct {
+    s: str,
+    p: Plain,
+    q: *Plain,
+    o: ?i64,
+}
+const Ok = extern struct { a: i64, next: *Ok, xs: [4]u8 }
+extern fn by_value(p: Plain) void
+extern fn by_ptr(p: *Plain) void
+extern fn arr(xs: [4]u8) void
+extern fn cb(f: fn(Plain) void) void
+extern fn fine(o: Ok, p: *Ok, f: fn(Ok) Ok) Ok
+
+fn main() void {
+    _ = Bad{ .s = "", .p = Plain{ .a = 0 }, .q = @ptrFromInt(*Plain, 8), .o = null }
+}

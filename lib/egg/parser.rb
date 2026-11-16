@@ -218,6 +218,7 @@ module Egg
 
     # const Name = struct { field: T, fn method(...) R { ... } }
     # const Name = owned struct { ... }
+    # const Name = extern struct { ... }: laid out as C lays it out
     # const Name = enum { a, b, c }
     # const name = @import("file.egg")
     # const Name = T, another name for the type T
@@ -246,12 +247,13 @@ module Egg
         expect_op(")")
         end_stmt
         ImportDecl.new(name.text, path.text, name.line, name.col)
-      elsif kw?("struct") || kw?("owned")
+      elsif kw?("struct") || kw?("owned") || kw?("extern")
         t = advance
         owned = t.text == "owned"
-        expect_kw("struct") if owned
+        ext = t.text == "extern"
+        expect_kw("struct") if owned || ext
         members, methods = parse_struct_body(name.text)
-        TypeDecl.new(name.text, :struct, members, methods, t.line, t.col, nil, owned)
+        TypeDecl.new(name.text, :struct, members, methods, t.line, t.col, nil, owned, ext)
       elsif kw?("union")
         t = advance
         expect_op("(")

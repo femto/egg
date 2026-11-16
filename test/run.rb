@@ -19,7 +19,7 @@
 #                      libraries; skipped when a library they link is not
 #                      installed.
 # test/link/        -- `link` and eggc's -l/-L against a C library built
-#                      here (linktest.c).
+#                      here (linktest.c), and extern structs crossing it.
 # test/pkg/         -- packages given with eggc --pkg NAME=DIR: app/ uses
 #                      greet/ and shout/ (escape/ must stay in its root).
 # clutch            -- the package manager on packages made here: path, git
@@ -138,7 +138,7 @@ def bad_line_marks(c_source, src, path, skipped = [])
     # `uses`, `allow`, `@import`, `extern fn` and type alias lines declare,
     # and generate no code (an extern fn only a prototype). A const at
     # the top level, not indented, is an alias or a constant.
-    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst[ \t]+\w+[ \t]*(:[^=]*)?=[ \t]*+(?!(owned[ \t]+)?struct\b|enum\b|union\b)/)
+    declares = text.match?(/\A(uses|allow|extern|link)\s/) || src.lines[i].match?(/\Aconst[ \t]+\w+[ \t]*(:[^=]*)?=[ \t]*+(?!((owned|extern)[ \t]+)?struct\b|enum\b|union\b)/)
     # An else-if comparing types (K == i64) is decided at compile time, and
     # @compileError stands only in a branch that is never generated.
     # The right side must name a type, so a runtime `x == y` is not taken
@@ -1665,6 +1665,9 @@ def check_link(dir)
   main = File.join(link, "main.egg")
   check_program("link/main.egg", File.read(main), dir, main, lib_dirs: [dir])
   check_program("link/main.egg -g", File.read(main), dir, main, debug: true, lib_dirs: [dir])
+  structs = File.join(link, "structs.egg")
+  check_program("link/structs.egg", File.read(structs), dir, structs, lib_dirs: [dir])
+  check_program("link/structs.egg -g", File.read(structs), dir, structs, debug: true, lib_dirs: [dir])
   eggc = [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
   out, err, st = Open3.capture3(*eggc, "run", main, "-L", dir)
   report(st.success? && out == "42\n", "eggc run links what `link` names", "#{out}#{err}")

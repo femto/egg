@@ -482,7 +482,12 @@ From v2:
   on the declaration says what the C function does; `link "sqlite3"`
   (also in an unsafe file) links a C library (`-l`/`-L` on the command line too);
   `a.cstr(s)` and `a.str_from_c(p)` (which reads through a pointer, so
-  needs `allow unsafe`) convert C strings. See
+  needs `allow unsafe`) convert C strings. A C struct is an
+  `extern struct` (`const Timespec = extern struct { sec: i64, nsec: i64 }`):
+  its fields are C types (integers, floats, bool, pointers, function
+  values, arrays and other extern structs) laid out in order as C lays
+  them out, and an extern fn takes and returns it by value or by pointer;
+  a plain struct does not cross into C, by value or behind a pointer. See
   [examples/ffi](examples/ffi) for libm and a SQLite blog
 - Owned buffers `Buf(T)`: `a.alloc(n, v)`, `a.free(b)`, `a.resize(&b, n, v)`;
   indexed, sliced and iterated like arrays. The **ownership check**
