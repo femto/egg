@@ -1,0 +1,399 @@
+// std/time: the calendar, in UTC. An instant is an i64 of nanoseconds since
+// 1970-01-01 UTC, as clock.now() gives it, which reaches from 1677 to 2262;
+// a DateTime is one taken apart into year, month, day and time of day, in
+// the proleptic Gregorian calendar and without leap seconds.
+// const time = @import("std/time")
+// time.utc(0) is 1970-01-01 00:00:00, a Thursday;
+// time.append_rfc3339(a, &out, 0, 0) appends "1970-01-01T00:00:00Z";
+// time.append_http_date(a, &out, 0) appends "Thu, 01 Jan 1970 00:00:00 GMT";
+// time.parse_rfc3339("1970-01-01T08:00:00+08:00") is 0.
+uses alloc
+
+// Durations, in nanoseconds.
+const NANOSECOND = 1
+const MICROSECOND = 1000
+const MILLISECOND = 1000000
+const SECOND = 1000000000
+const MINUTE = 60000000000
+const HOUR = 3600000000000
+const DAY = 86400000000000
+
+const Weekday = enum { sunday, monday, tuesday, wednesday, thursday, friday, saturday }
+
+const DAY_NAMES = "SunMonTueWedThuFriSat"
+const MONTH_NAMES = "JanFebMarAprMayJunJulAugSepOctNovDec"
+
+// A date and time of day, with no time zone of its own: month 1 to 12,
+// day 1 to 31, hour 0 to 23, minute and second 0 to 59, nano 0 to
+// 999999999.
+const DateTime = struct {
+    year: i64
+    month: i64
+    day: i64
+    hour: i64
+    minute: i64
+    second: i64
+    nano: i64
+
+    fn weekday(self: DateTime) Weekday {
+        const days = [7]Weekday{ .sunday, .monday, .tuesday, .wednesday, .thursday, .friday, .saturday }
+        return days[weekday_index(epoch_days(self.year, self.month, self.day))]
+    }
+
+    // 1 for January 1st, up to 366.
+    fn yearday(self: DateTime) i64 {
+        return epoch_days(self.year, self.month, self.day) - epoch_days(self.year, 1, 1) + 1
+    }
+
+    // Whether every field is in its range, the day in its month.
+    fn valid(self: DateTime) bool {
+        return self.month >= 1 and self.month <= 12 and self.day >= 1 and self.day <= days_in_month(self.year, self.month) and self.hour >= 0 and self.hour <= 23 and self.minute >= 0 and self.minute <= 59 and self.second >= 0 and self.second <= 59 and self.nano >= 0 and self.nano < SECOND
+    }
+
+    // Seconds since 1970-01-01 UTC, taking the fields as UTC. Fields out of
+    // their range carry over, as in Go: month 13 is January of the next
+    // year, day 0 the last day of the month before.
+    fn unix(self: DateTime) i64 {
+        return epoch_days(self.year, self.month, self.day) * 86400 + self.hour * 3600 + self.minute * 60 + self.second + floor_div(self.nano, SECOND)
+    }
+
+    // The instant, in nanoseconds; null outside what an i64 holds.
+    fn unix_ns(self: DateTime) ?i64 {
+        return from_parts(self.unix(), floor_mod(self.nano, SECOND))
+    }
+}
+
+fn floor_div(a: i64, b: i64) i64 {
+    const q = a / b
+    return if (a % b != 0 and (a < 0) != (b < 0)) q - 1 else q
+}
+
+// Not a - floor_div(a, b) * b, which can overflow when a is near the ends.
+fn floor_mod(a: i64, b: i64) i64 {
+    const r = a % b
+    return if (r != 0 and (r < 0) != (b < 0)) r + b else r
+}
+
+fn is_leap(year: i64) bool {
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+}
+
+fn days_in_month(year: i64, month: i64) i64 {
+    if (month == 2) {
+        return if (is_leap(year)) 29 else 28
+    }
+    if (month == 4 or month == 6 or month == 9 or month == 11) {
+        return 30
+    }
+    return 31
+}
+
+// Days from 1970-01-01 to the date, negative before it (Howard Hinnant's
+// days_from_civil). A month out of 1 to 12 carries into the year, a day
+// out of its month into the months around it.
+fn epoch_days(year: i64, month: i64, day: i64) i64 {
+    var y = year + floor_div(month - 1, 12)
+    const m = floor_mod(month - 1, 12) + 1
+    if (m <= 2) {
+        y = y - 1
+    }
+    // Eras of 400 years, which all have 146097 days; March starts the year
+    // so that February's leap day comes last.
+    const era = floor_div(y, 400)
+    const yoe = y - era * 400
+    const mp = if (m > 2) m - 3 else m + 9
+    const doy = (153 * mp + 2) / 5 + day - 1
+    const doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+
+// 0 for Sunday: 1970-01-01 was a Thursday.
+fn weekday_index(days: i64) i64 {
+    return floor_mod(days + 4, 7)
+}
+
+// The UTC date and time of an instant in nanoseconds.
+fn utc(ns: i64) DateTime {
+    var t = utc_s(floor_div(ns, SECOND))
+    t.nano = floor_mod(ns, SECOND)
+    return t
+}
+
+// The UTC date and time of a count of seconds since 1970-01-01, which
+// reaches past the years an i64 of nanoseconds does.
+fn utc_s(secs: i64) DateTime {
+    const days = floor_div(secs, 86400)
+    const rest = secs - days * 86400
+    // Hinnant's civil_from_days.
+    const z = days + 719468
+    const era = floor_div(z, 146097)
+    const doe = z - era * 146097
+    const yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    const doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    const mp = (5 * doy + 2) / 153
+    const m = if (mp < 10) mp + 3 else mp - 9
+    const y = yoe + era * 400 + (if (m <= 2) 1 else 0)
+    return DateTime{ .year = y, .month = m, .day = doy - (153 * mp + 2) / 5 + 1, .hour = rest / 3600, .minute = rest / 60 % 60, .second = rest % 60, .nano = 0 }
+}
+
+// secs * SECOND + nano, nano in 0 to 999999999, or null if an i64 cannot
+// hold it.
+fn from_parts(secs: i64, nano: i64) ?i64 {
+    // -9223372036854775808 is -9223372037 s + 145224192 ns.
+    if (secs > 9223372036 or (secs == 9223372036 and nano > 854775807)) {
+        return null
+    }
+    if (secs < -9223372037 or (secs == -9223372037 and nano < 145224192)) {
+        return null
+    }
+    if (secs < 0) {
+        // (secs + 1) first, so the smallest i64 is reached without passing it.
+        return (secs + 1) * SECOND + (nano - SECOND)
+    }
+    return secs * SECOND + nano
+}
+
+// n in decimal, with zeros in front up to width digits.
+fn append_padded(a: Allocator, inout out: Buf(u8), n: i64, width: i64) void {
+    var buf: [20]u8 = @splat('0')
+    var len = 0
+    var v = n
+    while (v > 0 or len == 0) {
+        buf[len] = @as(u8, v % 10) + '0'
+        v = v / 10
+        len = len + 1
+    }
+    while (len < width) {
+        buf[len] = '0'
+        len = len + 1
+    }
+    while (len > 0) {
+        len = len - 1
+        a.push(&out, buf[len])
+    }
+}
+
+// The instant ns as RFC 3339 at the end of out, in the time of a zone
+// offset seconds east of UTC: "2026-11-16T09:30:00Z" for offset 0,
+// "2026-11-16T17:30:00+08:00" for offset 8 * 3600. Fractions of a second
+// are written only when there are any, without zeros at the end
+// ("09:30:00.25Z"); seconds of the offset are dropped.
+fn append_rfc3339(a: Allocator, inout out: Buf(u8), ns: i64, offset: i64) void {
+    const off_min = offset / 60
+    const t = utc_s(floor_div(ns, SECOND) + off_min * 60)
+    append_padded(a, &out, t.year, 4)
+    a.push(&out, '-')
+    append_padded(a, &out, t.month, 2)
+    a.push(&out, '-')
+    append_padded(a, &out, t.day, 2)
+    a.push(&out, 'T')
+    append_padded(a, &out, t.hour, 2)
+    a.push(&out, ':')
+    append_padded(a, &out, t.minute, 2)
+    a.push(&out, ':')
+    append_padded(a, &out, t.second, 2)
+    var nano = floor_mod(ns, SECOND)
+    if (nano != 0) {
+        var width = 9
+        while (nano % 10 == 0) {
+            nano = nano / 10
+            width = width - 1
+        }
+        a.push(&out, '.')
+        append_padded(a, &out, nano, width)
+    }
+    if (off_min == 0) {
+        a.push(&out, 'Z')
+        return
+    }
+    a.push(&out, if (off_min < 0) '-' else '+')
+    const m = if (off_min < 0) 0 - off_min else off_min
+    append_padded(a, &out, m / 60, 2)
+    a.push(&out, ':')
+    append_padded(a, &out, m % 60, 2)
+}
+
+// The instant ns as an HTTP date (RFC 9110's IMF-fixdate) at the end of
+// out: "Sun, 06 Nov 1994 08:49:37 GMT".
+fn append_http_date(a: Allocator, inout out: Buf(u8), ns: i64) void {
+    const secs = floor_div(ns, SECOND)
+    const t = utc_s(secs)
+    const wd = weekday_index(floor_div(secs, 86400))
+    a.append_str(&out, DAY_NAMES[wd * 3..wd * 3 + 3])
+    a.append_str(&out, ", ")
+    append_padded(a, &out, t.day, 2)
+    a.push(&out, ' ')
+    a.append_str(&out, MONTH_NAMES[t.month * 3 - 3..t.month * 3])
+    a.push(&out, ' ')
+    append_padded(a, &out, t.year, 4)
+    a.push(&out, ' ')
+    append_padded(a, &out, t.hour, 2)
+    a.push(&out, ':')
+    append_padded(a, &out, t.minute, 2)
+    a.push(&out, ':')
+    append_padded(a, &out, t.second, 2)
+    a.append_str(&out, " GMT")
+}
+
+// The n digits of s at i as a number, or -1 if they are not all digits.
+fn digits(s: []u8, i: i64, n: i64) i64 {
+    if (i + n > @len(s)) {
+        return -1
+    }
+    var v = 0
+    for (s[i..i + n]) |c| {
+        if (c < '0' or c > '9') {
+            return -1
+        }
+        v = v * 10 + @as(i64, c - '0')
+    }
+    return v
+}
+
+fn byte_is(s: []u8, i: i64, c: u8) bool {
+    return i < @len(s) and s[i] == c
+}
+
+// The instant an RFC 3339 date and time stands for, "2026-11-16T09:30:00Z"
+// or with a fraction of a second and an offset from UTC
+// ("2026-11-16T17:30:00.5+08:00"); null for anything else, a date that does
+// not exist, or an instant past what an i64 of nanoseconds holds. Digits of
+// the fraction past nanoseconds are dropped; t and z may be lower case.
+fn parse_rfc3339(s: []u8) ?i64 {
+    var t = DateTime{ .year = digits(s, 0, 4), .month = digits(s, 5, 2), .day = digits(s, 8, 2), .hour = digits(s, 11, 2), .minute = digits(s, 14, 2), .second = digits(s, 17, 2), .nano = 0 }
+    if (t.year < 0 or !byte_is(s, 4, '-') or !byte_is(s, 7, '-') or !(byte_is(s, 10, 'T') or byte_is(s, 10, 't')) or !byte_is(s, 13, ':') or !byte_is(s, 16, ':')) {
+        return null
+    }
+    var i = 19
+    if (byte_is(s, i, '.')) {
+        i = i + 1
+        const start = i
+        var scale = SECOND
+        while (i < @len(s) and s[i] >= '0' and s[i] <= '9') {
+            scale = scale / 10
+            t.nano = t.nano + @as(i64, s[i] - '0') * scale
+            i = i + 1
+        }
+        if (i == start) {
+            return null
+        }
+    }
+    if (!t.valid()) {
+        return null
+    }
+    var offset = 0
+    if (byte_is(s, i, 'Z') or byte_is(s, i, 'z')) {
+        i = i + 1
+    } else if (byte_is(s, i, '+') or byte_is(s, i, '-')) {
+        const h = digits(s, i + 1, 2)
+        const m = digits(s, i + 4, 2)
+        if (h < 0 or h > 23 or !byte_is(s, i + 3, ':') or m < 0 or m > 59) {
+            return null
+        }
+        offset = (h * 60 + m) * 60
+        if (s[i] == '-') {
+            offset = 0 - offset
+        }
+        i = i + 6
+    } else {
+        return null
+    }
+    if (i != @len(s)) {
+        return null
+    }
+    return from_parts(t.unix() - offset, t.nano)
+}
+
+// 1 to 12 for the month's three letters at s[i], or -1.
+fn month_at(s: []u8, i: i64) i64 {
+    if (i + 3 > @len(s)) {
+        return -1
+    }
+    var m = 0
+    while (m < 12) {
+        if (s[i..i + 3] == MONTH_NAMES[m * 3..m * 3 + 3]) {
+            return m + 1
+        }
+        m = m + 1
+    }
+    return -1
+}
+
+// Where a weekday's name at the start of s ends: its three letters, or,
+// with long, its whole name ("Sunday"); -1 if there is none.
+fn weekday_end(s: []u8, long: bool) i64 {
+    if (@len(s) < 3) {
+        return -1
+    }
+    var d = 0
+    while (d < 7) {
+        if (s[0..3] == DAY_NAMES[d * 3..d * 3 + 3]) {
+            if (!long) {
+                return 3
+            }
+            // "Sun" + "day", "Mon" + "day", ..., "Wed" + "nesday".
+            const rest = if (d == 2) "sday" else if (d == 3) "nesday" else if (d == 4) "rsday" else if (d == 6) "urday" else "day"
+            const n = 3 + @len(rest)
+            return if (@len(s) >= n and s[3..n] == rest) n else -1
+        }
+        d = d + 1
+    }
+    return -1
+}
+
+// "08:49:37" at s[i] into t, and whether it was there.
+fn clock_at(s: []u8, i: i64, inout t: DateTime) bool {
+    t.hour = digits(s, i, 2)
+    t.minute = digits(s, i + 3, 2)
+    t.second = digits(s, i + 6, 2)
+    return t.hour >= 0 and t.minute >= 0 and t.second >= 0 and byte_is(s, i + 2, ':') and byte_is(s, i + 5, ':')
+}
+
+// The instant of an HTTP date, in any of the three forms RFC 9110 says a
+// recipient must take: "Sun, 06 Nov 1994 08:49:37 GMT" (IMF-fixdate),
+// "Sunday, 06-Nov-94 08:49:37 GMT" (RFC 850; years 69 to 99 are 1969 to
+// 1999, 00 to 68 are 2000 to 2068) and "Sun Nov  6 08:49:37 1994" (C's
+// asctime); null for anything else. The weekday's name must be one, but
+// need not be the date's.
+fn parse_http_date(s: []u8) ?i64 {
+    var t = DateTime{ .year = -1, .month = -1, .day = -1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }
+    const short = weekday_end(s, false)
+    if (short < 0) {
+        return null
+    }
+    if (byte_is(s, 3, ',')) {
+        // IMF-fixdate: "Sun, 06 Nov 1994 08:49:37 GMT"
+        if (@len(s) != 29 or s[4] != ' ' or s[7] != ' ' or s[11] != ' ' or s[16] != ' ' or s[25..29] != " GMT" or !clock_at(s, 17, &t)) {
+            return null
+        }
+        t.day = digits(s, 5, 2)
+        t.month = month_at(s, 8)
+        t.year = digits(s, 12, 4)
+    } else if (byte_is(s, 3, ' ')) {
+        // asctime: "Sun Nov  6 08:49:37 1994", the day padded with a space
+        if (@len(s) != 24 or s[7] != ' ' or s[10] != ' ' or s[19] != ' ' or !clock_at(s, 11, &t)) {
+            return null
+        }
+        t.month = month_at(s, 4)
+        t.day = if (s[8] == ' ') digits(s, 9, 1) else digits(s, 8, 2)
+        t.year = digits(s, 20, 4)
+    } else {
+        // RFC 850: "Sunday, 06-Nov-94 08:49:37 GMT"
+        const n = weekday_end(s, true)
+        if (n < 0 or @len(s) != n + 24) {
+            return null
+        }
+        const d = s[n..]
+        if (d[0..2] != ", " or d[4] != '-' or d[8] != '-' or d[11] != ' ' or d[20..24] != " GMT" or !clock_at(d, 12, &t)) {
+            return null
+        }
+        t.day = digits(d, 2, 2)
+        t.month = month_at(d, 5)
+        const yy = digits(d, 9, 2)
+        t.year = if (yy < 0) -1 else if (yy >= 69) 1900 + yy else 2000 + yy
+    }
+    if (t.year < 0 or !t.valid()) {
+        return null
+    }
+    return from_parts(t.unix(), 0)
+}

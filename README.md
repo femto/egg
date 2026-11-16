@@ -322,7 +322,13 @@ v3 (memory without GC, and what realistic programs needed):
   `std/ws` is WebSocket for servers: `is_handshake` and `handshake` (the
   101 response), frames out, and messages in with `take` (from received
   bytes) or `read_message`. `std/codec` has Base64, hex and form escaping;
-  `std/sha1` SHA-1, in Egg, for the WebSocket handshake
+  `std/sha1` SHA-1, in Egg, for the WebSocket handshake.
+  `std/time` is the calendar in UTC: `time.utc(ns)` takes an instant
+  (nanoseconds since 1970, as `clock.now()` gives it) apart into a
+  `DateTime` (`weekday()`, `yearday()`, `unix()`, `unix_ns()`), and RFC 3339
+  and HTTP dates are written (`append_rfc3339`, `append_http_date`) and
+  read (`parse_rfc3339`, `parse_http_date`, which takes all three forms
+  RFC 9110 names); time zones are not there yet
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
