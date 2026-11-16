@@ -4,7 +4,9 @@
 // server's read_message, the pong passed over by the client's), then the
 // close handshake, started by the client. A second connection sends text
 // that is not UTF-8, which the server closes with 1007. Then connect's
-// errors: wss://, not a ws:// URL, and a server that does not switch.
+// errors: wss://, not a ws:// URL, a server that does not switch, and
+// one that picks a protocol not offered (CHAT for chat). Last, a server
+// that pings after the client's close frame, before its own: answered.
 // First, frames as bytes: UTF-8, close payloads, and which end masks.
 // expect: utf8 true true false false false false false true
 // expect: close 1005 -1002
@@ -24,6 +26,8 @@
 // expect: wss://127.0.0.1/ Unsupported
 // expect: http://127.0.0.1/ BadUrl
 // expect: plain http Handshake
+// expect: CHAT for chat Handshake
+// expect: after close 1000 [] pong [x]
 // expect: server: close 1000 [bye]
 // expect: server: -1007
 uses alloc, io, net, thread, rand
@@ -107,6 +111,65 @@ fn plain(sink l: TcpListener, a: Allocator) void {
     http.respond(c, a, req, "200 OK", "", "", "") catch {}
 }
 
+// A server that switches, naming protocol, for each of two connections;
+// after the second's close frame it sends a ping and then its own close,
+// and reports the frame that came back in out.
+fn scripted(sink l: TcpListener, a: Allocator, sink out: Sender(Buf(u8))) void {
+    defer out.close()
+    defer l.close()
+    var log: Buf(u8) = .empty
+    scripted_one(l, a, "CHAT", false, &log) catch {}
+    scripted_one(l, a, "", true, &log) catch |e| {
+        a.append_str(&log, @errorName(e))
+    }
+    out.send(log)
+}
+
+fn scripted_one(l: TcpListener, a: Allocator, protocol: []u8, ping: bool, inout log: Buf(u8)) !void {
+    const c = try l.accept()
+    defer c.close()
+    var inbox: Buf(u8) = .empty
+    defer a.free(inbox)
+    const req = (try http.read_request(c, a, &inbox, 0)) orelse return
+    defer req.deinit(a)
+    const reply = ws.handshake(a, http.header(req, "Sec-WebSocket-Key") orelse "", protocol)
+    defer a.free(reply)
+    try c.write(reply)
+    if (!ping) {
+        return
+    }
+    var conn = ws.server(@replace(&inbox, .empty))
+    defer conn.deinit(a)
+    var data: Buf(u8) = .empty
+    defer a.free(data)
+    var chunk: Buf(u8) = .empty
+    defer a.free(chunk)
+    var kind = ws.take(a, &conn, &data)
+    while (kind == ws.NEED_MORE) {
+        if (try c.read(a, &chunk, 4096) == 0) {
+            return error.Closed
+        }
+        ws.received(a, &conn, chunk)
+        kind = ws.take(a, &conn, &data)
+    }
+    // The client's close frame: a ping, then this end's close.
+    try ws.send(c, a, &conn, ws.PING, "x")
+    const bye = ws.close_frame(a, &conn, 1000, "")
+    defer a.free(bye)
+    try c.write(bye)
+    kind = ws.take(a, &conn, &data)
+    while (kind == ws.NEED_MORE) {
+        if (try c.read(a, &chunk, 4096) == 0) {
+            return error.Closed
+        }
+        ws.received(a, &conn, chunk)
+        kind = ws.take(a, &conn, &data)
+    }
+    a.append_str(&log, if (kind == ws.PONG) "pong [" else "not pong [")
+    a.append_str(&log, data)
+    a.append_str(&log, "]")
+}
+
 fn url(a: Allocator, port: i64) Buf(u8) {
     var u = a.concat("ws://127.0.0.1:", "")
     a.append_int(&u, port)
@@ -165,10 +228,10 @@ fn bad_text(io: Io, net: Net, a: Allocator, rng: Random, port: i64) !void {
     io.print("bad text: ", if (kind == ws.CLOSE) "close " else "not close ", ws.close_code(data))
 }
 
-fn refused(io: Io, net: Net, a: Allocator, rng: Random, what: []u8, to: []u8) void {
+fn refused(io: Io, net: Net, a: Allocator, rng: Random, what: []u8, to: []u8, protocols: []u8) void {
     var conn = ws.client(rng, a)
     defer conn.deinit(a)
-    const c = ws.connect(net, a, &conn, to, "", "") catch |e| {
+    const c = ws.connect(net, a, &conn, to, protocols, "") catch |e| {
         io.print(what, " ", @errorName(e))
         return
     }
@@ -214,6 +277,19 @@ fn frames(io: Io, a: Allocator, rng: Random) void {
     io.print("client to server ", k2, " [", data, "] masked ", masked)
 }
 
+// The code of the server's close frame, after the client's.
+fn after_close(net: Net, a: Allocator, rng: Random, to: []u8) !i64 {
+    var conn = ws.client(rng, a)
+    defer conn.deinit(a)
+    const c = try ws.connect(net, a, &conn, to, "", "")
+    defer c.close()
+    try ws.close(c, a, &conn, 1000, "")
+    var data: Buf(u8) = .empty
+    defer a.free(data)
+    const kind = try ws.read_message(c, a, &conn, &data)
+    return if (kind == ws.CLOSE) ws.close_code(data) else kind
+}
+
 fn main(io: Io, net: Net, a: Allocator, threads: Threads, rng: Random) !void {
     frames(io, a, rng)
     const l = try net.tcp_listen("127.0.0.1", 0)
@@ -224,13 +300,25 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads, rng: Random) !void {
 
     try chat(io, net, a, rng, port)
     try bad_text(io, net, a, rng, port)
-    refused(io, net, a, rng, "wss://127.0.0.1/", "wss://127.0.0.1/")
-    refused(io, net, a, rng, "http://127.0.0.1/", "http://127.0.0.1/")
+    refused(io, net, a, rng, "wss://127.0.0.1/", "wss://127.0.0.1/", "")
+    refused(io, net, a, rng, "http://127.0.0.1/", "http://127.0.0.1/", "")
     const p = try net.tcp_listen("127.0.0.1", 0)
     const plain_url = url(a, p.port())
     defer a.free(plain_url)
     threads.spawn(plain, p, a).detach()
-    refused(io, net, a, rng, "plain http", plain_url)
+    refused(io, net, a, rng, "plain http", plain_url, "")
+
+    const s = try net.tcp_listen("127.0.0.1", 0)
+    const scripted_url = url(a, s.port())
+    defer a.free(scripted_url)
+    const pongs = threads.channel(Buf(u8), 1)
+    defer pongs.close()
+    threads.spawn(scripted, s, a, pongs.sender()).detach()
+    refused(io, net, a, rng, "CHAT for chat", scripted_url, "chat")
+    const code = try after_close(net, a, rng, scripted_url)
+    const pong = pongs.recv() orelse return
+    defer a.free(pong)
+    io.print("after close ", code, " [] ", pong)
 
     const log = results.recv() orelse return
     defer a.free(log)

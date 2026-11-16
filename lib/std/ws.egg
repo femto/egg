@@ -400,9 +400,9 @@ fn read_message(c: TcpConn, a: Allocator, inout conn: Conn, inout data: Buf(u8))
             }
             a.append_str(&conn.inbox, chunk)
         } else if (kind == PING) {
-            if (!conn.closing) {
-                try send(c, a, &conn, PONG, data)
-            }
+            // Answered until the other end's close frame has come, even
+            // after this end has sent its own (section 5.5.2).
+            try send(c, a, &conn, PONG, data)
         } else if (kind == CLOSE) {
             if (!conn.closing) {
                 try close(c, a, &conn, close_code(data), "")
@@ -418,6 +418,20 @@ fn read_message(c: TcpConn, a: Allocator, inout conn: Conn, inout data: Buf(u8))
         }
     }
     return NEED_MORE
+}
+
+// Is protocol, byte for byte, one of the comma-separated protocols?
+// Subprotocol names are compared exactly, not as header words are.
+fn offered(protocols: []u8, protocol: []u8) bool {
+    var at = 0
+    while (at <= @len(protocols)) {
+        const comma = text.find_from(protocols, ",", at) orelse @len(protocols)
+        if (text.strip(protocols[at..comma]) == protocol) {
+            return true
+        }
+        at = comma + 1
+    }
+    return false
 }
 
 // Opens a connection to url (ws://host[:port][/path][?query]) and makes
@@ -479,7 +493,7 @@ fn opening(c: TcpConn, a: Allocator, inout conn: Conn, http_url: []u8, u: http.U
         return error.Handshake
     }
     const chosen = resp.header("Sec-WebSocket-Protocol") orelse ""
-    if (@len(chosen) > 0 and !http.has_word(protocols, chosen)) {
+    if (@len(chosen) > 0 and !offered(protocols, chosen)) {
         return error.Handshake
     }
     // An extension was not offered, so none may be used.
