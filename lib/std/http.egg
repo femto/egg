@@ -5,6 +5,8 @@
 // Content-Length, and written at once. A client sends with fetch (a
 // connection of its own, redirects if asked), or send_request and
 // read_response on a connection it keeps, or parse_response on bytes.
+// fetch asks for gzip and decompresses it (opts.decompress); a server
+// gzips a response with compressed when the client takes it.
 // const http = @import("std/http")
 // var inbox: Buf(u8) = .empty
 // const req = (try http.read_request(c, a, &inbox, 1048576)) orelse return
@@ -17,6 +19,7 @@ uses alloc, net
 const text = @import("std/text")
 const codec = @import("std/codec")
 const time = @import("std/time")
+const flate = @import("std/flate")
 
 // The request line and headers together may be no longer than this, and
 // no request has more headers than MAX_HEADERS.
@@ -561,6 +564,41 @@ fn accepts(req: Request, coding: []u8) bool {
     return lists(req, "Accept-Encoding", coding)
 }
 
+// A body shorter than this is not worth compressing: it fits in one packet
+// either way, and gzip's 18 bytes of header and trailer can make it longer.
+const MIN_COMPRESS = 1024
+
+// The response to req as respond gives it, but with the body gzipped
+// (Content-Encoding: gzip) when the client takes gzip, the body is at least
+// MIN_COMPRESS bytes and gzip makes it smaller. Either way it says Vary:
+// Accept-Encoding, so a cache keeps the two apart. Not for a body already
+// compressed (an image, a .zip), which gzip cannot shrink, or for a 206:
+// ranges are of the body as sent.
+fn compressed(c: TcpConn, a: Allocator, req: Request, status: []u8, own: []u8, headers: []u8, body: []u8) !void {
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    append_compressed(a, &out, req, status, own, headers, body)
+    try c.write(out)
+}
+
+// What compressed writes, at the end of out, for a server that does its
+// own writing (with a Poller, say).
+fn append_compressed(a: Allocator, inout out: Buf(u8), req: Request, status: []u8, own: []u8, headers: []u8, body: []u8) void {
+    var gz: Buf(u8) = .empty
+    defer a.free(gz)
+    if (@len(body) >= MIN_COMPRESS and !bodiless(status) and accepts(req, "gzip")) {
+        flate.gzip_compress(a, &gz, body, flate.DEFAULT_LEVEL)
+    }
+    const zipped = @len(gz) > 0 and @len(gz) < @len(body)
+    const all = a.concat(headers, if (zipped) "Vary: Accept-Encoding\r\nContent-Encoding: gzip\r\n" else "Vary: Accept-Encoding\r\n")
+    defer a.free(all)
+    const sent = if (zipped) gz[0..] else body
+    append_head(a, &out, status, own, all, @len(sent), req.keep)
+    if (!bodiless(status) and req.method != "HEAD") {
+        a.append_str(&out, sent)
+    }
+}
+
 // Does a response with this status have no body, and so no length?
 fn bodiless(status: []u8) bool {
     return text.starts_with(status, "1") or text.starts_with(status, "204") or text.starts_with(status, "304")
@@ -956,6 +994,9 @@ const Response = owned struct {
     body: Buf(u8)
     // Whether the server keeps the connection for another request.
     keep: bool
+    // Whether fetch decompressed body: the server sent it gzipped, which
+    // the Content-Encoding header still says.
+    decoded: bool
 
     fn deinit(sink self: Response, a: Allocator) void {
         a.free(self.head)
@@ -990,11 +1031,47 @@ const Options = struct {
     max_body: i64
     // How many redirects fetch follows (0: it returns the 3xx itself).
     redirects: i64
+    // Whether fetch asks for gzip (Accept-Encoding: gzip) and gives the
+    // body decompressed, as Go does; max_body limits it decompressed too.
+    // When the caller's headers have an Accept-Encoding of their own, fetch
+    // leaves the body as it comes.
+    decompress: bool
 }
 
-// 30 s, 16 MiB, no redirects.
+// 30 s, 16 MiB, no redirects, gzip decompressed.
 fn options() Options {
-    return Options{ .timeout_ms = 30000, .max_body = 16777216, .redirects = 0 }
+    return Options{ .timeout_ms = 30000, .max_body = 16777216, .redirects = 0, .decompress = true }
+}
+
+// Does the header block headers ("Name: value\r\n" lines) have one called
+// name?
+fn names(headers: []u8, name: []u8) bool {
+    var at = 0
+    while (at < @len(headers)) {
+        const nl = text.find_from(headers, "\n", at) orelse @len(headers)
+        const colon = text.find_from(headers, ":", at) orelse -1
+        if (colon > at and colon < nl and same(unblank(headers[at..colon]), name)) {
+            return true
+        }
+        at = nl + 1
+    }
+    return false
+}
+
+// Replaces a gzip body with what it holds, at most max bytes
+// (error.BodyTooLarge past that). A damaged one is error.BadResponse.
+fn gunzip_body(a: Allocator, inout resp: Response, max: i64) !void {
+    const coding = unblank(resp.header("Content-Encoding") orelse "")
+    if (@len(resp.body) == 0 or !(same(coding, "gzip") or same(coding, "x-gzip"))) {
+        return
+    }
+    var out: Buf(u8) = .empty
+    flate.gzip_decompress(a, &out, resp.body, max) catch |e| {
+        a.free(out)
+        return if (e == error.TooBig) error.BodyTooLarge else error.BadResponse
+    }
+    a.free(@replace(&resp.body, out))
+    resp.decoded = true
 }
 
 // Where the parts of an http:// URL are in it: the host (without the []
@@ -1185,6 +1262,7 @@ fn parse_response(a: Allocator, inout inbox: Buf(u8), max_body: i64, head_reques
             .headers = headers,
             .body = if (f.chunked and end > body_from) dechunk(a, inbox, body_from) else a.concat(inbox[body_from..end], ""),
             .keep = !until_close and !close and (http11 or ask_keep),
+            .decoded = false,
         }
         const rest = a.concat(inbox[end..], "")
         a.free(@replace(&inbox, rest))
@@ -1223,7 +1301,8 @@ fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, bo
     const c = try net.tcp_connect(url_host(url, u), u.port)
     defer c.close()
     try c.set_timeout(opts.timeout_ms)
-    const all = a.concat(headers, "Connection: close\r\n")
+    const gzip = opts.decompress and !names(headers, "Accept-Encoding")
+    const all = a.concat(headers, if (gzip) "Accept-Encoding: gzip\r\n" else "", "Connection: close\r\n")
     defer a.free(all)
     const target = url_target(url, u)
     const slash = if (text.starts_with(target, "?")) "/" else ""
@@ -1232,7 +1311,14 @@ fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, bo
     try send_request(c, a, method, line_target, url[u.authority_lo..u.authority_hi], all, body)
     var inbox: Buf(u8) = .empty
     defer a.free(inbox)
-    return read_response(c, a, &inbox, opts.max_body, method == "HEAD")
+    var resp = try read_response(c, a, &inbox, opts.max_body, method == "HEAD")
+    if (gzip) {
+        gunzip_body(a, &resp, opts.max_body) catch |e| {
+            resp.deinit(a)
+            return e
+        }
+    }
+    return resp
 }
 
 // Where a redirect from base to location goes, as an absolute URL, or
