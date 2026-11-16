@@ -1,0 +1,198 @@
+// gzip in std/http: a server thread answers with compressed, and fetch asks
+// for gzip and decompresses it, unless the caller sends an Accept-Encoding
+// of its own or turns decompress off; a body too short, a client that does
+// not take gzip, q=0 in either case, "*", a HEAD and a strong ETag; a
+// damaged gzip body and one that grows past max_body; and the caller's
+// Accept-Encoding kept across a redirect to another server.
+// expect: GET 200 3500 decoded=true encoding=gzip vary=Accept-Encoding length=272 [<li>an egg, an egg, ]
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: GET 200 272 decoded=false encoding=gzip vary=Accept-Encoding length=272 [1f8b]
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: HEAD 200 0 decoded=false encoding=gzip vary=Accept-Encoding length=272 []
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: GET 200 272 decoded=false encoding=gzip vary=Accept-Encoding length=272 [1f8b]
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: GET 200 3500 decoded=false encoding=- vary=Accept-Encoding length=3500 [<li>an egg, an egg, ]
+// expect: etag W/"v1" encoding=gzip
+// expect: etag "v1" encoding=-
+// expect: GET 200 17 decoded=false encoding=- vary=Accept-Encoding length=17 [too short to gzip]
+// expect: GET 200 4 decoded=false encoding=- vary=- length=4 [gzip]
+// expect: GET 200 4 decoded=false encoding=- vary=- length=4 [none]
+// expect: GET -> BadResponse
+// expect: GET -> BodyTooLarge
+// expect: GET 200 100000 decoded=true encoding=gzip vary=- length=132 [0000]
+// expect: GET 200 4 decoded=false encoding=- vary=- length=4 [none]
+// expect: GET 200 4 decoded=false encoding=- vary=- length=4 [gzip]
+// expect: GET 400 0 decoded=false encoding=- vary=- length=0 []
+uses io, alloc, net, thread
+
+const http = @import("std/http")
+const flate = @import("std/flate")
+const codec = @import("std/codec")
+const text = @import("std/text")
+
+// 3500 bytes that compress well.
+fn page(a: Allocator) Buf(u8) {
+    var s: Buf(u8) = .empty
+    var i = 0
+    while (i < 100) {
+        a.append_str(&s, "<li>an egg, an egg, ")
+        a.append_int(&s, 1000 + i)
+        a.append_str(&s, " eggs</li>\n")
+        i = i + 1
+    }
+    return s
+}
+
+fn answer(c: TcpConn, a: Allocator, req: http.Request) !void {
+    const p = req.path[0..]
+    if (p == "/page") {
+        const body = page(a)
+        defer a.free(body)
+        return http.compressed(c, a, req, "200 OK", "", "Content-Type: text/html\r\n", body)
+    }
+    if (p == "/etag") {
+        const body = page(a)
+        defer a.free(body)
+        return http.compressed(c, a, req, "200 OK", "", "etag: \"v1\"\r\n", body)
+    }
+    if (p == "/cross") {
+        // To /accept on the server at port `to`.
+        // Only a port number goes into the header: a decoded value could
+        // hold CR LF and add headers of its own.
+        const to = http.form_value(a, req.query, "to") orelse a.concat("", "")
+        defer a.free(to)
+        const port = text.parse_int(to) orelse 0
+        if (port < 1 or port > 65535) {
+            return http.respond(c, a, req, "400 Bad Request", "", "", "")
+        }
+        var location = a.concat("Location: http://127.0.0.1:", "")
+        defer a.free(location)
+        a.append_int(&location, port)
+        a.append_str(&location, "/accept\r\n")
+        return http.respond(c, a, req, "307 Temporary Redirect", "", location, "")
+    }
+    if (p == "/short") {
+        return http.compressed(c, a, req, "200 OK", "", "", "too short to gzip")
+    }
+    if (p == "/accept") {
+        return http.respond(c, a, req, "200 OK", "", "", http.header(req, "Accept-Encoding") orelse "none")
+    }
+    // gzip the client did not get to choose: damaged, and 100000 zeros.
+    var gz: Buf(u8) = .empty
+    defer a.free(gz)
+    if (p == "/damaged") {
+        flate.gzip_compress(a, &gz, "hello, damaged", 6)
+        gz[@len(gz) - 5] = gz[@len(gz) - 5] ^ 1
+    } else {
+        const zeros = a.alloc(100000, @as(u8, 0))
+        defer a.free(zeros)
+        flate.gzip_compress(a, &gz, zeros, 9)
+    }
+    return http.respond(c, a, req, "200 OK", "", "Content-Encoding: gzip\r\n", gz)
+}
+
+fn server(sink l: TcpListener, a: Allocator) void {
+    defer l.close()
+    while (true) {
+        const c = l.accept() catch {
+            return
+        }
+        var inbox: Buf(u8) = .empty
+        if (http.read_request(c, a, &inbox, 1024) catch null) |req| {
+            answer(c, a, req) catch {}
+            req.deinit(a)
+        }
+        a.free(inbox)
+        c.close()
+    }
+}
+
+fn show(io: Io, net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, opts: http.Options) void {
+    const r = http.fetch(net, a, method, url, headers, "", opts) catch |e| {
+        io.print(method, " -> ", @errorName(e))
+        return
+    }
+    defer r.deinit(a)
+    var shown: Buf(u8) = .empty
+    defer a.free(shown)
+    if (@len(r.body) > 0 and (r.body[0] < 0x20 or r.body[0] >= 0x80)) {
+        // Not text: the first two bytes, in hex (1f8b is gzip's magic).
+        codec.hex_encode(a, &shown, r.body[0..2])
+    } else {
+        a.append_str(&shown, r.body[0..if (@len(r.body) > 20) 20 else @len(r.body)])
+    }
+    io.print(method, " ", r.status, " ", @len(r.body), " decoded=", r.decoded, " encoding=", r.header("Content-Encoding") orelse "-", " vary=", r.header("Vary") orelse "-", " length=", r.header("Content-Length") orelse "-", " [", shown, "]")
+}
+
+fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
+    const l = try net.tcp_listen("127.0.0.1", 0)
+    var base = a.concat("http://127.0.0.1:", "")
+    defer a.free(base)
+    a.append_int(&base, l.port())
+    threads.spawn(server, l, a).detach()
+    const pg = a.concat(base, "/page")
+    defer a.free(pg)
+    const opts = http.options()
+    var raw = http.options()
+    raw.decompress = false
+    var small = http.options()
+    small.max_body = 50000
+
+    // Asked for and decompressed; the same page with gzip turned off, with
+    // the caller's own Accept-Encoding (left compressed), and as HEAD.
+    show(io, net, a, "GET", pg, "", opts)
+    show(io, net, a, "GET", pg, "", raw)
+    show(io, net, a, "GET", pg, "accept-encoding: gzip\r\n", opts)
+    show(io, net, a, "GET", pg, "Accept-Encoding: gzip;q=0\r\n", opts)
+    show(io, net, a, "HEAD", pg, "", opts)
+    // q in either case; "*" takes gzip unless gzip itself is refused.
+    show(io, net, a, "GET", pg, "Accept-Encoding: gzip;Q=0\r\n", opts)
+    show(io, net, a, "GET", pg, "Accept-Encoding: *\r\n", raw)
+    show(io, net, a, "GET", pg, "Accept-Encoding: *, gzip; q=0\r\n", raw)
+    show(io, net, a, "GET", pg, "Accept-Encoding: identity, *;q=0\r\n", raw)
+    // A strong ETag is made weak when the body is gzipped.
+    const etag = a.concat(base, "/etag")
+    defer a.free(etag)
+    show_etag(io, net, a, etag, opts)
+    show_etag(io, net, a, etag, raw)
+    const short = a.concat(base, "/short")
+    defer a.free(short)
+    show(io, net, a, "GET", short, "", opts)
+    const accept = a.concat(base, "/accept")
+    defer a.free(accept)
+    show(io, net, a, "GET", accept, "", opts)
+    show(io, net, a, "GET", accept, "", raw)
+    const damaged = a.concat(base, "/damaged")
+    defer a.free(damaged)
+    show(io, net, a, "GET", damaged, "", opts)
+    const bomb = a.concat(base, "/bomb")
+    defer a.free(bomb)
+    show(io, net, a, "GET", bomb, "", small)
+    show(io, net, a, "GET", bomb, "", opts)
+
+    // The caller's own Accept-Encoding holds after a redirect to another
+    // server, which gets none of the caller's headers: fetch adds none.
+    const other = try net.tcp_listen("127.0.0.1", 0)
+    var cross = a.concat(base, "/cross?to=")
+    defer a.free(cross)
+    a.append_int(&cross, other.port())
+    threads.spawn(server, other, a).detach()
+    var follow = http.options()
+    follow.redirects = 1
+    show(io, net, a, "GET", cross, "Accept-Encoding: identity\r\n", follow)
+    show(io, net, a, "GET", cross, "", follow)
+    // A port that is not one (CR LF and a header) is refused.
+    const injected = a.concat(base, "/cross?to=80%0d%0aX-Injected:%20yes")
+    defer a.free(injected)
+    show(io, net, a, "GET", injected, "", follow)
+}
+
+fn show_etag(io: Io, net: Net, a: Allocator, url: []u8, opts: http.Options) void {
+    const r = http.fetch(net, a, "GET", url, "", "", opts) catch |e| {
+        io.print("etag -> ", @errorName(e))
+        return
+    }
+    defer r.deinit(a)
+    io.print("etag ", r.header("ETag") orelse "-", " encoding=", r.header("Content-Encoding") orelse "-")
+}

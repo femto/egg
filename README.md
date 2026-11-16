@@ -317,13 +317,20 @@ v3 (memory without GC, and what realistic programs needed):
   earlier than `modified`, to the second; a null `modified` never makes
   a 304 by date; `fresh(req, tag, modified)` asks first, before the
   body is made), a Date header
-  (`append_date(a, &own, clock.now())`) and byte ranges (`ranged`); forms, cookies and multipart uploads are
+  (`append_date(a, &own, clock.now())`), byte ranges (`ranged`) and gzip
+  (`compressed`, or `append_compressed` for a Poller: the body gzipped
+  when the client takes gzip and it is 1 KiB or more, with Vary:
+  Accept-Encoding either way); forms, cookies and multipart uploads are
   read with `field`, `fields`, `cookie` and `file`. Its client is
   `http://` only: `fetch(net, a, "GET", url, headers, body, opts)` on a
-  connection of its own, following `opts.redirects` redirects;
+  connection of its own, following `opts.redirects` redirects, asking
+  for gzip and decompressing it unless `opts.decompress` is off or the
+  caller sends its own Accept-Encoding (`max_body` limits the body
+  decompressed too);
   `send_request` and `read_response` on a connection kept for several;
   `parse_response` on received bytes. A `Response` has `status`, `body`,
-  `keep`, `r.header(name)` and `r.reason()`.
+  `keep`, `decoded` (fetch decompressed the body), `r.header(name)` and
+  `r.reason()`.
   `std/ws` is WebSocket for servers: `is_handshake` and `handshake` (the
   101 response), frames out, and messages in with `take` (from received
   bytes) or `read_message`. `std/codec` has Base64, hex and form escaping;
