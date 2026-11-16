@@ -385,6 +385,37 @@ def check_fs_errors(dir)
   EGG
 end
 
+# stat's modified, for times a program cannot set by itself: one to the
+# quarter second, and ones past either end of an i64 of nanoseconds,
+# which it holds to that end (Windows dates nothing before 1601).
+def check_fs_modified(dir)
+  work = File.join(dir, "fs_modified")
+  FileUtils.mkdir_p(work)
+  dates = { "now.txt" => Time.at(1_500_000_000, 250_000_000, :nsec), "late.txt" => Time.utc(3000, 1, 1) }
+  dates["early.txt"] = Time.utc(1600, 1, 1) unless Gem.win_platform?
+  dates.each do |name, t|
+    path = File.join(work, name)
+    File.write(path, "x")
+    File.utime(t, t, path)
+  end
+  check_program("fs_modified_range", <<~EGG, work)
+    // expect: 1500000000250000000
+    // expect: 9223372036854775807
+    // expect: #{Gem.win_platform? ? "skipped" : "-9223372036854775808"}
+    uses fs, io
+
+    fn main(io: Io, files: Fs) !void {
+        io.print((try files.stat("now.txt")).modified)
+        io.print((try files.stat("late.txt")).modified)
+        const early = files.stat("early.txt") catch {
+            io.print("skipped")
+            return
+        }
+        io.print(early.modified)
+    }
+  EGG
+end
+
 # Failures of open files that a program cannot set up by itself.
 def check_file_errors(dir)
   work = File.join(dir, "file_errors")
@@ -2015,6 +2046,7 @@ Dir.mktmpdir do |dir|
   check_lsp_alias
   check_lsp_capture
   check_fs_errors(dir)
+  check_fs_modified(dir)
   check_file_errors(dir)
   check_net(dir)
   check_threads(dir)

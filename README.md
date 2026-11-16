@@ -426,7 +426,7 @@ v3 (memory without GC, and what realistic programs needed):
 - Directories and names: `fs.make_dir(path)`, `fs.open_dir(path)` (an owned
   `DirReader`; `d.next(a, &name)` gives one entry at a time),
   `fs.remove_file(path)`, `fs.remove_dir(path)` (empty only),
-  `fs.rename(from, to)`, `fs.stat(path)` (a `Stat` with `kind` and `size`)
+  `fs.rename(from, to)`, `fs.stat(path)` (a `Stat` with `kind`, `size` and `modified`)
   and `fs.real_path(a, path)` (a `Buf(u8)`, so `uses alloc` too); `r.seek(pos)`
   on a `Reader`; new failures are `error.AlreadyExists`, `error.NotEmpty`
   and `error.NotDirectory`

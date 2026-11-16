@@ -140,7 +140,7 @@ module Egg
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
                       egg_append egg_append_int egg_append_uint egg_append_float egg_parse_f64 egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
-                      egg_fs_handle egg_fs_sys egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
+                      egg_fs_handle egg_fs_sys egg_fs_kind egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_dir_next egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
                       egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
@@ -945,14 +945,6 @@ module Egg
             default: return 5;
             }
         }
-        /* What a path names, a link itself: 0 nothing, 1 not a directory, 2 a directory. */
-        static int egg_fs_kind(const char *path) {
-            wchar_t *w = egg_fs_wide(path);
-            if (w == NULL) return 0;
-            DWORD a = GetFileAttributesW(w);
-            free(w);
-            return a == INVALID_FILE_ATTRIBUTES ? 0 : (a & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
-        }
         /* A handle for asking about what path names, following links. */
         static HANDLE egg_fs_win_open(const wchar_t *w) {
             return CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
@@ -960,11 +952,24 @@ module Egg
         #else
         #include <sys/stat.h>
         #include <unistd.h>
+        #endif
+      C
+      # What a path names, a link itself: 0 nothing, 1 not a directory, 2 a
+      # directory. Only for what removing and opening a directory fail with,
+      # so a program that only stats does not carry it unused.
+      "egg_fs_kind" => <<~C,
         static int egg_fs_kind(const char *path) {
+        #ifdef _WIN32
+            wchar_t *w = egg_fs_wide(path);
+            if (w == NULL) return 0;
+            DWORD a = GetFileAttributesW(w);
+            free(w);
+            return a == INVALID_FILE_ATTRIBUTES ? 0 : (a & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
+        #else
             struct stat st;
             return lstat(path, &st) != 0 ? 0 : S_ISDIR(st.st_mode) ? 2 : 1;
-        }
         #endif
+        }
       C
       # Removing a file or an empty directory. The systems disagree on what
       # removing the wrong kind fails with, so it is looked at.
@@ -1039,8 +1044,15 @@ module Egg
         }
       C
       # kind is FileKind's index: file, dir, other. The size of a file only.
-      # modified: the last write, in nanoseconds since 1970 as the clock's.
+      # modified: the last write, in nanoseconds since 1970 as the clock's,
+      # held to what an int64_t of them reaches (1677 to 2262): a file may
+      # be dated anywhere, and multiplying past that would be undefined.
       "egg_fs_stat" => <<~C,
+        static int64_t egg_fs_ns(int64_t sec, int64_t ns) {
+            if (sec > INT64_MAX / 1000000000 - 1) return INT64_MAX;
+            if (sec < INT64_MIN / 1000000000 + 1) return INT64_MIN;
+            return sec * 1000000000 + ns;
+        }
         static int egg_fs_stat(egg_str path, int32_t *kind, int64_t *size, int64_t *modified) {
             char *p = egg_fs_path(path);
             if (p == NULL) return 4;
@@ -1057,7 +1069,9 @@ module Egg
                 DWORD t = GetFileType(h);
                 *kind = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : t == FILE_TYPE_DISK ? 0 : 2;
                 *size = *kind == 0 ? (int64_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow) : 0;
-                *modified = ((int64_t)(((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime) - INT64_C(116444736000000000)) * 100;
+                /* 100 ns ticks since 1601, below 2^63; 11644473600 s to 1970. */
+                int64_t ticks = (int64_t)(((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime);
+                *modified = egg_fs_ns(ticks / 10000000 - INT64_C(11644473600), ticks % 10000000 * 100);
             }
             if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
             free(w);
@@ -1069,9 +1083,9 @@ module Egg
                 *kind = S_ISREG(st.st_mode) ? 0 : S_ISDIR(st.st_mode) ? 1 : 2;
                 *size = *kind == 0 ? (int64_t)st.st_size : 0;
         #ifdef __APPLE__
-                *modified = (int64_t)st.st_mtimespec.tv_sec * 1000000000 + st.st_mtimespec.tv_nsec;
+                *modified = egg_fs_ns((int64_t)st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec);
         #else
-                *modified = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+                *modified = egg_fs_ns((int64_t)st.st_mtim.tv_sec, st.st_mtim.tv_nsec);
         #endif
             }
         #endif
@@ -1201,6 +1215,19 @@ module Egg
             free(p);
             return r;
         }
+        static void egg_dir_close(void *dir) {
+        #ifdef _WIN32
+            egg_dir_state *d = (egg_dir_state *)dir;
+            if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h);
+            free(d);
+        #else
+            (void)closedir((DIR *)dir);
+        #endif
+        }
+      C
+      # Apart from egg_dir, so a directory opened and closed unread does not
+      # carry it unused.
+      "egg_dir_next" => <<~C,
         /* 1 with the next name in place of what the buffer held, 0 at the end, -1 on failure. */
         static int egg_dir_next(void *dir, uint8_t **ptr, int64_t *len, int64_t *cap) {
         #ifdef _WIN32
@@ -1233,15 +1260,6 @@ module Egg
                 egg_append(ptr, len, cap, (const uint8_t *)n, (int64_t)strlen(n));
                 return 1;
             }
-        #endif
-        }
-        static void egg_dir_close(void *dir) {
-        #ifdef _WIN32
-            egg_dir_state *d = (egg_dir_state *)dir;
-            if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h);
-            free(d);
-        #else
-            (void)closedir((DIR *)dir);
         #endif
         }
       C
@@ -3025,12 +3043,14 @@ module Egg
                     "egg_read_line" => ["egg_append"], "egg_read_all" => ["egg_buf_resize"], "egg_read_bytes" => ["egg_buf_resize"],
                     "egg_fs_handle" => %w[egg_fs_class egg_fs_path egg_fs_open],
                     "egg_fs_sys" => ["egg_buf_resize"],
-                    "egg_fs_remove" => %w[egg_fs_class egg_fs_path egg_fs_sys],
+                    "egg_fs_kind" => ["egg_fs_sys"],
+                    "egg_fs_remove" => %w[egg_fs_class egg_fs_path egg_fs_sys egg_fs_kind],
                     "egg_fs_rename" => %w[egg_fs_class egg_fs_path egg_fs_sys],
                     "egg_fs_mkdir" => %w[egg_fs_class egg_fs_path egg_fs_sys],
                     "egg_fs_stat" => %w[egg_fs_class egg_fs_path egg_fs_sys],
                     "egg_fs_real" => %w[egg_fs_class egg_fs_path egg_fs_sys],
-                    "egg_dir" => %w[egg_fs_class egg_fs_path egg_fs_sys egg_append],
+                    "egg_dir" => %w[egg_fs_class egg_fs_path egg_fs_sys egg_fs_kind],
+                    "egg_dir_next" => %w[egg_dir egg_append egg_buf_resize],
                     "egg_net_last" => ["egg_net_base"], "egg_net_close" => ["egg_net_base"], "egg_net_prep" => ["egg_net_base"],
                     "egg_net_addrinfo" => %w[egg_net_base egg_net_start egg_fs_path],
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
@@ -4941,7 +4961,7 @@ module Egg
                r = tmp
                s = tmp
                line("#{c_type(ret)} #{r} = { .err = 0 };")
-               line("int #{s} = #{helper('egg_dir')}_next(#{d}, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
+               line("int #{s} = #{helper('egg_dir_next')}(#{d}, &#{b}->ptr, &#{b}->len, &#{b}->cap);")
                line("#{r}.value = #{s} > 0;")
                line("if (#{s} < 0) #{r}.err = #{io_failed};")
                r
