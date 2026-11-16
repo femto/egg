@@ -562,8 +562,13 @@ const Zone = struct {
     }
 }
 
-// A zone always offset seconds east of UTC, called name.
-fn fixed(a: Allocator, name: []u8, offset: i64) Zone {
+// A zone always offset seconds east of UTC, called name; error.BadZone
+// for an offset outside -24:59:59 to +25:59:59, what RFC 8536 allows a
+// zone, so that no local time can overflow.
+fn fixed(a: Allocator, name: []u8, offset: i64) !Zone {
+    if (offset < -89999 or offset > 93599) {
+        return error.BadZone
+    }
     var types: Buf(ZoneType) = .empty
     a.push(&types, ZoneType{ .offset = offset, .dst = false, .abbr = 0, .abbr_len = @len(name) })
     return Zone{ .names = a.concat(name, ""), .times = .empty, .kinds = .empty, .types = types, .rule = null }
@@ -574,13 +579,32 @@ fn rule_type(r: Rule, secs: i64) ZoneType {
     if (!r.has_dst) {
         return r.std
     }
-    // The year as standard time has it; the start is given in standard
-    // time, the end in daylight saving time.
+    // The last change at or before secs, of the year as standard time has
+    // it and the years around it, since a rule's time may move a change
+    // into the year before or after ("M1.1.0/-1"). The start is given in
+    // standard time, the end in daylight saving time; where an end and the
+    // next start meet, as in a rule for daylight saving time all year, the
+    // start wins.
     const year = utc_s(secs + r.std.offset).year
-    const start = rule_day(r.start, year) - r.std.offset
-    const end = rule_day(r.end, year) - r.dst.offset
-    // In the southern hemisphere the start comes after the end.
-    const in_dst = if (start < end) secs >= start and secs < end else secs < end or secs >= start
+    var last = 0
+    var in_dst = false
+    var found = false
+    var y = year - 1
+    while (y <= year + 1) {
+        const end = rule_day(r.end, y) - r.dst.offset
+        if (end <= secs and (!found or end > last)) {
+            last = end
+            in_dst = false
+            found = true
+        }
+        const start = rule_day(r.start, y) - r.std.offset
+        if (start <= secs and (!found or start >= last)) {
+            last = start
+            in_dst = true
+            found = true
+        }
+        y = y + 1
+    }
     return if (in_dst) r.dst else r.std
 }
 
@@ -786,9 +810,15 @@ fn parse_tzif(a: Allocator, data: []u8) !Zone {
     if (@len(data) < 44 or data[0..4] != "TZif") {
         return error.BadZone
     }
+    // Version 1 is a 0 byte; each later one, '2' to '4' so far, keeps the
+    // layout of version 2 and is read as it, as RFC 8536 asks of readers.
+    const version = data[4]
+    if (version != 0 and (version < '2' or version > '9')) {
+        return error.BadZone
+    }
     var p = 0
     var tsize = 4
-    if (data[4] >= '2') {
+    if (version >= '2') {
         // Past the version 1 block, to the second header and its 8-byte
         // times.
         p = 44 + be(data, 32, 4) * 5 + be(data, 36, 4) * 6 + be(data, 40, 4) + be(data, 28, 4) * 8 + be(data, 24, 4) + be(data, 20, 4)
@@ -821,7 +851,8 @@ fn parse_tzif(a: Allocator, data: []u8) !Zone {
     while (i < typecnt) {
         const q = yp + i * 6
         const idx = @as(i64, data[q + 5])
-        if (idx >= charcnt or data[q + 4] > 1) {
+        // An offset of -2^31 is not allowed (RFC 8536): it has no negation.
+        if (idx >= charcnt or data[q + 4] > 1 or be(data, q, 4) == -2147483648) {
             return error.BadZone
         }
         var n = 0

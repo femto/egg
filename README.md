@@ -335,7 +335,8 @@ v3 (memory without GC, and what realistic programs needed):
   repeated when they go back is the first): `load(fs, a, name)` reads the
   system's TZif files, `local(fs, args, a)` follows `TZ` and
   `/etc/localtime`, `posix_zone` takes a POSIX TZ rule, `fixed` a fixed
-  offset; on Windows, which has no zone files, only those last two and UTC
+  offset; Windows has no zone files, so there `load` knows only UTC and
+  `local` is UTC unless `TZ` holds a POSIX rule
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
