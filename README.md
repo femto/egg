@@ -328,7 +328,15 @@ v3 (memory without GC, and what realistic programs needed):
   `DateTime` (`weekday()`, `yearday()`, `unix()`, `unix_ns()`), and RFC 3339
   and HTTP dates are written (`append_rfc3339`, `append_http_date`) and
   read (`parse_rfc3339`, `parse_http_date`, which takes all three forms
-  RFC 9110 names); time zones are not there yet
+  RFC 9110 names). A `time.Zone` gives the offset in force at an
+  instant (`z.offset(ns)`, `z.abbr(ns)`, `z.dst(ns)`), the local time
+  there (`z.at(ns)`) and the instant of a local time (`z.instant(t)`; a
+  time skipped when clocks go forward takes the offset from before, one
+  repeated when they go back is the first): `load(fs, a, name)` reads the
+  system's TZif files, `local(fs, args, a)` follows `TZ` and
+  `/etc/localtime`, `posix_zone` takes a POSIX TZ rule, `fixed` a fixed
+  offset; Windows has no zone files, so there `load` knows only UTC and
+  `local` is UTC unless `TZ` holds a POSIX rule
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
