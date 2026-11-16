@@ -16,6 +16,7 @@ uses alloc, net
 
 const text = @import("std/text")
 const codec = @import("std/codec")
+const time = @import("std/time")
 
 // The request line and headers together may be no longer than this, and
 // no request has more headers than MAX_HEADERS.
@@ -625,7 +626,7 @@ fn none_match(list: []u8, tag: []u8) bool {
     while (start < @len(list)) {
         const end = text.find_from(list, ",", start) orelse @len(list)
         const item = unblank(list[start..end])
-        if (item == "*" or strong(item) == strong(tag)) {
+        if (item == "*" or (@len(tag) > 0 and strong(item) == strong(tag))) {
             return true
         }
         start = end + 1
@@ -641,18 +642,62 @@ fn strong(tag: []u8) []u8 {
     return tag
 }
 
-// A 200 response with ETag: tag, or 304 Not Modified if the GET or HEAD
-// already has it. The tag is the caller's: a digest of body, a version, a
-// file's size and time ("W/\"1a2b-5f00\"")... with its quotes.
-fn conditional(c: TcpConn, a: Allocator, req: Request, tag: []u8, own: []u8, headers: []u8, body: []u8) !void {
-    const tagged = a.concat(headers, "ETag: ", tag, "\r\n")
-    defer a.free(tagged)
-    if (req.method == "GET" or req.method == "HEAD") {
-        for (req.headers) |h| {
-            if (same(req.head[h.name_lo..h.name_hi], "If-None-Match") and none_match(req.head[h.value_lo..h.value_hi], tag)) {
-                return respond(c, a, req, "304 Not Modified", own, tagged, "")
+// The Date header of a response sent at now (nanoseconds since 1970, as
+// clock.now() gives them) at the end of out, for the `own` headers:
+// "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n". RFC 9110 asks a server with a
+// clock to send it with every 2xx, 3xx and 4xx response.
+fn append_date(a: Allocator, inout out: Buf(u8), now: i64) void {
+    a.append_str(&out, "Date: ")
+    time.append_http_date(a, &out, now)
+    a.append_str(&out, "\r\n")
+}
+
+// Does a GET or HEAD already have the body these validators describe?
+// If-None-Match decides when it is there; otherwise If-Modified-Since,
+// when modified is known: not modified if it is no later than that date,
+// to the second (RFC 9110, 13.2.2). A date that cannot be read is no date.
+fn fresh(req: Request, tag: []u8, modified: ?i64) bool {
+    if (req.method != "GET" and req.method != "HEAD") {
+        return false
+    }
+    var asked = false
+    for (req.headers) |h| {
+        if (same(req.head[h.name_lo..h.name_hi], "If-None-Match")) {
+            asked = true
+            if (none_match(req.head[h.value_lo..h.value_hi], tag)) {
+                return true
             }
         }
+    }
+    if (asked) {
+        return false
+    }
+    const m = modified orelse return false
+    const since = header(req, "If-Modified-Since") orelse return false
+    const t = time.parse_http_date(since) orelse return false
+    return time.floor_div(m, time.SECOND) * time.SECOND <= t
+}
+
+// A 200 response with its validators, or 304 Not Modified if the GET or
+// HEAD already has the body they describe: ETag: tag unless tag is empty,
+// and Last-Modified unless modified is null. The tag is the caller's: a
+// digest of body, a version, a file's size and time ("W/\"1a2b-5f00\"")...
+// with its quotes; modified is in nanoseconds since 1970, as fs.stat's.
+fn conditional(c: TcpConn, a: Allocator, req: Request, tag: []u8, modified: ?i64, own: []u8, headers: []u8, body: []u8) !void {
+    var tagged = a.concat(headers, "")
+    defer a.free(tagged)
+    if (@len(tag) > 0) {
+        a.append_str(&tagged, "ETag: ")
+        a.append_str(&tagged, tag)
+        a.append_str(&tagged, "\r\n")
+    }
+    if (modified) |m| {
+        a.append_str(&tagged, "Last-Modified: ")
+        time.append_http_date(a, &tagged, m)
+        a.append_str(&tagged, "\r\n")
+    }
+    if (fresh(req, tag, modified)) {
+        return respond(c, a, req, "304 Not Modified", own, tagged, "")
     }
     return respond(c, a, req, "200 OK", own, tagged, body)
 }

@@ -1,7 +1,8 @@
 // std/http on a connection: a client thread sends pipelined requests at
 // once, and the server reads them with read_request and answers each, with
 // validators (conditional), ranges (ranged), HEADs (a length but no body)
-// and a chunked body, until one asks to close. The client prints what
+// and a chunked body, until one asks to close. Dates: a Date header,
+// Last-Modified, and If-Modified-Since, which If-None-Match overrules. The client prints what
 // came back, CRLF shown as |.
 // expect: HTTP/1.1 200 OK|ETag: "v1"|Content-Length: 5|Connection: keep-alive||fresh
 // expect: HTTP/1.1 200 OK|ETag: "v1"|Content-Length: 5|Connection: keep-alive||
@@ -11,13 +12,20 @@
 // expect: HTTP/1.1 206 Partial Content|Accept-Ranges: bytes|Content-Range: bytes 7-9/10|Content-Length: 3|Connection: keep-alive||789
 // expect: HTTP/1.1 416 Range Not Satisfiable|Accept-Ranges: bytes|Content-Range: bytes */10|Content-Length: 0|Connection: keep-alive||
 // expect: HTTP/1.1 200 OK|Content-Length: 15|Connection: keep-alive||abcde 127.0.0.1
+// expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
+// expect: HTTP/1.1 304 Not Modified|Date: Sun, 06 Nov 1994 08:49:37 GMT|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Connection: keep-alive||
+// expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
+// expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
+// expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
+// expect: HTTP/1.1 200 OK|Date: Sun, 06 Nov 1994 08:49:37 GMT|ETag: "v1"|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Content-Length: 5|Connection: keep-alive||dated
+// expect: HTTP/1.1 304 Not Modified|Date: Sun, 06 Nov 1994 08:49:37 GMT|ETag: "v1"|Last-Modified: Sun, 06 Nov 1994 08:49:37 GMT|Connection: keep-alive||
 // expect: HTTP/1.1 200 OK|Content-Length: 3|Connection: close||bye
-// expect: served 9
+// expect: served 16
 uses alloc, io, net, thread
 
 const http = @import("std/http")
 
-const REQUESTS = "GET /etag HTTP/1.1\r\nHost: x\r\n\r\nHEAD /etag HTTP/1.1\r\n\r\nHEAD /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /etag HTTP/1.1\r\nIf-None-Match: \"v0\", W/\"v1\"\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=-3\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=20-\r\n\r\nPOST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n3\r\ncde\r\n0\r\n\r\nGET /bye HTTP/1.1\r\nConnection: close\r\n\r\n"
+const REQUESTS = "GET /etag HTTP/1.1\r\nHost: x\r\n\r\nHEAD /etag HTTP/1.1\r\n\r\nHEAD /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /etag HTTP/1.1\r\nIf-None-Match: \"v0\", W/\"v1\"\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=2-4\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=-3\r\n\r\nGET /range HTTP/1.1\r\nRange: bytes=20-\r\n\r\nPOST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n3\r\ncde\r\n0\r\n\r\nGET /dated HTTP/1.1\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:36 GMT\r\n\r\nGET /dated HTTP/1.1\r\nIf-Modified-Since: yesterday\r\n\r\nPOST /dated HTTP/1.1\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\nContent-Length: 0\r\n\r\nGET /both HTTP/1.1\r\nIf-None-Match: \"v0\"\r\nIf-Modified-Since: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\nGET /both HTTP/1.1\r\nIf-None-Match: \"v1\"\r\n\r\nGET /bye HTTP/1.1\r\nConnection: close\r\n\r\n"
 
 fn client(net: Net, port: i64, a: Allocator, sink out: Sender(Buf(u8))) void {
     defer out.close()
@@ -39,7 +47,16 @@ fn client(net: Net, port: i64, a: Allocator, sink out: Sender(Buf(u8))) void {
 
 fn answer(c: TcpConn, a: Allocator, req: http.Request) !void {
     if (req.path == "/etag") {
-        return http.conditional(c, a, req, "\"v1\"", "", "", "fresh")
+        return http.conditional(c, a, req, "\"v1\"", null, "", "", "fresh")
+    }
+    if (req.path == "/dated" or req.path == "/both") {
+        // Sent at 784111777.5 s; the file was written half a second before,
+        // which If-Modified-Since, to the second, takes as that second.
+        var own: Buf(u8) = .empty
+        defer a.free(own)
+        http.append_date(a, &own, 784111777500000000)
+        const tag = if (req.path == "/both") "\"v1\"" else ""
+        return http.conditional(c, a, req, tag, 784111777000000000 + 400000000, own, "", "dated")
     }
     if (req.path == "/range") {
         return http.ranged(c, a, req, "", "0123456789")

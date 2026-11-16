@@ -3,10 +3,12 @@
 // connections from a queue, and a logger thread prints what they report. While every thread is busy and the queue is full,
 // the server accepts one more connection and waits with it: load cannot make
 // it start more threads. A connection holds its thread while it is open, so
-// it may idle for 2 seconds and make 100 requests.
+// it may idle for 2 seconds and make 100 requests. Every response has a
+// Date, and a file Last-Modified and an ETag of its size and time, so a
+// client that has it gets 304 Not Modified.
 // An example, not for the open internet: symbolic links are followed out of
 // ROOT.
-uses alloc, args, fs, io, net, thread
+uses alloc, args, fs, io, net, thread, time
 
 const text = @import("std/text")
 const http = @import("std/http")
@@ -57,43 +59,76 @@ fn plain(s: []u8) bool {
     return true
 }
 
-fn respond(c: TcpConn, a: Allocator, req: http.Request, status: str, kind: str, body: []u8) !void {
-    const headers = a.concat("Content-Type: ", kind, "\r\n")
-    defer a.free(headers)
-    return http.respond(c, a, req, status, "", headers, body)
+// The Date header for now.
+fn dated(clock: Clock, a: Allocator) Buf(u8) {
+    var own: Buf(u8) = .empty
+    http.append_date(a, &own, clock.now())
+    return own
 }
 
-fn serve_file(c: TcpConn, files: Fs, a: Allocator, root: str, req: http.Request, path: []u8) !i64 {
+fn respond(c: TcpConn, clock: Clock, a: Allocator, req: http.Request, status: str, kind: str, body: []u8) !void {
+    const own = dated(clock, a)
+    defer a.free(own)
+    const headers = a.concat("Content-Type: ", kind, "\r\n")
+    defer a.free(headers)
+    return http.respond(c, a, req, status, own, headers, body)
+}
+
+fn serve_file(c: TcpConn, files: Fs, clock: Clock, a: Allocator, root: str, req: http.Request, path: []u8) !i64 {
     const full = a.concat(root, path)
     defer a.free(full)
+    const st = files.stat(full) catch |e| {
+        return missing(c, clock, a, req, e)
+    }
+    if (st.kind != .file) {
+        return missing(c, clock, a, req, error.IsDirectory)
+    }
     const body = files.read(a, full) catch |e| {
-        if (e == error.NotFound or e == error.IsDirectory) {
-            try respond(c, a, req, "404 Not Found", "text/plain", "not found\n")
-            return 404
-        }
-        try respond(c, a, req, "500 Internal Server Error", "text/plain", "cannot read\n")
-        return 500
+        return missing(c, clock, a, req, e)
     }
     defer a.free(body)
-    try respond(c, a, req, "200 OK", content_type(path), body)
+    // Weak: the same size and time do not prove the same bytes.
+    var tag = a.concat("W/\"", "")
+    defer a.free(tag)
+    a.append_int(&tag, st.size)
+    a.push(&tag, '-')
+    a.append_int(&tag, st.modified)
+    a.push(&tag, '"')
+    const own = dated(clock, a)
+    defer a.free(own)
+    const headers = a.concat("Content-Type: ", content_type(path), "\r\n")
+    defer a.free(headers)
+    try http.conditional(c, a, req, tag, st.modified, own, headers, body)
     return 200
 }
 
+// 404 for what is not a file, 500 for one that cannot be read.
+fn missing(c: TcpConn, clock: Clock, a: Allocator, req: http.Request, e: anyerror) !i64 {
+    if (e == error.NotFound or e == error.IsDirectory or e == error.NotDirectory) {
+        try respond(c, clock, a, req, "404 Not Found", "text/plain", "not found\n")
+        return 404
+    }
+    try respond(c, clock, a, req, "500 Internal Server Error", "text/plain", "cannot read\n")
+    return 500
+}
+
 // What a request that could not be read gets, before the connection closes.
-fn refuse(c: TcpConn, a: Allocator, e: anyerror) !void {
+fn refuse(c: TcpConn, clock: Clock, a: Allocator, e: anyerror) !void {
+    const own = dated(clock, a)
+    defer a.free(own)
     if (e == error.HeadTooLarge) {
-        return http.write_response(c, a, "431 Request Header Fields Too Large", "Content-Type: text/plain\r\n", "too long\n", false)
+        return http.write_parts(c, a, "431 Request Header Fields Too Large", own, "Content-Type: text/plain\r\n", "too long\n", false)
     }
     if (e == error.BodyTooLarge) {
-        return http.write_response(c, a, "413 Payload Too Large", "Content-Type: text/plain\r\n", "too large\n", false)
+        return http.write_parts(c, a, "413 Payload Too Large", own, "Content-Type: text/plain\r\n", "too large\n", false)
     }
     if (e == error.BadRequest) {
-        return http.write_response(c, a, "400 Bad Request", "Content-Type: text/plain\r\n", "bad request\n", false)
+        return http.write_parts(c, a, "400 Bad Request", own, "Content-Type: text/plain\r\n", "bad request\n", false)
     }
     return e
 }
 
-fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) !void {
+fn handle(c: TcpConn, files: Fs, clock: Clock, a: Allocator, root: str, log: Sender(Buf(u8))) !void {
     // Quiet for 2 s, between requests or inside one, and it is let go.
     try c.set_timeout(2000)
     var inbox: Buf(u8) = .empty
@@ -101,7 +136,7 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
     var served = 0
     while (true) {
         const got = (http.read_request(c, a, &inbox, 65536) catch |e| {
-            return refuse(c, a, e)
+            return refuse(c, clock, a, e)
         }) orelse break
         var req = got
         defer req.deinit(a)
@@ -112,28 +147,28 @@ fn handle(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8))) 
         if (served >= 100 or !reads or @len(req.body) > 0) {
             http.close_after(&req)
         }
-        try route(c, files, a, root, log, req)
+        try route(c, files, clock, a, root, log, req)
         if (!req.keep) {
             return
         }
     }
 }
 
-fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), req: http.Request) !void {
+fn route(c: TcpConn, files: Fs, clock: Clock, a: Allocator, root: str, log: Sender(Buf(u8)), req: http.Request) !void {
     var status = 400
     const path = req.path[0..]
     if (req.method != "GET" and req.method != "HEAD") {
         status = 405
-        try respond(c, a, req, "405 Method Not Allowed", "text/plain", "only GET\n")
+        try respond(c, clock, a, req, "405 Method Not Allowed", "text/plain", "only GET\n")
     } else if (!safe(path)) {
         status = 403
-        try respond(c, a, req, "403 Forbidden", "text/plain", "forbidden\n")
+        try respond(c, clock, a, req, "403 Forbidden", "text/plain", "forbidden\n")
     } else if (text.ends_with(path, "/")) {
         const index = a.concat(path, "index.html")
         defer a.free(index)
-        status = try serve_file(c, files, a, root, req, index)
+        status = try serve_file(c, files, clock, a, root, req, index)
     } else {
-        status = try serve_file(c, files, a, root, req, path)
+        status = try serve_file(c, files, clock, a, root, req, path)
     }
     const code = a.int_str(status)
     defer a.free(code)
@@ -145,12 +180,12 @@ fn route(c: TcpConn, files: Fs, a: Allocator, root: str, log: Sender(Buf(u8)), r
     }
 }
 
-fn work(sink jobs: Receiver(TcpConn), files: Fs, a: Allocator, root: str, sink log: Sender(Buf(u8))) void {
+fn work(sink jobs: Receiver(TcpConn), files: Fs, clock: Clock, a: Allocator, root: str, sink log: Sender(Buf(u8))) void {
     defer jobs.close()
     defer log.close()
     while (jobs.recv()) |c| {
         defer c.close()
-        handle(c, files, a, root, log) catch {
+        handle(c, files, clock, a, root, log) catch {
             continue
         }
     }
@@ -164,7 +199,7 @@ fn logger(sink rx: Receiver(Buf(u8)), io: Io, a: Allocator) void {
     }
 }
 
-fn main(io: Io, args: Args, files: Fs, net: Net, a: Allocator, threads: Threads) !void {
+fn main(io: Io, args: Args, files: Fs, net: Net, a: Allocator, threads: Threads, clock: Clock) !void {
     if (args.len() != 3) {
         io.eprint("usage: ", args.get(0), " ROOT PORT")
         return
@@ -191,7 +226,7 @@ fn main(io: Io, args: Args, files: Fs, net: Net, a: Allocator, threads: Threads)
     defer queue.close()      // first: they finish what is queued, and stop
     var i = 0
     while (i < 8) {
-        a.push(&pool, Worker{ .t = threads.spawn(work, jobs.clone(), files, a, args.get(1), log.clone()) })
+        a.push(&pool, Worker{ .t = threads.spawn(work, jobs.clone(), files, clock, a, args.get(1), log.clone()) })
         i = i + 1
     }
     jobs.close()             // the workers have their own
