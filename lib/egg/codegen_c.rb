@@ -22,7 +22,8 @@
 # array to a struct wrapping a C array (so it copies like a value), an
 # error union !T to { T value; int32_t err; } (err 0 = no error). A slice
 # is { const T *ptr; int64_t len; }; an inout parameter is a pointer, and
-# so is a plain one larger than 16 bytes (const: by_ptr?). A
+# so is a plain one larger than 16 bytes (const: by_ptr?) other than an
+# extern struct, which C passes by value. A
 # pointer *T is a C pointer, a function type a C function pointer, an
 # integer type its <stdint.h> type (usize is size_t). Structs and unions
 # are tagged and declared first, so a struct may point to itself.
@@ -3652,12 +3653,13 @@ module Egg
     # const pointer: the callee cannot change it, so the copy saves
     # nothing. 16 is Egg's line, not every ABI's: SysV x86-64 and AArch64
     # pass up to 16 bytes in registers and copy more to memory; Windows x64
-    # already passes more than 8 by reference to a copy. (An extern fn's
-    # parameters are all scalars, pointers and functions, so never above.)
+    # already passes more than 8 by reference to a copy. An extern struct
+    # always goes by value, as C passes it, so an extern fn and a function
+    # value C calls agree with C.
     BIG_PARAM = 16
 
     def by_ptr?(t, mode)
-      mode.nil? && (c_size(t) || 0) > BIG_PARAM
+      mode.nil? && @types[t]&.ext != true && (c_size(t) || 0) > BIG_PARAM
     end
 
     # The C type of a parameter in a function type: a pointer for inout or

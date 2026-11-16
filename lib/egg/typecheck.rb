@@ -68,7 +68,8 @@ module Egg
   # fields: [[name, type, line]]; members (enum): names; member_lines: their lines
   # mod: prefix of the module that declares the type (for #line marks)
   # resource: an `owned struct`; deinit: its deinit method's Sig, if any
-  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource, :deinit, :modes)
+  # ext: an `extern struct`, whose fields are all C types
+  TInfo = Struct.new(:canon, :kind, :fields, :members, :elem, :len, :inner, :c_name, :line, :col, :member_lines, :fn_line, :return_line, :mod, :resource, :deinit, :modes, :ext)
 
   class TypeChecker
     # Io and Allocator are capability values: opaque, and only `main`
@@ -362,10 +363,10 @@ module Egg
         err("E132", "an extern fn takes its parameters by value; no inout, sink or comptime", f.line, f.col)
         return
       end
-      bad = sig.params.map(&:first).find { |t| t != "error" && !c_scalar?(t) }
-      bad ||= sig.ret unless sig.ret == "void" || sig.ret == "error" || c_scalar?(sig.ret)
+      bad = sig.params.map(&:first).find { |t| t != "error" && !c_arg?(t) }
+      bad ||= sig.ret unless sig.ret == "void" || sig.ret == "error" || c_arg?(sig.ret)
       unless bad.nil?
-        err("E132", "an extern fn passes only integers, floats, bool, pointers and function values (and may return void), not #{bad}", f.line, f.col)
+        err("E132", "an extern fn passes only integers, floats, bool, pointers to C types, function values and extern structs (and may return void), not #{bad}#{c_why(bad)}", f.line, f.col)
         return
       end
       f.ext.each do |u|
@@ -387,12 +388,37 @@ module Egg
       @c_names[c] = true
     end
 
-    # A type that crosses into C as itself.
-    def c_scalar?(t)
+    # A type that crosses into C as itself: a C type other than an array,
+    # which C does not pass by value.
+    def c_arg?(t)
+      @types[t]&.kind != :array && c_type?(t)
+    end
+
+    # A type C lays out as Egg does: an integer, a float, bool, a pointer
+    # to a C type, a function value taking and giving them, an array of
+    # one or an extern struct. A plain struct may hold str, slices or
+    # buffers, and may be laid out differently some day; an enum's C type
+    # is Egg's to choose.
+    def c_type?(t)
+      return true if num?(t) || t == "bool" || t == "error"
       info = @types[t]
-      target = info&.kind == :ptr ? @types[info.inner] : info
-      return false if target&.kind == :fn && target.modes.any?
-      num?(t) || t == "bool" || %i[ptr fn].include?(info&.kind)
+      case info&.kind
+      when :ptr then c_type?(info.inner)
+      when :fn
+        info.modes.none? && info.fields.all? { |ft| c_arg?(ft) } && (info.inner == "void" || c_arg?(info.inner))
+      when :array then c_type?(info.elem)
+      when :struct then info.ext == true
+      else false
+      end
+    end
+
+    # Why t is no C type, when it is a plain struct or holds or points to
+    # one.
+    def c_why(t)
+      info = @types[t]
+      info = @types[info.kind == :ptr ? info.inner : info.elem] while %i[ptr array].include?(info&.kind)
+      return "" unless info&.kind == :struct && !info.ext
+      "; declare #{base_name(info.canon)} as an extern struct for C to see it"
     end
 
     # `uses alloc, io`: known capabilities, each named once.
@@ -838,6 +864,7 @@ module Egg
       info = register(d.name, d.kind, d.line, d.col)
       info.mod = d.mod || ""
       info.resource = d.owned == true
+      info.ext = d.ext == true
       # A type is registered on first use, maybe from another module; its
       # own errors belong to its file.
       @registering += 1
@@ -880,7 +907,7 @@ module Egg
           add_method(d.name, m, {}, d.name)
         end
       else
-        with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members) }
+        with_env({}, d.name, d.mod) { info.fields = resolve_fields(d.members, false, info.ext) }
         d.fns.each do |m|
           m.owner = d.name
           add_method(d.name, m, {}, d.name)
@@ -924,7 +951,8 @@ module Egg
 
     # Struct fields, or union members (a union member may have no payload:
     # its type is "void").
-    def resolve_fields(members, union = false)
+    # ext: an extern struct's, which hold only C types (E154).
+    def resolve_fields(members, union = false, ext = false)
       fields = []
       members.each do |f|
         if fields.any? { |n, _| n == f.name }
@@ -938,6 +966,9 @@ module Egg
         t = resolve_type(f.type, f.line, f.col)
         if t == "void" || t == "type"
           err("E108", "a field cannot have type #{t}", f.line, f.col)
+          t = "error"
+        elsif ext && !c_type?(t)
+          err("E154", "field '#{f.name}' of an extern struct cannot be a #{t}: its fields are integers, floats, bool, pointers to C types, function values, arrays of them and extern structs#{c_why(t)}", f.line, f.col)
           t = "error"
         elsif !slice_in(t).nil?
           err("E116", "a struct cannot hold a slice (#{t}); slices exist only as parameters, local consts and results", f.line, f.col)

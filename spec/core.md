@@ -2515,8 +2515,9 @@ extern fn write(fd: i32, buf: *u8, n: usize) i64 uses io
 ```
 
 declares a C function, called by its own name. It has no body. Its
-parameters and result are integers, floats, `bool`, pointers or function types
-(the result may be `void`), so the C types are exact; anything else, an
+parameters and result are C types: integers, floats, `bool`, pointers to C
+types, function types taking and giving C types, and extern structs (the
+result may also be `void`), so the C types are exact; anything else, an
 `inout` parameter, a C keyword, `main` (the generated entry point), a
 name the C headers the generated code includes already declare
 (functions such as `puts` and `malloc`, macros such as `NULL` and
@@ -2603,6 +2604,46 @@ module wrapping a library links it without saying so. The name is what
 follows `-l`: letters, digits and `_ . + -`, not starting with `.`, `+`
 or `-` (E138). eggc's own `-l LIB` links one more library, and `-L DIR`
 tells the C compiler where to look.
+
+A struct C knows is declared `extern struct`:
+
+```
+allow unsafe
+
+const Timespec = extern struct { sec: i64, nsec: i64 }
+
+extern fn clock_gettime(clock: i32, ts: *Timespec) i32
+```
+
+Its fields are C types (integers, floats, `bool`, pointers to C types,
+function types, arrays of C types and other extern structs; anything else
+is E154), in the order written, so the C compiler lays it out as it lays
+out the C library's struct with the same fields. An extern fn takes and
+returns one by value, as C does, or by pointer. A plain struct does not
+cross into C, by value or behind a pointer (E132): it may hold `str`,
+slices or buffers, which C cannot read, and Egg keeps its layout to
+itself. In Egg code an extern struct is a struct like any other, with
+methods; only an argument larger than 16 bytes differs, going by value
+where a plain struct would go by pointer, so a function C calls through a
+function value receives it as C passes it.
+
+```egg
+// expect: 3
+uses io
+
+const Point = extern struct {
+    x: i32,
+    y: i32,
+
+    fn sum(self: Point) i32 {
+        return self.x + self.y
+    }
+}
+
+fn main(io: Io) void {
+    io.print(Point{ .x = 1, .y = 2 }.sum())
+}
+```
 
 ## 21. Buffers, ownership and defer
 

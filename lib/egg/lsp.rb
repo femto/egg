@@ -110,7 +110,7 @@ module Egg
           name_tok = @tokens[i - 2]
           alias_toks = td.kind == :alias ? alias_tokens(i) : nil
           close = alias_toks.nil? ? closing_brace(i) : alias_toks.last
-          what = alias_toks.nil? ? "#{td.owned ? 'owned ' : ''}#{td.kind}" : alias_text(alias_toks)
+          what = alias_toks.nil? ? "#{td.owned ? 'owned ' : td.ext ? 'extern ' : ''}#{td.kind}" : alias_text(alias_toks)
           decl = Decl.new(td.kind, td.name, name_tok.line, name_tok.col,
                           "const #{td.name} = #{what}", close.line, close.col + close.text.length)
           @funcs << [decl, name_tok.line, name_tok.col]
