@@ -1,0 +1,1169 @@
+// std/flate: DEFLATE (RFC 1951), in the zlib (RFC 1950) and gzip (RFC
+// 1952) wrappers or raw, and the CRC-32 and Adler-32 checksums. Each works
+// on bytes in memory and appends what it makes to a Buf(u8).
+// const flate = @import("std/flate")
+// flate.gzip_compress(a, &out, data, flate.DEFAULT_LEVEL) appends a .gz;
+// try flate.gzip_decompress(a, &back, out, flate.NO_LIMIT) appends data.
+// Levels go from 0 (stored, no compression) to 9 (smallest, slowest), as
+// in zlib. A decompressor stops with error.TooBig once its output would
+// pass max bytes, so a small input cannot fill memory; error.BadData is a
+// stream that is not valid, error.BadChecksum one whose check value is
+// wrong. On an error, out is left as it was.
+uses alloc
+
+const DEFAULT_LEVEL = 6
+const NO_LIMIT = -1
+
+// The CRC-32 of zip, gzip and PNG (IEEE 802.3, reflected), of data after
+// crc, the CRC of what came before it: crc32(0, data) for data alone.
+fn crc32(crc: u32, data: []u8) u32 {
+    const table = [256]u32{
+        0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
+        0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
+        0x1DB71064, 0x6AB020F2, 0xF3B97148, 0x84BE41DE, 0x1ADAD47D, 0x6DDDE4EB, 0xF4D4B551, 0x83D385C7,
+        0x136C9856, 0x646BA8C0, 0xFD62F97A, 0x8A65C9EC, 0x14015C4F, 0x63066CD9, 0xFA0F3D63, 0x8D080DF5,
+        0x3B6E20C8, 0x4C69105E, 0xD56041E4, 0xA2677172, 0x3C03E4D1, 0x4B04D447, 0xD20D85FD, 0xA50AB56B,
+        0x35B5A8FA, 0x42B2986C, 0xDBBBC9D6, 0xACBCF940, 0x32D86CE3, 0x45DF5C75, 0xDCD60DCF, 0xABD13D59,
+        0x26D930AC, 0x51DE003A, 0xC8D75180, 0xBFD06116, 0x21B4F4B5, 0x56B3C423, 0xCFBA9599, 0xB8BDA50F,
+        0x2802B89E, 0x5F058808, 0xC60CD9B2, 0xB10BE924, 0x2F6F7C87, 0x58684C11, 0xC1611DAB, 0xB6662D3D,
+        0x76DC4190, 0x01DB7106, 0x98D220BC, 0xEFD5102A, 0x71B18589, 0x06B6B51F, 0x9FBFE4A5, 0xE8B8D433,
+        0x7807C9A2, 0x0F00F934, 0x9609A88E, 0xE10E9818, 0x7F6A0DBB, 0x086D3D2D, 0x91646C97, 0xE6635C01,
+        0x6B6B51F4, 0x1C6C6162, 0x856530D8, 0xF262004E, 0x6C0695ED, 0x1B01A57B, 0x8208F4C1, 0xF50FC457,
+        0x65B0D9C6, 0x12B7E950, 0x8BBEB8EA, 0xFCB9887C, 0x62DD1DDF, 0x15DA2D49, 0x8CD37CF3, 0xFBD44C65,
+        0x4DB26158, 0x3AB551CE, 0xA3BC0074, 0xD4BB30E2, 0x4ADFA541, 0x3DD895D7, 0xA4D1C46D, 0xD3D6F4FB,
+        0x4369E96A, 0x346ED9FC, 0xAD678846, 0xDA60B8D0, 0x44042D73, 0x33031DE5, 0xAA0A4C5F, 0xDD0D7CC9,
+        0x5005713C, 0x270241AA, 0xBE0B1010, 0xC90C2086, 0x5768B525, 0x206F85B3, 0xB966D409, 0xCE61E49F,
+        0x5EDEF90E, 0x29D9C998, 0xB0D09822, 0xC7D7A8B4, 0x59B33D17, 0x2EB40D81, 0xB7BD5C3B, 0xC0BA6CAD,
+        0xEDB88320, 0x9ABFB3B6, 0x03B6E20C, 0x74B1D29A, 0xEAD54739, 0x9DD277AF, 0x04DB2615, 0x73DC1683,
+        0xE3630B12, 0x94643B84, 0x0D6D6A3E, 0x7A6A5AA8, 0xE40ECF0B, 0x9309FF9D, 0x0A00AE27, 0x7D079EB1,
+        0xF00F9344, 0x8708A3D2, 0x1E01F268, 0x6906C2FE, 0xF762575D, 0x806567CB, 0x196C3671, 0x6E6B06E7,
+        0xFED41B76, 0x89D32BE0, 0x10DA7A5A, 0x67DD4ACC, 0xF9B9DF6F, 0x8EBEEFF9, 0x17B7BE43, 0x60B08ED5,
+        0xD6D6A3E8, 0xA1D1937E, 0x38D8C2C4, 0x4FDFF252, 0xD1BB67F1, 0xA6BC5767, 0x3FB506DD, 0x48B2364B,
+        0xD80D2BDA, 0xAF0A1B4C, 0x36034AF6, 0x41047A60, 0xDF60EFC3, 0xA867DF55, 0x316E8EEF, 0x4669BE79,
+        0xCB61B38C, 0xBC66831A, 0x256FD2A0, 0x5268E236, 0xCC0C7795, 0xBB0B4703, 0x220216B9, 0x5505262F,
+        0xC5BA3BBE, 0xB2BD0B28, 0x2BB45A92, 0x5CB36A04, 0xC2D7FFA7, 0xB5D0CF31, 0x2CD99E8B, 0x5BDEAE1D,
+        0x9B64C2B0, 0xEC63F226, 0x756AA39C, 0x026D930A, 0x9C0906A9, 0xEB0E363F, 0x72076785, 0x05005713,
+        0x95BF4A82, 0xE2B87A14, 0x7BB12BAE, 0x0CB61B38, 0x92D28E9B, 0xE5D5BE0D, 0x7CDCEFB7, 0x0BDBDF21,
+        0x86D3D2D4, 0xF1D4E242, 0x68DDB3F8, 0x1FDA836E, 0x81BE16CD, 0xF6B9265B, 0x6FB077E1, 0x18B74777,
+        0x88085AE6, 0xFF0F6A70, 0x66063BCA, 0x11010B5C, 0x8F659EFF, 0xF862AE69, 0x616BFFD3, 0x166CCF45,
+        0xA00AE278, 0xD70DD2EE, 0x4E048354, 0x3903B3C2, 0xA7672661, 0xD06016F7, 0x4969474D, 0x3E6E77DB,
+        0xAED16A4A, 0xD9D65ADC, 0x40DF0B66, 0x37D83BF0, 0xA9BCAE53, 0xDEBB9EC5, 0x47B2CF7F, 0x30B5FFE9,
+        0xBDBDF21C, 0xCABAC28A, 0x53B39330, 0x24B4A3A6, 0xBAD03605, 0xCDD70693, 0x54DE5729, 0x23D967BF,
+        0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94, 0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
+    }
+    var c = ~crc
+    for (data) |b| {
+        c = table[@as(i64, @as(u32, b) ^ (c & 0xFF))] ^ (c >> 8)
+    }
+    return ~c
+}
+
+// The Adler-32 of zlib, of data after adler, the checksum of what came
+// before it: adler32(1, data) for data alone.
+fn adler32(adler: u32, data: []u8) u32 {
+    var s1 = @as(i64, adler & 0xFFFF)
+    var s2 = @as(i64, adler >> 16)
+    var i = 0
+    while (i < @len(data)) {
+        // 5552 bytes is the most that cannot overflow 32 bits (zlib's NMAX);
+        // i64 sums could take more, but this keeps the reductions rare.
+        var end = i + 5552
+        if (end > @len(data)) {
+            end = @len(data)
+        }
+        while (i < end) {
+            s1 = s1 + @as(i64, data[i])
+            s2 = s2 + s1
+            i = i + 1
+        }
+        s1 = s1 % 65521
+        s2 = s2 % 65521
+    }
+    return @as(u32, s2 << 16 | s1)
+}
+
+// ---------------------------------------------------------------------
+// Inflating
+
+// Bits of data read low bit first: buf holds n of them, and the next byte
+// to load is data[pos].
+const Bits = struct {
+    pos: i64
+    buf: u64
+    n: i64
+}
+
+fn fill(data: []u8, inout br: Bits) void {
+    while (br.n <= 56 and br.pos < @len(data)) {
+        br.buf = br.buf | @as(u64, data[br.pos]) << br.n
+        br.pos = br.pos + 1
+        br.n = br.n + 8
+    }
+}
+
+// The next k bits (k up to 32) as a number; error.BadData past the end.
+fn get(data: []u8, inout br: Bits, k: i64) !i64 {
+    if (br.n < k) {
+        fill(data, &br)
+        if (br.n < k) {
+            return error.BadData
+        }
+    }
+    const v = @as(i64, br.buf & ((@as(u64, 1) << k) - 1))
+    br.buf = br.buf >> k
+    br.n = br.n - k
+    return v
+}
+
+const FAST_BITS = 10
+
+// A canonical Huffman code for decoding: count[len] codes of each length,
+// their symbols in code order, and for each FAST_BITS-bit lookahead whose
+// code is no longer than that, len << 9 | symbol (0 if it is longer).
+const Huff = struct {
+    count: [16]i64
+    symbol: [288]i64
+    fast: [1024]i64
+
+    fn init() Huff {
+        return Huff{ .count = @splat(0), .symbol = @splat(0), .fast = @splat(0) }
+    }
+}
+
+// The bits of code, len of them, in the opposite order: Huffman codes are
+// packed starting from their top bit.
+fn reverse(code: i64, len: i64) i64 {
+    var r = 0
+    var c = code
+    var i = 0
+    while (i < len) {
+        r = r << 1 | (c & 1)
+        c = c >> 1
+        i = i + 1
+    }
+    return r
+}
+
+// Makes h the code with these lengths (0 for an unused symbol); false if
+// they do not make a complete code. As zlib allows, a single code of
+// length 1 may be incomplete (a stream with one distance), and a code may
+// be empty (a dynamic block with no distances at all); decoding a symbol
+// that has no code is then error.BadData.
+fn build(inout h: Huff, lens: []i64) bool {
+    h.count = @splat(0)
+    h.fast = @splat(0)
+    for (lens) |l| {
+        h.count[l] = h.count[l] + 1
+    }
+    h.count[0] = 0
+    var left = 1
+    var used = 0
+    var len = 1
+    while (len <= 15) {
+        left = left * 2 - h.count[len]
+        if (left < 0) {
+            return false
+        }
+        used = used + h.count[len]
+        len = len + 1
+    }
+    if (left > 0 and used != 0 and !(used == 1 and h.count[1] == 1)) {
+        return false
+    }
+    var offs: [16]i64 = @splat(0)
+    len = 1
+    while (len < 15) {
+        offs[len + 1] = offs[len] + h.count[len]
+        len = len + 1
+    }
+    for (lens) |l, sym| {
+        if (l != 0) {
+            h.symbol[offs[l]] = sym
+            offs[l] = offs[l] + 1
+        }
+    }
+    // The lookahead table, from the codes in canonical order.
+    var code = 0
+    var k = 0
+    len = 1
+    while (len <= FAST_BITS) {
+        var j = 0
+        while (j < h.count[len]) {
+            var idx = reverse(code, len)
+            while (idx < 1024) {
+                h.fast[idx] = len << 9 | h.symbol[k]
+                idx = idx + (1 << len)
+            }
+            code = code + 1
+            k = k + 1
+            j = j + 1
+        }
+        code = code << 1
+        len = len + 1
+    }
+    return true
+}
+
+// The next symbol in code h.
+fn decode(data: []u8, inout br: Bits, h: Huff) !i64 {
+    if (br.n < 15) {
+        fill(data, &br)
+    }
+    const e = h.fast[@as(i64, br.buf & 1023)]
+    if (e != 0) {
+        const len = e >> 9
+        if (len > br.n) {
+            return error.BadData
+        }
+        br.buf = br.buf >> len
+        br.n = br.n - len
+        return e & 511
+    }
+    // Longer than FAST_BITS: a bit at a time, as zlib's puff does.
+    var code = 0
+    var first = 0
+    var index = 0
+    var len = 1
+    while (len <= 15 and len <= br.n) {
+        code = code | @as(i64, (br.buf >> (len - 1)) & 1)
+        const count = h.count[len]
+        if (code - count < first) {
+            br.buf = br.buf >> len
+            br.n = br.n - len
+            return h.symbol[index + code - first]
+        }
+        index = index + count
+        first = (first + count) << 1
+        code = code << 1
+        len = len + 1
+    }
+    return error.BadData
+}
+
+// Lengths and distances: each symbol's base value and extra bits.
+fn length_base(sym: i64) i64 {
+    const base = [29]i64{ 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 }
+    return base[sym]
+}
+
+fn length_extra(sym: i64) i64 {
+    if (sym < 8 or sym == 28) {
+        return 0
+    }
+    return (sym - 4) / 4
+}
+
+fn dist_base(sym: i64) i64 {
+    const base = [30]i64{ 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577 }
+    return base[sym]
+}
+
+fn dist_extra(sym: i64) i64 {
+    if (sym < 4) {
+        return 0
+    }
+    return (sym - 2) / 2
+}
+
+// The symbols of one compressed block, up to its end-of-block symbol;
+// back references reach no further back than start.
+fn codes(a: Allocator, inout out: Buf(u8), data: []u8, inout br: Bits, lit: Huff, dist: Huff, start: i64, max: i64) !void {
+    while (true) {
+        const sym = try decode(data, &br, lit)
+        if (sym < 256) {
+            if (max >= 0 and @len(out) - start >= max) {
+                return error.TooBig
+            }
+            a.push(&out, @as(u8, sym))
+        } else if (sym == 256) {
+            return
+        } else {
+            if (sym > 285) {
+                return error.BadData
+            }
+            const len = length_base(sym - 257) + try get(data, &br, length_extra(sym - 257))
+            const dsym = try decode(data, &br, dist)
+            if (dsym > 29) {
+                return error.BadData
+            }
+            const d = dist_base(dsym) + try get(data, &br, dist_extra(dsym))
+            if (d > @len(out) - start) {
+                return error.BadData
+            }
+            if (max >= 0 and @len(out) - start + len > max) {
+                return error.TooBig
+            }
+            var i = 0
+            while (i < len) {
+                const c = out[@len(out) - d]
+                a.push(&out, c)
+                i = i + 1
+            }
+        }
+    }
+}
+
+// The code lengths of a dynamic block's header into lit and dist.
+fn dynamic(data: []u8, inout br: Bits, inout lit: Huff, inout dist: Huff) !void {
+    const nlen = try get(data, &br, 5) + 257
+    const ndist = try get(data, &br, 5) + 1
+    const ncode = try get(data, &br, 4) + 4
+    if (nlen > 286 or ndist > 30) {
+        return error.BadData
+    }
+    const order = [19]i64{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 }
+    var lens: [320]i64 = @splat(0)
+    var i = 0
+    while (i < ncode) {
+        lens[order[i]] = try get(data, &br, 3)
+        i = i + 1
+    }
+    var lencode = Huff.init()
+    if (!build(&lencode, lens[0..19])) {
+        return error.BadData
+    }
+    lens = @splat(0)
+    i = 0
+    while (i < nlen + ndist) {
+        const sym = try decode(data, &br, lencode)
+        if (sym < 16) {
+            lens[i] = sym
+            i = i + 1
+        } else {
+            var rep = 0
+            var v = 0
+            if (sym == 16) {
+                if (i == 0) {
+                    return error.BadData
+                }
+                v = lens[i - 1]
+                rep = 3 + try get(data, &br, 2)
+            } else if (sym == 17) {
+                rep = 3 + try get(data, &br, 3)
+            } else {
+                rep = 11 + try get(data, &br, 7)
+            }
+            if (i + rep > nlen + ndist) {
+                return error.BadData
+            }
+            while (rep > 0) {
+                lens[i] = v
+                i = i + 1
+                rep = rep - 1
+            }
+        }
+    }
+    // A block must be able to end.
+    if (lens[256] == 0) {
+        return error.BadData
+    }
+    if (!build(&lit, lens[0..nlen]) or !build(&dist, lens[nlen..nlen + ndist])) {
+        return error.BadData
+    }
+}
+
+// The fixed codes of RFC 1951 section 3.2.6.
+fn fixed(inout lit: Huff, inout dist: Huff) void {
+    var lens: [288]i64 = @splat(8)
+    var i = 144
+    while (i < 256) {
+        lens[i] = 9
+        i = i + 1
+    }
+    while (i < 280) {
+        lens[i] = 7
+        i = i + 1
+    }
+    _ = build(&lit, lens[0..])
+    // 32 codes, of which 30 and 31 never occur, so the code is complete.
+    const dlens: [32]i64 = @splat(5)
+    _ = build(&dist, dlens[0..])
+}
+
+// Appends the DEFLATE stream at the start of data to out and returns how
+// many bytes of data it took; what follows it is left alone. Stops with
+// error.TooBig past max bytes of output (NO_LIMIT for none).
+fn inflate(a: Allocator, inout out: Buf(u8), data: []u8, max: i64) !i64 {
+    const start = @len(out)
+    errdefer a.resize(&out, start, 0)
+    var br = Bits{ .pos = 0, .buf = 0, .n = 0 }
+    var lit = Huff.init()
+    var dist = Huff.init()
+    var final = 0
+    while (final == 0) {
+        final = try get(data, &br, 1)
+        const kind = try get(data, &br, 2)
+        if (kind == 0) {
+            // Stored: to the next byte, then LEN and its complement.
+            br.n = br.n - br.n % 8
+            const p = br.pos - br.n / 8
+            br.pos = p
+            br.buf = 0
+            br.n = 0
+            if (p + 4 > @len(data)) {
+                return error.BadData
+            }
+            const len = @as(i64, data[p]) | @as(i64, data[p + 1]) << 8
+            const nlen = @as(i64, data[p + 2]) | @as(i64, data[p + 3]) << 8
+            if (len != (~nlen & 0xFFFF) or p + 4 + len > @len(data)) {
+                return error.BadData
+            }
+            if (max >= 0 and @len(out) - start + len > max) {
+                return error.TooBig
+            }
+            a.append_str(&out, data[p + 4..p + 4 + len])
+            br.pos = p + 4 + len
+        } else if (kind == 1) {
+            fixed(&lit, &dist)
+            try codes(a, &out, data, &br, lit, dist, start, max)
+        } else if (kind == 2) {
+            try dynamic(data, &br, &lit, &dist)
+            try codes(a, &out, data, &br, lit, dist, start, max)
+        } else {
+            return error.BadData
+        }
+    }
+    // Whole bytes still in buf were not used; the last byte's spare bits
+    // were.
+    return br.pos - br.n / 8
+}
+
+// ---------------------------------------------------------------------
+// Deflating
+
+// Bits waiting to be written, low bit first.
+const BitOut = struct {
+    buf: u64
+    n: i64
+}
+
+// Writes the low k bits of v.
+fn put(a: Allocator, inout out: Buf(u8), inout w: BitOut, v: i64, k: i64) void {
+    w.buf = w.buf | @as(u64, v) << w.n
+    w.n = w.n + k
+    while (w.n >= 8) {
+        a.push(&out, @as(u8, w.buf & 0xFF))
+        w.buf = w.buf >> 8
+        w.n = w.n - 8
+    }
+}
+
+// Pads to the next byte with zero bits.
+fn flush(a: Allocator, inout out: Buf(u8), inout w: BitOut) void {
+    if (w.n > 0) {
+        const pad = 8 - w.n
+        put(a, &out, &w, 0, pad)
+    }
+}
+
+// Sets lens to the lengths of a Huffman code for these frequencies, none
+// longer than limit. Every used symbol gets a code, and there are always
+// at least two, so the code is complete.
+fn huffman(freq: []i64, inout lens: []i64, limit: i64) void {
+    const n = @len(freq)
+    var i = 0
+    while (i < n) {
+        lens[i] = 0
+        i = i + 1
+    }
+    // The used symbols by frequency, then by symbol, by insertion sort:
+    // there are at most 286.
+    var leaves: [288]i64 = @splat(0)
+    var count = 0
+    i = 0
+    while (i < n) {
+        if (freq[i] > 0) {
+            var j = count
+            while (j > 0 and freq[leaves[j - 1]] > freq[i]) {
+                leaves[j] = leaves[j - 1]
+                j = j - 1
+            }
+            leaves[j] = i
+            count = count + 1
+        }
+        i = i + 1
+    }
+    if (count < 2) {
+        // One code of length 1 would be incomplete: give symbols 0 and 1
+        // (or the one used and another) a bit each.
+        lens[0] = 1
+        lens[1] = 1
+        if (count == 1 and leaves[0] > 1) {
+            lens[leaves[0]] = 1
+            lens[1] = 0
+        }
+        return
+    }
+    // The tree, by two queues: leaves in order of weight, and inner nodes,
+    // which are made in order of weight too. weight[count + k] and
+    // parent[...] are inner node k's.
+    var weight: [576]i64 = @splat(0)
+    var parent: [576]i64 = @splat(0)
+    i = 0
+    while (i < count) {
+        weight[i] = freq[leaves[i]]
+        i = i + 1
+    }
+    var nl = 0
+    var ni = count
+    var made = count
+    while (made < count * 2 - 1) {
+        var pair = 0
+        var w = 0
+        while (pair < 2) {
+            var pick = 0
+            if (nl < count and (ni >= made or weight[nl] <= weight[ni])) {
+                pick = nl
+                nl = nl + 1
+            } else {
+                pick = ni
+                ni = ni + 1
+            }
+            parent[pick] = made
+            w = w + weight[pick]
+            pair = pair + 1
+        }
+        weight[made] = w
+        made = made + 1
+    }
+    // Depths, from the root down: weight is reused for them.
+    const root = count * 2 - 2
+    weight[root] = 0
+    i = root - 1
+    while (i >= 0) {
+        weight[i] = weight[parent[i]] + 1
+        i = i - 1
+    }
+    var bl: [64]i64 = @splat(0)
+    i = 0
+    while (i < count) {
+        var d = weight[i]
+        if (d > limit) {
+            d = limit
+        }
+        bl[d] = bl[d] + 1
+        i = i + 1
+    }
+    // Too long codes were cut to limit, which oversubscribes the code:
+    // lengthen shorter ones until the Kraft sum is 1 again (as miniz does).
+    var total = 0
+    i = 1
+    while (i <= limit) {
+        total = total + (bl[i] << (limit - i))
+        i = i + 1
+    }
+    while (total > 1 << limit) {
+        bl[limit] = bl[limit] - 1
+        var j = limit - 1
+        while (j > 0) {
+            if (bl[j] > 0) {
+                bl[j] = bl[j] - 1
+                bl[j + 1] = bl[j + 1] + 2
+                break
+            }
+            j = j - 1
+        }
+        total = total - 1
+    }
+    // The longest codes to the rarest symbols.
+    var len = limit
+    i = 0
+    while (len > 0) {
+        var k = bl[len]
+        while (k > 0) {
+            lens[leaves[i]] = len
+            i = i + 1
+            k = k - 1
+        }
+        len = len - 1
+    }
+}
+
+// The canonical codes for these lengths, bit-reversed for writing.
+fn canonical(lens: []i64, inout codes_out: []i64) void {
+    var bl: [16]i64 = @splat(0)
+    for (lens) |l| {
+        bl[l] = bl[l] + 1
+    }
+    bl[0] = 0
+    var next: [16]i64 = @splat(0)
+    var code = 0
+    var len = 1
+    while (len <= 15) {
+        code = (code + bl[len - 1]) << 1
+        next[len] = code
+        len = len + 1
+    }
+    for (lens) |l, sym| {
+        if (l != 0) {
+            codes_out[sym] = reverse(next[l], l)
+            next[l] = next[l] + 1
+        } else {
+            codes_out[sym] = 0
+        }
+    }
+}
+
+fn top_bit(x: i64) i64 {
+    var h = 0
+    while ((x >> (h + 1)) != 0) {
+        h = h + 1
+    }
+    return h
+}
+
+// The symbol (257 to 285) for a match length of 3 to 258.
+fn length_symbol(len: i64) i64 {
+    if (len == 258) {
+        return 285
+    }
+    const l = len - 3
+    if (l < 8) {
+        return 257 + l
+    }
+    const e = top_bit(l) - 2
+    return 257 + 4 * (e + 1) + (l >> e) - 4
+}
+
+// The symbol (0 to 29) for a distance of 1 to 32768.
+fn dist_symbol(dist: i64) i64 {
+    const d = dist - 1
+    if (d < 4) {
+        return d
+    }
+    const h = top_bit(d)
+    return 2 * h + ((d >> (h - 1)) & 1)
+}
+
+// A token is a literal byte (below 256) or a match, len << 16 | dist.
+const MAX_TOKENS = 16384
+
+// Writes the symbols of tokens, then the end of the block, in the given
+// codes.
+fn write_tokens(a: Allocator, inout out: Buf(u8), inout w: BitOut, tokens: Buf(i64), llen: []i64, lcode: []i64, dlen: []i64, dcode: []i64) void {
+    for (tokens) |t| {
+        if (t < 256) {
+            put(a, &out, &w, lcode[t], llen[t])
+        } else {
+            const len = t >> 16
+            const dist = t & 0xFFFF
+            const ls = length_symbol(len)
+            put(a, &out, &w, lcode[ls], llen[ls])
+            const le = length_extra(ls - 257)
+            if (le > 0) {
+                put(a, &out, &w, len - length_base(ls - 257), le)
+            }
+            const ds = dist_symbol(dist)
+            put(a, &out, &w, dcode[ds], dlen[ds])
+            const de = dist_extra(ds)
+            if (de > 0) {
+                put(a, &out, &w, dist - dist_base(ds), de)
+            }
+        }
+    }
+    put(a, &out, &w, lcode[256], llen[256])
+}
+
+// Stored blocks for raw, 65535 bytes at most each.
+fn write_stored(a: Allocator, inout out: Buf(u8), inout w: BitOut, raw: []u8, final: bool) void {
+    var p = 0
+    while (true) {
+        var len = @len(raw) - p
+        if (len > 65535) {
+            len = 65535
+        }
+        const last = final and p + len == @len(raw)
+        put(a, &out, &w, if (last) 1 else 0, 1)
+        put(a, &out, &w, 0, 2)
+        flush(a, &out, &w)
+        a.push(&out, @as(u8, len & 0xFF))
+        a.push(&out, @as(u8, len >> 8))
+        a.push(&out, @as(u8, ~len & 0xFF))
+        a.push(&out, @as(u8, (~len >> 8) & 0xFF))
+        a.append_str(&out, raw[p..p + len])
+        p = p + len
+        if (p >= @len(raw)) {
+            return
+        }
+    }
+}
+
+// One block (or several stored ones) for tokens, which encode raw: as
+// stored, fixed or dynamic Huffman blocks, whichever is smallest.
+fn write_block(a: Allocator, inout out: Buf(u8), inout w: BitOut, tokens: Buf(i64), raw: []u8, final: bool) void {
+    var lf: [286]i64 = @splat(0)
+    var df: [30]i64 = @splat(0)
+    var extra = 0
+    for (tokens) |t| {
+        if (t < 256) {
+            lf[t] = lf[t] + 1
+        } else {
+            const ls = length_symbol(t >> 16)
+            const ds = dist_symbol(t & 0xFFFF)
+            lf[ls] = lf[ls] + 1
+            df[ds] = df[ds] + 1
+            extra = extra + length_extra(ls - 257) + dist_extra(ds)
+        }
+    }
+    lf[256] = 1
+    var llen: [286]i64 = @splat(0)
+    var dlen: [30]i64 = @splat(0)
+    huffman(lf[0..], &llen[0..], 15)
+    huffman(df[0..], &dlen[0..], 15)
+    var nlit = 286
+    while (nlit > 257 and llen[nlit - 1] == 0) {
+        nlit = nlit - 1
+    }
+    var ndist = 30
+    while (ndist > 1 and dlen[ndist - 1] == 0) {
+        ndist = ndist - 1
+    }
+    // The code lengths, run-length coded: symbol and extra bits in rle.
+    var all: [316]i64 = @splat(0)
+    var i = 0
+    while (i < nlit) {
+        all[i] = llen[i]
+        i = i + 1
+    }
+    i = 0
+    while (i < ndist) {
+        all[nlit + i] = dlen[i]
+        i = i + 1
+    }
+    const total = nlit + ndist
+    var rle: [316]i64 = @splat(0)
+    var rle_extra: [316]i64 = @splat(0)
+    var nrle = 0
+    var cf: [19]i64 = @splat(0)
+    i = 0
+    while (i < total) {
+        const v = all[i]
+        var run = 1
+        while (i + run < total and all[i + run] == v) {
+            run = run + 1
+        }
+        i = i + run
+        if (v == 0) {
+            while (run >= 11) {
+                const r = if (run > 138) 138 else run
+                rle[nrle] = 18
+                rle_extra[nrle] = r - 11
+                nrle = nrle + 1
+                run = run - r
+            }
+            if (run >= 3) {
+                rle[nrle] = 17
+                rle_extra[nrle] = run - 3
+                nrle = nrle + 1
+                run = 0
+            }
+        } else {
+            rle[nrle] = v
+            nrle = nrle + 1
+            run = run - 1
+            while (run >= 3) {
+                const r = if (run > 6) 6 else run
+                rle[nrle] = 16
+                rle_extra[nrle] = r - 3
+                nrle = nrle + 1
+                run = run - r
+            }
+        }
+        while (run > 0) {
+            rle[nrle] = v
+            nrle = nrle + 1
+            run = run - 1
+        }
+    }
+    i = 0
+    while (i < nrle) {
+        cf[rle[i]] = cf[rle[i]] + 1
+        i = i + 1
+    }
+    var clen: [19]i64 = @splat(0)
+    huffman(cf[0..], &clen[0..], 7)
+    const order = [19]i64{ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 }
+    var ncl = 19
+    while (ncl > 4 and clen[order[ncl - 1]] == 0) {
+        ncl = ncl - 1
+    }
+    // Sizes in bits, past the 3-bit block header.
+    var dyn = 14 + ncl * 3 + extra
+    var fix = extra
+    i = 0
+    while (i < 19) {
+        dyn = dyn + cf[i] * clen[i]
+        i = i + 1
+    }
+    dyn = dyn + cf[16] * 2 + cf[17] * 3 + cf[18] * 7
+    var flens: [286]i64 = @splat(8)
+    i = 144
+    while (i < 256) {
+        flens[i] = 9
+        i = i + 1
+    }
+    while (i < 280) {
+        flens[i] = 7
+        i = i + 1
+    }
+    i = 0
+    while (i < 286) {
+        dyn = dyn + lf[i] * llen[i]
+        fix = fix + lf[i] * flens[i]
+        i = i + 1
+    }
+    i = 0
+    while (i < 30) {
+        dyn = dyn + df[i] * dlen[i]
+        fix = fix + df[i] * 5
+        i = i + 1
+    }
+    // A stored block pads to a byte and adds 4 bytes of lengths, for each
+    // 65535 bytes.
+    const stored = ((@len(raw) + 65534) / 65535) * 40 + 8 + @len(raw) * 8
+    if (stored <= dyn and stored <= fix) {
+        write_stored(a, &out, &w, raw, final)
+        return
+    }
+    put(a, &out, &w, if (final) 1 else 0, 1)
+    var lcode: [286]i64 = @splat(0)
+    var dcode: [30]i64 = @splat(0)
+    if (fix <= dyn) {
+        put(a, &out, &w, 1, 2)
+        const fdlen: [30]i64 = @splat(5)
+        canonical(flens[0..], &lcode[0..])
+        canonical(fdlen[0..], &dcode[0..])
+        write_tokens(a, &out, &w, tokens, flens[0..], lcode[0..], fdlen[0..], dcode[0..])
+        return
+    }
+    put(a, &out, &w, 2, 2)
+    put(a, &out, &w, nlit - 257, 5)
+    put(a, &out, &w, ndist - 1, 5)
+    put(a, &out, &w, ncl - 4, 4)
+    i = 0
+    while (i < ncl) {
+        put(a, &out, &w, clen[order[i]], 3)
+        i = i + 1
+    }
+    var ccode: [19]i64 = @splat(0)
+    canonical(clen[0..], &ccode[0..])
+    i = 0
+    while (i < nrle) {
+        const s = rle[i]
+        put(a, &out, &w, ccode[s], clen[s])
+        if (s == 16) {
+            put(a, &out, &w, rle_extra[i], 2)
+        } else if (s == 17) {
+            put(a, &out, &w, rle_extra[i], 3)
+        } else if (s == 18) {
+            put(a, &out, &w, rle_extra[i], 7)
+        }
+        i = i + 1
+    }
+    canonical(llen[0..], &lcode[0..])
+    canonical(dlen[0..], &dcode[0..])
+    write_tokens(a, &out, &w, tokens, llen[0..], lcode[0..], dlen[0..], dcode[0..])
+}
+
+const WINDOW = 32768
+const HASH_SIZE = 32768
+
+// Earlier positions of the 3-byte strings in data: head[h] is the last
+// one with hash h, prev[p % WINDOW] the one before p with p's hash; -1 for
+// none.
+const Chains = struct {
+    head: Buf(i64)
+    prev: Buf(i64)
+}
+
+// Records pos (which has 3 bytes from it) and returns the last earlier
+// position with its hash.
+fn insert(inout ch: Chains, data: []u8, pos: i64) i64 {
+    const h = ((@as(i64, data[pos]) << 10) ^ (@as(i64, data[pos + 1]) << 5) ^ @as(i64, data[pos + 2])) & (HASH_SIZE - 1)
+    const old = ch.head[h]
+    ch.prev[pos & (WINDOW - 1)] = old
+    ch.head[h] = pos
+    return old
+}
+
+// The longest match for pos among the chain from cand, if it is longer
+// than best: len << 16 | dist, or 0.
+fn longest(ch: Chains, data: []u8, pos: i64, first: i64, best_in: i64, chain_in: i64, nice: i64) i64 {
+    var max = @len(data) - pos
+    if (max > 258) {
+        max = 258
+    }
+    var best = best_in
+    var found = 0
+    var cand = first
+    var chain = chain_in
+    while (cand >= 0 and pos - cand <= WINDOW and chain > 0 and best < max) {
+        if (data[cand + best] == data[pos + best] and data[cand] == data[pos]) {
+            var l = 1
+            while (l < max and data[cand + l] == data[pos + l]) {
+                l = l + 1
+            }
+            if (l > best) {
+                best = l
+                found = l << 16 | (pos - cand)
+                if (l >= nice) {
+                    break
+                }
+            }
+        }
+        const next = ch.prev[cand & (WINDOW - 1)]
+        // A stale entry, overwritten by a later position: the chain ends.
+        if (next >= cand) {
+            break
+        }
+        cand = next
+        chain = chain - 1
+    }
+    return found
+}
+
+// Ends the current block, if it has as many tokens as a block takes.
+fn maybe_block(a: Allocator, inout out: Buf(u8), inout w: BitOut, inout tokens: Buf(i64), data: []u8, inout block: i64, covered: i64) void {
+    if (@len(tokens) >= MAX_TOKENS) {
+        write_block(a, &out, &w, tokens, data[block..covered], false)
+        a.resize(&tokens, 0, 0)
+        block = covered
+    }
+}
+
+// Appends data as a raw DEFLATE stream at this level, 0 (stored) to 9
+// (smallest).
+fn deflate(a: Allocator, inout out: Buf(u8), data: []u8, level: i64) void {
+    var w = BitOut{ .buf = 0, .n = 0 }
+    if (level <= 0) {
+        write_stored(a, &out, &w, data, true)
+        return
+    }
+    // zlib's settings for each level: a match this long is good enough to
+    // search less for a better one after it, one this long needs no lazy
+    // search at all, one this long ends the search, and how many earlier
+    // positions to try. Levels 1 to 3 take the first match found without
+    // looking one byte on.
+    const goods = [10]i64{ 0, 4, 4, 4, 4, 8, 8, 8, 32, 32 }
+    const lazies = [10]i64{ 0, 0, 0, 0, 4, 16, 16, 32, 128, 258 }
+    const nices = [10]i64{ 0, 8, 16, 32, 16, 32, 128, 128, 258, 258 }
+    const chains = [10]i64{ 0, 4, 8, 32, 16, 32, 128, 256, 1024, 4096 }
+    const lv = if (level > 9) 9 else level
+    const good = goods[lv]
+    const max_lazy = lazies[lv]
+    const nice = nices[lv]
+    const max_chain = chains[lv]
+    var ch = Chains{ .head = a.alloc(HASH_SIZE, @as(i64, -1)), .prev = a.alloc(WINDOW, @as(i64, -1)) }
+    defer a.free(ch)
+    var tokens: Buf(i64) = .empty
+    defer a.free(tokens)
+    const n = @len(data)
+    var block = 0
+    var covered = 0
+    var pos = 0
+    if (max_lazy == 0) {
+        while (pos < n) {
+            var m = 0
+            if (pos + 2 < n) {
+                const cand = insert(&ch, data, pos)
+                m = longest(ch, data, pos, cand, 2, max_chain, nice)
+            }
+            if (m != 0) {
+                const len = m >> 16
+                a.push(&tokens, m)
+                var k = pos + 1
+                while (k < pos + len and k + 2 < n) {
+                    _ = insert(&ch, data, k)
+                    k = k + 1
+                }
+                pos = pos + len
+            } else {
+                a.push(&tokens, @as(i64, data[pos]))
+                pos = pos + 1
+            }
+            covered = pos
+            maybe_block(a, &out, &w, &tokens, data, &block, covered)
+        }
+    } else {
+        // zlib's lazy matching: a match at pos - 1 is taken only if the
+        // one at pos is no longer.
+        var waiting = false
+        var prev = 0
+        while (pos < n) {
+            var m = 0
+            if (pos + 2 < n) {
+                const cand = insert(&ch, data, pos)
+                const prev_len = prev >> 16
+                if (prev_len < max_lazy) {
+                    const chain = if (prev_len >= good) max_chain / 4 else max_chain
+                    m = longest(ch, data, pos, cand, if (prev_len > 2) prev_len else 2, chain, nice)
+                    // A match of 3 so far back costs more than 3 literals.
+                    if (m >> 16 == 3 and (m & 0xFFFF) > 4096) {
+                        m = 0
+                    }
+                }
+            }
+            if (waiting and prev >> 16 >= 3 and m == 0) {
+                const len = prev >> 16
+                a.push(&tokens, prev)
+                var k = pos + 1
+                while (k < pos - 1 + len and k + 2 < n) {
+                    _ = insert(&ch, data, k)
+                    k = k + 1
+                }
+                pos = pos - 1 + len
+                covered = pos
+                waiting = false
+                prev = 0
+            } else if (waiting) {
+                a.push(&tokens, @as(i64, data[pos - 1]))
+                covered = pos
+                prev = m
+                pos = pos + 1
+            } else {
+                waiting = true
+                prev = m
+                pos = pos + 1
+            }
+            maybe_block(a, &out, &w, &tokens, data, &block, covered)
+        }
+        if (waiting) {
+            a.push(&tokens, @as(i64, data[pos - 1]))
+            covered = pos
+        }
+    }
+    write_block(a, &out, &w, tokens, data[block..covered], true)
+    flush(a, &out, &w)
+}
+
+// ---------------------------------------------------------------------
+// zlib and gzip
+
+fn put_le32(a: Allocator, inout out: Buf(u8), v: u32) void {
+    var i = 0
+    while (i < 32) {
+        a.push(&out, @as(u8, (v >> i) & 0xFF))
+        i = i + 8
+    }
+}
+
+fn le32(data: []u8, p: i64) u32 {
+    return @as(u32, data[p]) | @as(u32, data[p + 1]) << 8 | @as(u32, data[p + 2]) << 16 | @as(u32, data[p + 3]) << 24
+}
+
+// Appends data as a zlib stream (RFC 1950).
+fn zlib_compress(a: Allocator, inout out: Buf(u8), data: []u8, level: i64) void {
+    // A 32K window, and the level in two bits; the check bits make the
+    // header a multiple of 31.
+    const hint = if (level <= 1) 0 else if (level < 6) 1 else if (level == 6) 2 else 3
+    const cmf = 0x78
+    const flg = hint << 6
+    a.push(&out, @as(u8, cmf))
+    a.push(&out, @as(u8, flg + 31 - (cmf * 256 + flg) % 31))
+    deflate(a, &out, data, level)
+    const sum = adler32(1, data)
+    a.push(&out, @as(u8, sum >> 24))
+    a.push(&out, @as(u8, (sum >> 16) & 0xFF))
+    a.push(&out, @as(u8, (sum >> 8) & 0xFF))
+    a.push(&out, @as(u8, sum & 0xFF))
+}
+
+// Appends what the zlib stream data holds. Nothing may follow the stream;
+// a preset dictionary is error.BadData.
+fn zlib_decompress(a: Allocator, inout out: Buf(u8), data: []u8, max: i64) !void {
+    if (@len(data) < 6) {
+        return error.BadData
+    }
+    const cmf = @as(i64, data[0])
+    const flg = @as(i64, data[1])
+    if (cmf & 0x0F != 8 or cmf >> 4 > 7 or (cmf * 256 + flg) % 31 != 0 or flg & 0x20 != 0) {
+        return error.BadData
+    }
+    const start = @len(out)
+    errdefer a.resize(&out, start, 0)
+    const used = try inflate(a, &out, data[2..], max)
+    const p = 2 + used
+    if (p + 4 != @len(data)) {
+        return error.BadData
+    }
+    const want = @as(u32, data[p]) << 24 | @as(u32, data[p + 1]) << 16 | @as(u32, data[p + 2]) << 8 | @as(u32, data[p + 3])
+    if (adler32(1, out[start..]) != want) {
+        return error.BadChecksum
+    }
+}
+
+// Appends data as a gzip file (RFC 1952) with no name and no time.
+fn gzip_compress(a: Allocator, inout out: Buf(u8), data: []u8, level: i64) void {
+    a.append_str(&out, "\x1f\x8b\x08\x00\x00\x00\x00\x00")
+    a.push(&out, if (level >= 9) 2 else if (level == 1) 4 else 0)
+    // The operating system: unknown, as Go writes it.
+    a.push(&out, 255)
+    deflate(a, &out, data, level)
+    put_le32(a, &out, crc32(0, data))
+    put_le32(a, &out, @as(u32, @len(data) & 0xFFFF_FFFF))
+}
+
+// Appends what the gzip file data holds; a file of several members (as
+// `cat a.gz b.gz` makes) gives them one after another, as gunzip does.
+// max limits the whole output.
+fn gzip_decompress(a: Allocator, inout out: Buf(u8), data: []u8, max: i64) !void {
+    const start = @len(out)
+    errdefer a.resize(&out, start, 0)
+    var p = 0
+    while (true) {
+        if (p + 18 > @len(data) or data[p] != 0x1f or data[p + 1] != 0x8b or data[p + 2] != 8) {
+            return error.BadData
+        }
+        const flags = @as(i64, data[p + 3])
+        if (flags & 0xE0 != 0) {
+            return error.BadData
+        }
+        var q = p + 10
+        if (flags & 4 != 0) {
+            // FEXTRA: a length, then that many bytes.
+            if (q + 2 > @len(data)) {
+                return error.BadData
+            }
+            q = q + 2 + (@as(i64, data[q]) | @as(i64, data[q + 1]) << 8)
+        }
+        // FNAME and FCOMMENT: zero-terminated.
+        var z = 8
+        while (z <= 16) {
+            if (flags & z != 0) {
+                while (q < @len(data) and data[q] != 0) {
+                    q = q + 1
+                }
+                q = q + 1
+            }
+            z = z * 2
+        }
+        if (flags & 2 != 0) {
+            // FHCRC: the low 16 bits of the header's CRC-32.
+            if (q + 2 > @len(data)) {
+                return error.BadData
+            }
+            const hcrc = @as(u32, data[q]) | @as(u32, data[q + 1]) << 8
+            if (crc32(0, data[p..q]) & 0xFFFF != hcrc) {
+                return error.BadChecksum
+            }
+            q = q + 2
+        }
+        if (q > @len(data)) {
+            return error.BadData
+        }
+        const from = @len(out)
+        const left = if (max < 0) max else max - (from - start)
+        const used = try inflate(a, &out, data[q..], left)
+        p = q + used
+        if (p + 8 > @len(data)) {
+            return error.BadData
+        }
+        if (crc32(0, out[from..]) != le32(data, p) or @as(u32, (@len(out) - from) & 0xFFFF_FFFF) != le32(data, p + 4)) {
+            return error.BadChecksum
+        }
+        p = p + 8
+        if (p == @len(data)) {
+            return
+        }
+    }
+}

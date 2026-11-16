@@ -336,7 +336,21 @@ v3 (memory without GC, and what realistic programs needed):
   system's TZif files, `local(fs, args, a)` follows `TZ` and
   `/etc/localtime`, `posix_zone` takes a POSIX TZ rule, `fixed` a fixed
   offset; Windows has no zone files, so there `load` knows only UTC and
-  `local` is UTC unless `TZ` holds a POSIX rule
+  `local` is UTC unless `TZ` holds a POSIX rule.
+  `std/flate` is DEFLATE in Egg, at zlib's levels 0 to 9 (lazy matching,
+  and each block stored, fixed or dynamic Huffman, whichever is smaller),
+  raw (`deflate`, `inflate`) or wrapped (`gzip_compress` and
+  `gzip_decompress`, which takes files of several members;
+  `zlib_compress`, `zlib_decompress`), with `crc32` and `adler32`; a
+  decompressor stops with `error.TooBig` past the `max` bytes it is given.
+  `std/zip` reads and writes zip archives in memory: `zip.open(a, data)`
+  lists the entries (`ar.name(i)`, `ar.find(name)`, `ar.entries[i].size`,
+  `.mtime`, `.mode`) and `ar.read(a, &out, data, i)` appends one's
+  contents to `out`, checking its CRC; `zip.builder()` adds files (`b.add(a, name, data,
+  level)`, stored when deflating would not help) and directories, and
+  `b.finish(a)` gives the archive; `zip.safe_name` refuses names that
+  would leave the directory they are extracted to. Stored and deflated
+  entries only, without ZIP64 or encryption
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or
