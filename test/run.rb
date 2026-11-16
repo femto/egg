@@ -230,6 +230,12 @@ def lsp_path(uri)
   Egg::LSP::Server.new(StringIO.new, StringIO.new).send(:path_of, uri).to_s
 end
 
+# The URI the language server gives the file at path.
+def lsp_uri(path)
+  require_relative "../lib/egg/lsp"
+  Egg::LSP::Server.new(StringIO.new, StringIO.new).send(:uri_of, path)
+end
+
 # The language server gives a file in a clutch package that package's
 # packages, from clutch flags (with --test under test/).
 def check_lsp_packages(dir)
@@ -1445,7 +1451,7 @@ end
 def check_lsp_cross_file
   main = File.join(ROOT, "examples", "modules.egg")
   lines = File.readlines(main)
-  doc = { "uri" => "file://#{main}" }
+  doc = { "uri" => lsp_uri(main) }
   # The nth word on a 1-based line of modules.egg, as an LSP position.
   at = lambda do |line, word, nth = 1|
     col = -1
@@ -1457,7 +1463,7 @@ def check_lsp_cross_file
     [30, "perimeter"], [31, "area"], [32, "Box", 2], [36, "Kind"], [38, "area"]
   ]
   std_src = "uses io\n\nconst text = @import(\"std/text\")\nconst N = 3\n\nfn main(io: Io) void {\n    io.print(text.find(\"abcd\", \"d\") orelse N)\n}\n"
-  std_doc = { "uri" => "file://#{File.join(ROOT, 'examples', 'lsp_std.egg')}" }
+  std_doc = { "uri" => lsp_uri(File.join(ROOT, "examples", "lsp_std.egg")) }
   std_at = ->(line, ch) { { "textDocument" => std_doc, "position" => { "line" => line, "character" => ch } } }
   req = [
     { "id" => 1, "method" => "initialize", "params" => {} },
