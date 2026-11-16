@@ -1039,8 +1039,9 @@ module Egg
         }
       C
       # kind is FileKind's index: file, dir, other. The size of a file only.
+      # modified: the last write, in nanoseconds since 1970 as the clock's.
       "egg_fs_stat" => <<~C,
-        static int egg_fs_stat(egg_str path, int32_t *kind, int64_t *size) {
+        static int egg_fs_stat(egg_str path, int32_t *kind, int64_t *size, int64_t *modified) {
             char *p = egg_fs_path(path);
             if (p == NULL) return 4;
             int r = 0;
@@ -1056,6 +1057,7 @@ module Egg
                 DWORD t = GetFileType(h);
                 *kind = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : t == FILE_TYPE_DISK ? 0 : 2;
                 *size = *kind == 0 ? (int64_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow) : 0;
+                *modified = ((int64_t)(((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime) - INT64_C(116444736000000000)) * 100;
             }
             if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
             free(w);
@@ -1066,6 +1068,11 @@ module Egg
             } else {
                 *kind = S_ISREG(st.st_mode) ? 0 : S_ISDIR(st.st_mode) ? 1 : 2;
                 *size = *kind == 0 ? (int64_t)st.st_size : 0;
+        #ifdef __APPLE__
+                *modified = (int64_t)st.st_mtimespec.tv_sec * 1000000000 + st.st_mtimespec.tv_nsec;
+        #else
+                *modified = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+        #endif
             }
         #endif
             free(p);
@@ -4913,7 +4920,7 @@ module Egg
                       when "Fs.remove_file", "Fs.remove_dir" then "#{helper('egg_fs_remove')}(#{path}, #{m == 'Fs.remove_dir' ? 1 : 0})"
                       when "Fs.make_dir" then "#{helper('egg_fs_mkdir')}(#{path})"
                       when "Fs.rename" then "#{helper('egg_fs_rename')}(#{path}, #{coerce(codes[1], args[1].ty, 'str')})"
-                      when "Fs.stat" then "#{helper('egg_fs_stat')}(#{path}, &R.value.f_kind, &R.value.f_size)"
+                      when "Fs.stat" then "#{helper('egg_fs_stat')}(#{path}, &R.value.f_kind, &R.value.f_size, &R.value.f_modified)"
                       else "#{helper('egg_dir')}_open(#{path}, &R.value.d)"
                       end
                r = tmp

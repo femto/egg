@@ -956,7 +956,7 @@ module Egg
     def fs_value_type(name)
       unless @types.key?("Stat")
         register("FileKind", :enum, nil, nil).members = %w[file dir other]
-        register("Stat", :struct, nil, nil).fields = [%w[kind FileKind], %w[size i64]]
+        register("Stat", :struct, nil, nil).fields = [%w[kind FileKind], %w[size i64], %w[modified i64]]
       end
       name
     end
