@@ -35,14 +35,17 @@ const DateTime = struct {
     second: i64
     nano: i64
 
+    // The weekday and the day of the year are those of the date the fields
+    // carry over to, as unix() does: 2025-13-01 is a Thursday, day 1.
     fn weekday(self: DateTime) Weekday {
         const days = [7]Weekday{ .sunday, .monday, .tuesday, .wednesday, .thursday, .friday, .saturday }
-        return days[weekday_index(epoch_days(self.year, self.month, self.day))]
+        return days[weekday_index(floor_div(self.unix(), 86400))]
     }
 
     // 1 for January 1st, up to 366.
     fn yearday(self: DateTime) i64 {
-        return epoch_days(self.year, self.month, self.day) - epoch_days(self.year, 1, 1) + 1
+        const days = floor_div(self.unix(), 86400)
+        return days - epoch_days(civil(days).year, 1, 1) + 1
     }
 
     // Whether every field is in its range, the day in its month.
@@ -57,8 +60,14 @@ const DateTime = struct {
         return epoch_days(self.year, self.month, self.day) * 86400 + self.hour * 3600 + self.minute * 60 + self.second + floor_div(self.nano, SECOND)
     }
 
-    // The instant, in nanoseconds; null outside what an i64 holds.
+    // The instant, in nanoseconds; null outside what an i64 holds, and for
+    // fields so far out of range (a year past a billion, a day past 10^12)
+    // that adding them up could overflow.
     fn unix_ns(self: DateTime) ?i64 {
+        const big = 1000000000000
+        if (!within(self.year, 1000000000) or !within(self.month, 1000000000) or !within(self.day, big) or !within(self.hour, big) or !within(self.minute, big) or !within(self.second, big)) {
+            return null
+        }
         return from_parts(self.unix(), floor_mod(self.nano, SECOND))
     }
 }
@@ -72,6 +81,10 @@ fn floor_div(a: i64, b: i64) i64 {
 fn floor_mod(a: i64, b: i64) i64 {
     const r = a % b
     return if (r != 0 and (r < 0) != (b < 0)) r + b else r
+}
+
+fn within(x: i64, bound: i64) bool {
+    return x >= 0 - bound and x <= bound
 }
 
 fn is_leap(year: i64) bool {
@@ -124,7 +137,15 @@ fn utc(ns: i64) DateTime {
 fn utc_s(secs: i64) DateTime {
     const days = floor_div(secs, 86400)
     const rest = secs - days * 86400
-    // Hinnant's civil_from_days.
+    var t = civil(days)
+    t.hour = rest / 3600
+    t.minute = rest / 60 % 60
+    t.second = rest % 60
+    return t
+}
+
+// The date days after 1970-01-01, at midnight (Hinnant's civil_from_days).
+fn civil(days: i64) DateTime {
     const z = days + 719468
     const era = floor_div(z, 146097)
     const doe = z - era * 146097
@@ -133,7 +154,7 @@ fn utc_s(secs: i64) DateTime {
     const mp = (5 * doy + 2) / 153
     const m = if (mp < 10) mp + 3 else mp - 9
     const y = yoe + era * 400 + (if (m <= 2) 1 else 0)
-    return DateTime{ .year = y, .month = m, .day = doy - (153 * mp + 2) / 5 + 1, .hour = rest / 3600, .minute = rest / 60 % 60, .second = rest % 60, .nano = 0 }
+    return DateTime{ .year = y, .month = m, .day = doy - (153 * mp + 2) / 5 + 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }
 }
 
 // secs * SECOND + nano, nano in 0 to 999999999, or null if an i64 cannot

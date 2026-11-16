@@ -14,6 +14,10 @@
 // expect: 1794821405250000000
 // expect: none
 // expect: false
+// expect: thursday 1 sunday 365 monday 1
+// expect: none
+// expect: none
+// expect: 9223372036854775807
 // expect: true
 // expect: 1970-01-01T00:00:00Z
 // expect: 2026-11-16T09:30:05.25Z
@@ -100,6 +104,16 @@ fn main(io: Io, a: Allocator) void {
     show(io, t.unix_ns())
     show(io, time.DateTime{ .year = 2262, .month = 4, .day = 12, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.unix_ns())
     io.print(time.DateTime{ .year = 2023, .month = 2, .day = 29, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.valid())
+    // Carried over: 2025-13-01 is 2026-01-01, 2024-01-00 is 2023-12-31,
+    // and hour 24 of 2023-12-31 is 2024-01-01.
+    const c1 = time.DateTime{ .year = 2025, .month = 13, .day = 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }
+    const c2 = time.DateTime{ .year = 2024, .month = 1, .day = 0, .hour = 0, .minute = 0, .second = 0, .nano = 0 }
+    const c3 = time.DateTime{ .year = 2023, .month = 12, .day = 31, .hour = 24, .minute = 0, .second = 0, .nano = 0 }
+    io.print(c1.weekday(), " ", c1.yearday(), " ", c2.weekday(), " ", c2.yearday(), " ", c3.weekday(), " ", c3.yearday())
+    // Too far out to add up: null, not an overflow.
+    show(io, time.DateTime{ .year = 9223372036854775807, .month = 1, .day = 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.unix_ns())
+    show(io, time.DateTime{ .year = 2000, .month = 1, .day = -9223372036854775807 - 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.unix_ns())
+    show(io, time.DateTime{ .year = 1970, .month = 1, .day = 1, .hour = 0, .minute = 0, .second = 0, .nano = 9223372036854775807 }.unix_ns())
     // Every day from 1900 to 2100 goes there and back.
     var ok = true
     var d = time.epoch_days(1900, 1, 1)
