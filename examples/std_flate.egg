@@ -11,6 +11,7 @@
 // expect: abc
 // expect: raw deflate, raw deflate | TAIL
 // expect: 8 onetwo
+// expect: hi
 // expect: TooBig before
 // expect: TooBig before
 // expect: BadData before
@@ -31,6 +32,9 @@ const ZLIB_FIXED = "eNpLTU9XSKUiBgA5QBp9"
 const ZLIB_STORED = "eAEBAwD8/2FiYwJNASc="
 // A raw stream for "raw deflate, raw deflate", then "TAIL".
 const RAW_TAIL = "K0osV0hJTctJLEnVUShCcABUQUlM"
+// A dynamic block (made by hand, checked with zlib) for "hi" whose one
+// distance code length is 0: a block with no distances at all.
+const NO_DIST = "BcABCQAAAICgu/X/gDQ="
 // Two gzip members, "one\n" and "two\n", one after the other.
 const GZ_TWO = "H4sIAAAAAAACE8vPS+UCAJ+oF/gEAAAAH4sIAAAAAAACEyspz+cCAHQIF5YEAAAA"
 
@@ -142,6 +146,12 @@ fn main(io: Io, a: Allocator) !void {
     defer a.free(both)
     try flate.gzip_decompress(a, &both, two, flate.NO_LIMIT)
     io.print(@len(both), " ", both[0..3], both[4..7])
+    const nodist = b64(a, NO_DIST)
+    defer a.free(nodist)
+    var hi: Buf(u8) = .empty
+    defer a.free(hi)
+    _ = try flate.inflate(a, &hi, nodist, flate.NO_LIMIT)
+    io.print(hi)
 
     // Errors leave out as it was.
     var kept = a.concat("before", "")

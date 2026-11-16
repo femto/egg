@@ -13,6 +13,7 @@
 // expect: dir/ 0 0 0 16877 true []
 // expect: dir/café.sh 0 0 0 33261 false []
 // expect: 1700000000 2048 0
+// expect: 0 2048
 // expect: 46 plain text
 // expect: [a/b.txt] true
 // expect: [dir/] true
@@ -24,8 +25,13 @@
 // expect: [./a] false
 // expect: [] false
 // expect: [a\b] false
+// expect: [.. /x] false
+// expect: [a./b] false
+// expect: [a /b] false
+// expect: [a/b.] false
 // expect: BadData kept
 // expect: BadChecksum kept
+// expect: BadZip kept
 // expect: BadZip
 uses alloc, io
 
@@ -36,6 +42,10 @@ const codec = @import("std/codec")
 // `zip -X -z -r t.zip hello.txt docs run.sh`, comment "test archive":
 // hello.txt and run.sh (mode 755) stored, docs/fox.txt deflated.
 const INFO_ZIP = "UEsDBAoAAAAAAIMYIlgbOHLLCwAAAAsAAAAJAAAAaGVsbG8udHh0aGVsbG8sIHppcApQSwMECgAAAAAAgxgiWAAAAAAAAAAAAAAAAAUAAABkb2NzL1BLAwQUAAAACACDGCJY2ReR4z8AAAAJBwAADAAAAGRvY3MvZm94LnR4dCvJSFUoLM1MzlZIKsovz1NIy69QyCrNLShWyC9LLVIoAUrnJFZVKqTkp+uBeaOKRxWPKh5VPKp4VPEwUswFAFBLAwQKAAAAAACDGCJYLzra6RIAAAASAAAABgAAAHJ1bi5zaCMhL2Jpbi9zaAplY2hvIGhpClBLAQIeAwoAAAAAAIMYIlgbOHLLCwAAAAsAAAAJAAAAAAAAAAEAAACkgQAAAABoZWxsby50eHRQSwECHgMKAAAAAACDGCJYAAAAAAAAAAAAAAAABQAAAAAAAAAAABAA7UEyAAAAZG9jcy9QSwECHgMUAAAACACDGCJY2ReR4z8AAAAJBwAADAAAAAAAAAABAAAApIFVAAAAZG9jcy9mb3gudHh0UEsBAh4DCgAAAAAAgxgiWC862ukSAAAAEgAAAAYAAAAAAAAAAQAAAO2BvgAAAHJ1bi5zaFBLBQYAAAAABAAEANgAAAD0AAAADAB0ZXN0IGFyY2hpdmU="
+
+// One deflated entry, x.txt, whose data has "JUNK" after the stream, inside
+// the size the archive gives it.
+const JUNK = "UEsDBBQAAAAIAAAAIQA7fIrfDwAAABIAAAAFAAAAeC50eHTLSM3JyVfIQJBcAEpVTktQSwECHgMUAAAACAAAACEAO3yK3w8AAAASAAAABQAAAAAAAAAAAAAApIEAAAAAeC50eHRQSwUGAAAAAAEAAQAzAAAAMgAAAAAA"
 
 // Every entry: name, method, size, packed size, mode, and the start of
 // its contents.
@@ -80,6 +90,14 @@ fn build(io: Io, a: Allocator) !Buf(u8) {
     return b.finish(a)
 }
 
+fn latin_archive(a: Allocator) !Buf(u8) {
+    var b = zip.builder()
+    errdefer a.free(b)
+    try b.add(a, "caf\xe9", "", 0)
+    try b.add(a, "caf\xc3\xa9", "", 0)
+    return b.finish(a)
+}
+
 fn main(io: Io, a: Allocator) !void {
     var data: Buf(u8) = .empty
     defer a.free(data)
@@ -98,6 +116,13 @@ fn main(io: Io, a: Allocator) !void {
     try list(io, a, back, made)
     io.print(back.entries[0].mtime, " ", back.entries[4].flags, " ", @len(back.comment))
 
+    // A name that is not UTF-8 is not marked as UTF-8.
+    const latin = try latin_archive(a)
+    defer a.free(latin)
+    const lat = try zip.open(a, latin)
+    defer a.free(lat)
+    io.print(lat.entries[0].flags, " ", lat.entries[1].flags)
+
     // Bytes before the archive, as a self-extracting one has.
     const prefixed = a.concat("#!/bin/sh\nexit 0\n", made)
     defer a.free(prefixed)
@@ -108,7 +133,7 @@ fn main(io: Io, a: Allocator) !void {
     try pre.read(a, &body, prefixed, 0)
     io.print(@len(body), " ", body[0..10])
 
-    const names = [_]str{ "a/b.txt", "dir/", "../x", "a/../../x", "/etc/passwd", "C:\\x", "a//b", "./a", "", "a\\b" }
+    const names = [_]str{ "a/b.txt", "dir/", "../x", "a/../../x", "/etc/passwd", "C:\\x", "a//b", "./a", "", "a\\b", ".. /x", "a./b", "a /b", "a/b." }
     for (names) |n| {
         io.print("[", n, "] ", zip.safe_name(n))
     }
@@ -126,6 +151,12 @@ fn main(io: Io, a: Allocator) !void {
     const crc = try zip.open(a, bad)
     defer a.free(crc)
     crc.read(a, &out, bad, 0) catch |err| io.print(@errorName(err), " ", out)
+    var junk: Buf(u8) = .empty
+    defer a.free(junk)
+    _ = codec.base64_decode(a, &junk, JUNK)
+    const j = try zip.open(a, junk)
+    defer a.free(j)
+    j.read(a, &out, junk, 0) catch |err| io.print(@errorName(err), " ", out)
     const cut = zip.open(a, data[0..@len(data) - 30]) catch |err| {
         io.print(@errorName(err))
         return

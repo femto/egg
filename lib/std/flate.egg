@@ -145,8 +145,10 @@ fn reverse(code: i64, len: i64) i64 {
 }
 
 // Makes h the code with these lengths (0 for an unused symbol); false if
-// they do not make a complete code. A single code of length 1 is allowed
-// incomplete, as zlib allows it, for a stream with one distance.
+// they do not make a complete code. As zlib allows, a single code of
+// length 1 may be incomplete (a stream with one distance), and a code may
+// be empty (a dynamic block with no distances at all); decoding a symbol
+// that has no code is then error.BadData.
 fn build(inout h: Huff, lens: []i64) bool {
     h.count = @splat(0)
     h.fast = @splat(0)
@@ -165,7 +167,7 @@ fn build(inout h: Huff, lens: []i64) bool {
         used = used + h.count[len]
         len = len + 1
     }
-    if (left > 0 and !(used == 1 and h.count[1] == 1)) {
+    if (left > 0 and used != 0 and !(used == 1 and h.count[1] == 1)) {
         return false
     }
     var offs: [16]i64 = @splat(0)

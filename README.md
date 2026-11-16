@@ -345,8 +345,8 @@ v3 (memory without GC, and what realistic programs needed):
   decompressor stops with `error.TooBig` past the `max` bytes it is given.
   `std/zip` reads and writes zip archives in memory: `zip.open(a, data)`
   lists the entries (`ar.name(i)`, `ar.find(name)`, `ar.entries[i].size`,
-  `.mtime`, `.mode`) and `ar.read(a, &out, data, i)` takes one out,
-  checking its CRC; `zip.builder()` adds files (`b.add(a, name, data,
+  `.mtime`, `.mode`) and `ar.read(a, &out, data, i)` appends one's
+  contents to `out`, checking its CRC; `zip.builder()` adds files (`b.add(a, name, data,
   level)`, stored when deflating would not help) and directories, and
   `b.finish(a)` gives the archive; `zip.safe_name` refuses names that
   would leave the directory they are extracted to. Stored and deflated
