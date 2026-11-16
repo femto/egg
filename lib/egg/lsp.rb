@@ -2,7 +2,9 @@
 #
 # Supports go to definition, hover, document symbols (outline) and live
 # diagnostics. Everything comes from the real lexer, parser and checker,
-# so the editor sees exactly what the compiler sees.
+# so the editor sees exactly what the compiler sees. Definition and hover
+# reach into imported files, std and packages: `json.parse` opens the
+# package's source at parse.
 #
 # A file in a clutch package (a clutch.toml in its directory or above) is
 # checked with the packages clutch gives the compiler: `clutch flags`, or
@@ -21,11 +23,16 @@ require "uri"
 
 module Egg
   module LSP
-    # A declared name. kind: :fn, :method, :struct, :enum, :union, :param
-    # or :local.
-    Decl = Struct.new(:kind, :name, :line, :col, :detail, :end_line, :end_col)
-    # A use (or the declaration itself) of a name at line:col.
+    # A declared name. kind: :fn, :method, :struct, :enum, :union, :alias,
+    # :const, :param, :local or :module (an import: the top of its file).
+    # path: the file it is in, nil for the open one.
+    Decl = Struct.new(:kind, :name, :line, :col, :detail, :end_line, :end_col, :path)
+    # A use (or the declaration itself) of a name at line:col. decl is a
+    # Decl, or a Remote for a name in another file.
     Ref = Struct.new(:line, :col, :length, :decl)
+    # The top-level name (or Type.method) key of the module with prefix
+    # prefix, whose file is path: looked up when asked for, by reading it.
+    Remote = Struct.new(:path, :prefix, :key)
 
     # Everything the server knows about one version of one file.
     # Lines and columns are 1-based, as in the compiler.
@@ -40,10 +47,15 @@ module Egg
         @funcs = []
         @tokens = nil
         @caps = nil
+        @modules = {}  # prefix -> ModuleInfo, once the imports load
+        @aliases = {}  # import name -> prefix
+        @remote = {}   # path -> the top-level declarations of that file
         @tokens = Lexer.new(src).tokenize
         program = Parser.new(@tokens).parse_program
         begin
           result = Egg.check(src, path, program, pkgs)
+          @modules = result.program.modules
+          @aliases = @modules[""].aliases
           # Shown even with errors (E130 is when they matter most); after
           # a type error no function has any.
           @caps = result.caps
@@ -61,17 +73,33 @@ module Egg
         @parsed = false
       end
 
+      # The top-level declarations of an imported file, without walking its
+      # function bodies. prefix: its module's; caps: the capability check of
+      # the program importing it, or nil.
+      def self.declarations(src, prefix, caps)
+        index = allocate
+        index.send(:declare_only, src, prefix, caps)
+        index
+      end
+
       # False when lexing or parsing failed; there is then nothing to index.
       def parsed?
         @parsed
       end
 
-      # The declaration of the name at line:col, or nil.
+      # The declaration of the name at line:col, or nil. One in another file
+      # has its path.
       def decl_at(line, col)
         ref = @refs.find { |r| r.line == line && col >= r.col && col < r.col + r.length }
         # The cursor may sit just past the end of a name.
         ref ||= @refs.find { |r| r.line == line && col == r.col + r.length }
-        ref&.decl
+        decl = ref&.decl
+        decl.is_a?(Remote) ? resolve(decl) : decl
+      end
+
+      # The top-level name (or Type.method) key of this file, or nil.
+      def top_level(key)
+        @types[key] || @globals[key] || @methods[key] || @consts[key]
       end
 
       # Length of the token starting at line:col, for diagnostic ranges.
@@ -94,7 +122,51 @@ module Egg
         end
       end
 
+      def declare_only(src, prefix, caps)
+        @refs = []
+        @funcs = []
+        @caps = caps
+        @prefix = prefix
+        @tokens = Lexer.new(src).tokenize
+        declare_top(Parser.new(@tokens).parse_program)
+      end
+
+      # The Decl a Remote names, read from its file (once per file for this
+      # version of the open one), or nil.
+      def resolve(remote)
+        unless @remote.key?(remote.path)
+          @remote[remote.path] = begin
+            Index.declarations(File.read(remote.path), remote.prefix, @caps)
+          rescue SystemCallError, CompileError
+            nil
+          end
+        end
+        decl = @remote[remote.path]&.top_level(remote.key)
+        return nil if decl.nil?
+        decl = decl.dup
+        decl.path = remote.path
+        decl
+      end
+
       def build(program)
+        @imports = {}
+        program.imports.each { |imp| @imports[imp.name] = imp }
+        declare_top(program).each do |f, decl, first|
+          ref(decl.line, decl.col, decl) if first
+          @scopes = [{}]
+          f.params.each do |p|
+            mode = p.mode.nil? ? "" : "#{p.mode} "
+            declare(Decl.new(:param, p.name, p.line, p.col, "#{mode}#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
+          end
+          walk_block(f.body) unless f.body.nil? # extern fn
+        end
+        ref_imports(program)
+        ref_type_names
+      end
+
+      # The file's top-level types, functions, methods and constants; returns
+      # the functions whose bodies to walk.
+      def declare_top(program)
         @unsafe = (program.allows || []).any? { |u| u.name == "unsafe" }
         @by_pos = {}
         @tokens.each_with_index { |t, i| @by_pos["#{t.line}:#{t.col}"] = i }
@@ -102,6 +174,7 @@ module Egg
         @types = {}
         @methods = {}
         @type_fns = {}
+        @consts = {}
         program.funcs.each { |f| @type_fns[f.name] = true unless type_fn_struct(f).nil? }
         bodies = []
         # Types: `const Name = struct/enum {`; the decl sits on its name.
@@ -128,18 +201,53 @@ module Egg
           st = type_fn_struct(f)
           st.fns.each { |m| add_method(f.name, m, bodies) } unless st.nil?
         end
+        (program.consts || []).each do |c|
+          i = @by_pos["#{c.line}:#{c.col}"]
+          i += 1 until @tokens[i].kind == :op && @tokens[i].text == "="
+          type = c.type.nil? ? "" : ": #{Egg.type_src(c.type)}"
+          decl = Decl.new(:const, c.name, c.line, c.col, "const #{c.name}#{type} = #{alias_text(alias_tokens(i + 1))}", nil, nil)
+          @consts[c.name] ||= decl
+          ref(c.line, c.col, decl)
+        end
         @funcs.sort_by! { |_, l, c| [l, c] }
         @globals = globals
-        bodies.each do |f, decl, first|
-          ref(decl.line, decl.col, decl) if first
-          @scopes = [{}]
-          f.params.each do |p|
-            mode = p.mode.nil? ? "" : "#{p.mode} "
-            declare(Decl.new(:param, p.name, p.line, p.col, "#{mode}#{p.name}: #{Egg.type_src(p.type)}  (parameter)", nil, nil))
-          end
-          walk_block(f.body) unless f.body.nil? # extern fn
+        bodies
+      end
+
+      # An import's name, and its path, go to the file it names.
+      def ref_imports(program)
+        program.imports.each do |imp|
+          decl = module_decl(imp.name)
+          next if decl.nil?
+          ref(imp.line, imp.col, decl)
+          i = @by_pos["#{imp.line}:#{imp.col}"]
+          path = @tokens[i + 4]
+          ref(path.line, path.col, decl, path.text.length + 2) if path&.kind == :string
         end
-        ref_type_names
+      end
+
+      # The module an import name stands for, as a Decl at the top of its
+      # file, or nil.
+      def module_decl(name)
+        mod = @modules[@aliases[name]]
+        return nil if mod.nil? || mod.path.nil? || !@imports.key?(name)
+        Decl.new(:module, name, 1, 1, "const #{name} = @import(#{@imports[name].path.inspect})", nil, nil, mod.path)
+      end
+
+      # The name key of the module with prefix prefix, or nil when that is
+      # this file or unknown.
+      def remote(prefix, key)
+        mod = prefix.nil? || prefix.empty? ? nil : @modules[prefix]
+        mod.nil? || mod.path.nil? ? nil : Remote.new(mod.path, prefix, key)
+      end
+
+      # A method of a type of another module ("m.Point", or an instance
+      # "m.Box(i64)", whose methods are Box's), or nil.
+      def remote_method(owner, name)
+        return nil unless owner.is_a?(String)
+        owner = owner.sub(/\(.*\z/m, "")
+        dot = owner.index(".")
+        dot.nil? ? nil : remote(owner[0...dot], "#{owner[(dot + 1)..]}.#{name}")
       end
 
       def add_method(owner, m, bodies)
@@ -169,6 +277,7 @@ module Egg
           next unless t.kind == :ident && !seen["#{t.line}:#{t.col}"]
           prev = i.zero? ? nil : @tokens[i - 1]
           next if !prev.nil? && prev.kind == :op && prev.text == "."
+          next if ref_qualified(i)
           decl = @types[t.text]
           if decl.nil?
             fn = @globals[t.text]
@@ -177,6 +286,36 @@ module Egg
           end
           ref(t.line, t.col, decl, t.text.length) unless decl.nil?
         end
+      end
+
+      # m.name and m.Type.name, with m an import (which no local may
+      # shadow), wherever they are written: calls, types, literals,
+      # constants. True if token i is such an m.
+      def ref_qualified(i)
+        t = @tokens[i]
+        decl = module_decl(t.text)
+        return false if decl.nil?
+        ref(t.line, t.col, decl)
+        name = qualified_part(i + 1)
+        return true if name.nil?
+        ref(name.line, name.col, remote(@aliases[t.text], name.text), name.text.length)
+        member = qualified_part(i + 3)
+        unless member.nil? || seen?(member)
+          ref(member.line, member.col, remote(@aliases[t.text], "#{name.text}.#{member.text}"), member.text.length)
+        end
+        true
+      end
+
+      # The name after the '.' at token i, or nil.
+      def qualified_part(i)
+        dot = @tokens[i]
+        name = @tokens[i + 1]
+        return nil unless dot&.kind == :op && dot.text == "." && name&.kind == :ident
+        name
+      end
+
+      def seen?(tok)
+        @refs.any? { |r| r.line == tok.line && r.col == tok.col }
       end
 
       def func_decl(f, label)
@@ -193,7 +332,7 @@ module Egg
         # The capabilities it uses, from the capability check (rule 3), and
         # whether its file may use pointers.
         notes = []
-        caps = @caps&.caps_named(label)
+        caps = @caps&.caps_named(@prefix.nil? ? label : "#{@prefix}.#{label}")
         notes << "uses #{caps.join(', ')}" unless caps.nil? || caps.empty? || !f.ext.nil?
         notes << "allow unsafe" if @unsafe
         detail = notes.empty? ? head : "#{head}  // #{notes.join('; ')}"
@@ -343,7 +482,7 @@ module Egg
         case expr
         in IntLit | FloatLit | BoolLit | StrLit | EnumLit | ErrorLit | TypeExpr | StructTypeExpr | NullLit then nil
         in Var[name:, line:, col:]
-          decl = @types[name]
+          decl = @types[name] || @consts[name]
           if !decl.nil? && lookup_local(name).nil?
             ref(line, col, decl, name.length)
           else
@@ -360,10 +499,11 @@ module Egg
           walk_expr(hi) unless hi.nil?
         in MethodCall[obj:, name:, args:, line:, col:]
           walk_expr(obj)
-          owner = obj.info.nil? ? nil : (obj.info[:type] || obj.ty)
+          # m.f(...) is found among the tokens (ref_type_names).
+          owner = obj.info.nil? || obj.ty == "module" ? nil : (obj.info[:type] || obj.ty)
           # An instance such as Pair(i64) finds its methods under Pair.
           owner = owner.sub(/\(.*\z/m, "") if owner.is_a?(String)
-          decl = owner.nil? ? nil : @methods["#{owner}.#{name}"]
+          decl = owner.nil? ? nil : (@methods["#{owner}.#{name}"] || remote_method(owner, name))
           ref(line, col, decl, name.length) unless decl.nil?
           args.each { |a| walk_expr(a) }
         in StructLit[type:, fields:, line:, col:]
@@ -629,7 +769,7 @@ module Egg
           notify("textDocument/publishDiagnostics", { "uri" => uri, "diagnostics" => [] })
         when "textDocument/definition"
           decl = decl_for(params)
-          uri = params["textDocument"]["uri"]
+          uri = decl&.path.nil? ? params["textDocument"]["uri"] : uri_of(decl.path)
           reply(id, decl.nil? ? nil : { "uri" => uri, "range" => name_range(decl) })
         when "textDocument/hover"
           decl = decl_for(params)
@@ -675,6 +815,13 @@ module Egg
         nil
       end
 
+      # /a/b c.egg -> file:///a/b%20c.egg, C:\\a.egg -> file:///C:/a.egg.
+      def uri_of(path)
+        parts = path.tr("\\", "/").split("/", -1).map { |p| URI.encode_www_form_component(p).gsub("+", "%20").sub("%3A", ":") }
+        rest = parts.join("/")
+        "file://#{rest.start_with?('/') ? '' : '/'}#{rest}"
+      end
+
       # While a file has a syntax error, navigation uses its last version
       # that parsed.
       def decl_for(params)
@@ -694,8 +841,12 @@ module Egg
         }
       end
 
+      # The name as written: area for the method Rect.area; an import goes
+      # to the start of its file.
       def name_range(decl)
-        range(decl.line, decl.col, decl.line, decl.col + decl.name.length)
+        return range(1, 1, 1, 1) if decl.kind == :module
+        name = decl.name.split(".").last
+        range(decl.line, decl.col, decl.line, decl.col + name.length)
       end
 
       # 1-based compiler positions -> 0-based LSP positions.

@@ -224,6 +224,12 @@ def lsp_session(messages)
   [replies, diags, status, err]
 end
 
+# The file a URI from the language server names.
+def lsp_path(uri)
+  require_relative "../lib/egg/lsp"
+  Egg::LSP::Server.new(StringIO.new, StringIO.new).send(:path_of, uri).to_s
+end
+
 # The language server gives a file in a clutch package that package's
 # packages, from clutch flags (with --test under test/).
 def check_lsp_packages(dir)
@@ -245,6 +251,13 @@ def check_lsp_packages(dir)
   report(diags[0] == [], "lsp: a program's packages come from clutch", diags[0].inspect)
   report(diags[1] == [], "lsp: a test sees its own package", diags[1].inspect)
   report(diags[2]&.any? { |d| d["code"] == "E129" && d["message"].include?("unknown module 'hello'") }, "lsp: a package does not see itself outside test/", diags[2].inspect)
+  # hello.hi() goes to hi in the package's source.
+  main_uri = uri.("app", "src", "main.egg")
+  ask = { "id" => 3, "method" => "textDocument/definition", "params" => { "textDocument" => { "uri" => main_uri }, "position" => { "line" => 5, "character" => 19 } } }
+  replies = lsp_session([{ "id" => 1, "method" => "initialize", "params" => {} }, open.(main_uri, main), ask, { "id" => 2, "method" => "shutdown" }, { "method" => "exit" }])[0]
+  got = replies.dig(3, "result")
+  report(got && File.realpath(lsp_path(got["uri"])) == File.realpath(File.join(root, "hello", "src", "hello.egg")) &&
+         got.dig("range", "start") == { "line" => 0, "character" => 3 }, "lsp: definition in a package's source", replies[3].inspect)
   File.write(File.join(root, "app", "clutch.toml"), File.read(File.join(root, "app", "clutch.toml")).sub("../hello", "../nowhere"))
   diags = session.(open.(uri.("app", "src", "main.egg"), main))
   report(diags[0]&.any? { |d| d["code"] == "clutch" && d["message"].include?("no directory") }, "lsp: clutch's error is a diagnostic", diags[0].inspect)
@@ -1426,6 +1439,59 @@ def check_lsp_modules
   report(status.success? && err.empty?, "lsp modules session ends cleanly", err)
 end
 
+# Definition and hover reach into imported files and std: functions,
+# types, static methods, methods of an imported type's values, type
+# functions and constants; an import's name and path open its file.
+def check_lsp_cross_file
+  main = File.join(ROOT, "examples", "modules.egg")
+  lines = File.readlines(main)
+  doc = { "uri" => "file://#{main}" }
+  # The nth word on a 1-based line of modules.egg, as an LSP position.
+  at = lambda do |line, word, nth = 1|
+    col = -1
+    nth.times { col = lines[line - 1].index(/\b#{word}\b/, col + 1) }
+    { "textDocument" => doc, "position" => { "line" => line - 1, "character" => col } }
+  end
+  asks = [
+    [16, "shapes"], [16, "lib"], [22, "Rect"], [27, "show"], [27, "square"], [28, "Rect"],
+    [30, "perimeter"], [31, "area"], [32, "Box", 2], [36, "Kind"], [38, "area"]
+  ]
+  std_src = "uses io\n\nconst text = @import(\"std/text\")\nconst N = 3\n\nfn main(io: Io) void {\n    io.print(text.find(\"abcd\", \"d\") orelse N)\n}\n"
+  std_doc = { "uri" => "file://#{File.join(ROOT, 'examples', 'lsp_std.egg')}" }
+  std_at = ->(line, ch) { { "textDocument" => std_doc, "position" => { "line" => line, "character" => ch } } }
+  req = [
+    { "id" => 1, "method" => "initialize", "params" => {} },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => doc.merge("text" => lines.join) } },
+    { "method" => "textDocument/didOpen", "params" => { "textDocument" => std_doc.merge("text" => std_src) } },
+    *asks.each_with_index.map { |(l, w, n), k| { "id" => 10 + k, "method" => "textDocument/definition", "params" => at.(l, w, n || 1) } },
+    { "id" => 3, "method" => "textDocument/hover", "params" => at.(27, "show") },
+    { "id" => 4, "method" => "textDocument/hover", "params" => at.(16, "shapes") },
+    { "id" => 5, "method" => "textDocument/definition", "params" => std_at.(6, 19) }, # text.find
+    { "id" => 6, "method" => "textDocument/definition", "params" => std_at.(6, 43) }, # N
+    { "id" => 7, "method" => "textDocument/definition", "params" => at.(36, "rect") }, # an enum member
+    { "id" => 2, "method" => "shutdown" },
+    { "method" => "exit" }
+  ]
+  replies, diags, status, err = lsp_session(req)
+  where = lambda do |id|
+    r = replies.dig(id, "result")
+    r && "#{r['uri'].sub(%r{\A.*/examples/}, '')}:#{r['range']['start']['line'] + 1}:#{r['range']['start']['character'] + 1}"
+  end
+  got = asks.each_index.map { |k| where.(10 + k) }
+  want = %w[lib/shapes.egg:1:1 lib/shapes.egg:1:1 lib/shapes.egg:6:7 lib/report.egg:7:4 lib/shapes.egg:10:8 lib/shapes.egg:6:7
+            lib/shapes.egg:43:4 lib/shapes.egg:14:8 lib/shapes.egg:26:4 lib/shapes.egg:4:7 lib/shapes.egg:14:8]
+  report(diags[0] == [] && got == want, "lsp definition in imported files", (asks.zip(got) - asks.zip(want)).inspect + diags.inspect)
+  hover = ->(id) { replies.dig(id, "result", "contents", "value").to_s.lines[1].to_s.strip }
+  report(hover.(3) == "fn show(io: Io, r: shapes.Rect) void  // uses io", "lsp hover on an imported function shows its capabilities", hover.(3).inspect)
+  report(hover.(4) == "const shapes = @import(\"lib/shapes.egg\")", "lsp hover on an import", hover.(4).inspect)
+  std = replies.dig(5, "result")
+  report(std && File.realpath(lsp_path(std["uri"])) == File.realpath(File.join(Egg::STD_ROOT, "text.egg")) && std.dig("range", "start", "line") == File.readlines(File.join(Egg::STD_ROOT, "text.egg")).index { |l| l.start_with?("fn find(") },
+         "lsp definition in std", replies[5].inspect)
+  report(replies.dig(6, "result", "range", "start") == { "line" => 3, "character" => 6 }, "lsp definition of a top-level constant", replies[6].inspect)
+  report(replies.key?(7) && replies.dig(7, "result").nil?, "lsp an imported enum's member has no definition", replies[7].inspect)
+  report(status.success? && err.empty?, "lsp cross-file session ends cleanly", err)
+end
+
 # Imports by absolute path, unreadable imports, and debug without a path.
 # A file import stays inside its module's root; other modules go by name.
 def check_loader(dir)
@@ -2078,6 +2144,7 @@ Dir.mktmpdir do |dir|
   check_utf8(dir)
   check_lsp_char
   check_lsp_modules
+  check_lsp_cross_file
   check_lsp_extern
   check_lsp_pointers
 
