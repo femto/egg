@@ -355,7 +355,8 @@ v3 (memory without GC, and what realistic programs needed):
   level)`, stored when deflating would not help) and directories, and
   `b.finish(a)` gives the archive; `zip.safe_name` refuses names that
   would leave the directory they are extracted to. Stored and deflated
-  entries only, without ZIP64 or encryption
+  entries only, without encryption; ZIP64 archives (over 4 GiB or 65535
+  entries, or streamed by `zip -`) are read but not written
 - Mutable slices: `inout xs: []T` lends a writable view for the call,
   passed as `&x[lo..hi]` of a var array, a var or inout `Buf` or another
   inout slice; its elements change, but it cannot be reassigned or

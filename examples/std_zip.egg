@@ -32,6 +32,14 @@
 // expect: BadData kept
 // expect: BadChecksum kept
 // expect: BadZip kept
+// expect: - 0 18 18 4528 false [streamed ]
+// expect: a.txt 8 38 19 33188 false [zip64 ent]
+// expect: b.txt 0 7 7 33188 false [stored\n]
+// expect: 74
+// expect: 89 stored
+// expect: BadZip
+// expect: BadZip
+// expect: BadZip
 // expect: BadZip
 uses alloc, io
 
@@ -46,6 +54,15 @@ const INFO_ZIP = "UEsDBAoAAAAAAIMYIlgbOHLLCwAAAAsAAAAJAAAAaGVsbG8udHh0aGVsbG8sIH
 // One deflated entry, x.txt, whose data has "JUNK" after the stream, inside
 // the size the archive gives it.
 const JUNK = "UEsDBBQAAAAIAAAAIQA7fIrfDwAAABIAAAAFAAAAeC50eHTLSM3JyVfIQJBcAEpVTktQSwECHgMUAAAACAAAACEAO3yK3w8AAAASAAAABQAAAAAAAAAAAAAApIEAAAAAeC50eHRQSwUGAAAAAAEAAQAzAAAAMgAAAAAA"
+
+// `printf 'streamed by zip -\n' | zip -X - -`: Info-ZIP writes ZIP64 end
+// records when it cannot know the size in advance.
+const STREAMED = "UEsDBC0AAAAAAEyEcF3XX7ue//////////8BABQALQEAEAASAAAAAAAAABIAAAAAAAAAc3RyZWFtZWQgYnkgemlwIC0KUEsBAh4DLQAAAAAATIRwXddfu54SAAAAEgAAAAEAAAAAAAAAAQAAALARAAAAAC1QSwYGLAAAAAAAAAAeAy0AAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAALwAAAAAAAABFAAAAAAAAAFBLBgcAAAAAdAAAAAAAAAABAAAAUEsFBgAAAAABAAEALwAAAEUAAAAAAA=="
+
+// Made by hand (and read back by Python's zipfile and unzip -t): every
+// 32-bit size, offset and count is all ones, the values being in ZIP64
+// extra fields and end records. a.txt is deflated, b.txt stored.
+const ZIP64 = "UEsDBC0AAAAIAAAAIQBXKZx9//////////8FABQAYS50eHQBABAAJgAAAAAAAAATAAAAAAAAAKvKLDAzUUjNKymq1FGowsHhAgBQSwMELQAAAAAAAAAhAOKcU6X//////////wUAFABiLnR4dAEAEAAHAAAAAAAAAAcAAAAAAAAAc3RvcmVkClBLAQItAy0AAAAIAAAAIQBXKZx9//////////8FABwAAAAAAAAAAACkgf////9hLnR4dAEAGAAmAAAAAAAAABMAAAAAAAAAAAAAAAAAAABQSwECLQMtAAAAAAAAACEA4pxTpf//////////BQAcAAAAAAAAAAAApIH/////Yi50eHQBABgABwAAAAAAAAAHAAAAAAAAAEoAAAAAAAAAUEsGBiwAAAAAAAAALQMtAAAAAAAAAAAAAgAAAAAAAAACAAAAAAAAAJ4AAAAAAAAAiAAAAAAAAABQSwYHAAAAACYBAAAAAAAAAQAAAFBLBQYAAAAA////////////////AAA="
 
 // Every entry: name, method, size, packed size, mode, and the start of
 // its contents.
@@ -88,6 +105,16 @@ fn build(io: Io, a: Allocator) !Buf(u8) {
     try b.add(a, "dir/caf\u{e9}.sh", "", 6)
     b.add(a, "", "x", 6) catch |err| io.print(@errorName(err))
     return b.finish(a)
+}
+
+// Prints why data is not an archive that can be read.
+fn refused(io: Io, a: Allocator, data: []u8) void {
+    const ar = zip.open(a, data) catch |err| {
+        io.print(@errorName(err))
+        return
+    }
+    io.print("opened")
+    a.free(ar)
 }
 
 fn latin_archive(a: Allocator) !Buf(u8) {
@@ -157,6 +184,41 @@ fn main(io: Io, a: Allocator) !void {
     const j = try zip.open(a, junk)
     defer a.free(j)
     j.read(a, &out, junk, 0) catch |err| io.print(@errorName(err), " ", out)
+    // ZIP64: streamed, made by hand, and with bytes before it.
+    var streamed: Buf(u8) = .empty
+    defer a.free(streamed)
+    _ = codec.base64_decode(a, &streamed, STREAMED)
+    const st = try zip.open(a, streamed)
+    defer a.free(st)
+    try list(io, a, st, streamed)
+    var z64: Buf(u8) = .empty
+    defer a.free(z64)
+    _ = codec.base64_decode(a, &z64, ZIP64)
+    const big = try zip.open(a, z64)
+    defer a.free(big)
+    try list(io, a, big, z64)
+    io.print(big.entries[1].offset)
+    const z64pre = a.concat("MZ prefix bytes", z64)
+    defer a.free(z64pre)
+    const pre64 = try zip.open(a, z64pre)
+    defer a.free(pre64)
+    var b64: Buf(u8) = .empty
+    defer a.free(b64)
+    try pre64.read(a, &b64, z64pre, 1)
+    io.print(pre64.entries[1].offset, " ", b64[0..6])
+    // An entry whose ZIP64 field is missing (its id changed), a count past
+    // what an i64 holds, and a central directory larger than the data.
+    var z64bad = a.concat(z64, "")
+    defer a.free(z64bad)
+    z64bad[187] = 2
+    refused(io, a, z64bad)
+    z64bad[187] = 1
+    z64bad[333] = 0x80
+    refused(io, a, z64bad)
+    z64bad[333] = 0
+    z64bad[341] = 0x7F
+    refused(io, a, z64bad)
+
     const cut = zip.open(a, data[0..@len(data) - 30]) catch |err| {
         io.print(@errorName(err))
         return
