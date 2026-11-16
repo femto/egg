@@ -136,7 +136,7 @@ module Egg
     # Order matters: egg_panic must come first.
     HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_mul_wide egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
-                      egg_null_deref egg_print_u64 egg_alloc egg_concat
+                      egg_null_deref egg_print_u64 egg_alloc egg_len_add egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
                       egg_append egg_append_int egg_append_uint egg_append_float egg_parse_f64 egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
@@ -590,6 +590,14 @@ module Egg
             char *p = malloc(n > 0 ? (size_t)n : 1);
             if (p == NULL) egg_panic("out of memory");
             return p;
+        }
+      C
+      # The length of two texts together, which no buffer could hold past
+      # INT64_MAX.
+      "egg_len_add" => <<~C,
+        static int64_t egg_len_add(int64_t a, int64_t b) {
+            if (b > INT64_MAX - a) egg_panic("out of memory");
+            return a + b;
         }
       C
       "egg_concat" => <<~C,
@@ -5064,10 +5072,18 @@ module Egg
                # Buf(u8) it came from is freed.
                "#{helper('egg_concat')}(#{coerce(codes[0], args[0].ty, 'str')}, ((egg_str){ \"\", 0 }))"
              when "Allocator.concat"
+               # Every part first, in order, then one allocation of their
+               # whole length: appending part by part would grow the
+               # buffer (and realloc) several times for one string.
+               parts = []
+               codes.each_index { |i| parts << hoist(coerce(codes[i], args[i].ty, "str"), "str") }
+               n = tmp
+               line("int64_t #{n} = #{parts[0]}.len;")
+               parts.each_index { |i| line("#{n} = #{helper('egg_len_add')}(#{n}, #{parts[i]}.len);") if i > 0 }
                r = tmp
-               line("#{c_type(ret)} #{r} = #{empty_buf(ret)};")
-               codes.each_index do |i|
-                 v = hoist(coerce(codes[i], args[i].ty, "str"), "str")
+               # Nothing at all owns nothing, as a.concat did before.
+               line("#{c_type(ret)} #{r} = { .ptr = #{n} > 0 ? (uint8_t *)#{helper('egg_buf_resize')}(NULL, #{n}, 1) : NULL, .len = 0, .cap = #{n} };")
+               parts.each do |v|
                  line("#{helper('egg_append')}(&#{r}.ptr, &#{r}.len, &#{r}.cap, (const uint8_t *)#{v}.ptr, #{v}.len);")
                end
                r
