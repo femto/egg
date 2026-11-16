@@ -204,24 +204,22 @@ fn main(io: Io, a: Allocator) void {
     for ([_]u8{ 0x01, 0x83, 1, 2, 3, 4, 'H' ^ 1, 'e' ^ 2, 'l' ^ 3, 0x89, 0x80, 0, 0, 0, 0, 0x80, 0x82, 0, 0, 0, 0, 'l', 'o' }) |byte| {
         a.push(&wire, byte)
     }
-    var part = ws.partial()
-    defer part.deinit(a)
+    var conn = ws.server(.empty)
+    defer conn.deinit(a)
     var data: Buf(u8) = .empty
     defer a.free(data)
-    var piece: Buf(u8) = .empty
-    defer a.free(piece)
     for (wire) |byte| {
-        a.push(&piece, byte)
-        const kind = ws.take(a, &piece, &part, &data)
+        ws.received(a, &conn, [_]u8{byte}[0..])
+        const kind = ws.take(a, &conn, &data)
         if (kind != ws.NEED_MORE) {
             io.print("kind ", kind, " [", data, "]")
         }
     }
-    a.append_str(&piece, "\x81\x05hello")
-    io.print("unmasked ", ws.take(a, &piece, &part, &data))
-    const f = ws.text_frame(a, "hi")
+    ws.received(a, &conn, "\x81\x05hello")
+    io.print("unmasked ", ws.take(a, &conn, &data))
+    const f = ws.frame(a, &conn, ws.TEXT, "hi")
     defer a.free(f)
-    const cf = ws.close_frame(a, 1000)
+    const cf = ws.close_frame(a, &conn, 1000, "")
     defer a.free(cf)
     io.print(@len(f), " ", f[0], " ", f[1], " ", @len(cf), " ", cf[2], " ", cf[3])
 }

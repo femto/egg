@@ -1,15 +1,26 @@
-// std/ws: WebSocket (RFC 6455) for servers: the handshake, frames out, and
-// messages in. A server's frames go out unmasked and whole; a client's come
-// in masked, and a message may come in fragments, with control frames
-// between them. No extension is offered (no permessage-deflate).
+// std/ws: WebSocket (RFC 6455) for servers and clients (ws:// only: no
+// TLS). A Conn keeps one end's state: the bytes received and not yet
+// taken, a message that comes in fragments, and, for a client, where its
+// masking keys come from. take gets messages from bytes received, whoever
+// reads them (a Poller, say); read_message does the reading itself, on a
+// blocking TcpConn, and answers pings and the close handshake. Messages go
+// out whole, one frame each. No extension is offered (no
+// permessage-deflate).
 // const ws = @import("std/ws")
-// if (ws.is_handshake(a, req)) { try c.write(ws.handshake(a, key, "")) ... }
-// then take messages from the bytes that come (take), or read them (read_message).
-uses alloc, net
+// Server, after http.read_request:
+// if (ws.is_handshake(a, req)) { try c.write(ws.handshake(a, key, "")) ...
+//     var conn = ws.server(@replace(&inbox, .empty)) ... }
+// Client:
+// var conn = ws.client(rng, a)
+// const c = try ws.connect(net, a, &conn, "ws://example.com/chat", "", "")
+// then try ws.send(c, a, &conn, ws.TEXT, "hi") and
+// const kind = try ws.read_message(c, a, &conn, &data)
+uses alloc, net, rand
 
 const codec = @import("std/codec")
 const sha1 = @import("std/sha1")
 const http = @import("std/http")
+const text = @import("std/text")
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -20,12 +31,69 @@ const CLOSE = 8
 const PING = 9
 const PONG = 10
 
-// What take and read_message give for a frame no client may send (close
-// 1002), and for a message larger than MAX_MESSAGE (close 1009); -kind is
-// the close code.
+// What take gives when the inbox does not hold a whole frame yet.
+const NEED_MORE = -1
+
+// What take and read_message give for a frame the other end may not send
+// (close 1002), a text message or close reason that is not UTF-8 (1007),
+// and a message larger than MAX_MESSAGE (1009); -kind is the close code.
 const PROTOCOL_ERROR = -1002
+const BAD_TEXT = -1007
 const TOO_BIG = -1009
 const MAX_MESSAGE = 1048576
+
+// The close code of a close frame without one (never sent as a code).
+const NO_STATUS = 1005
+
+// One end of a WebSocket connection, without the socket: a server or a
+// client, which differ in which way frames are masked.
+const Conn = owned struct {
+    // A client masks what it sends and takes frames unmasked; a server the
+    // other way round.
+    client: bool
+    // What has been received and not taken yet.
+    inbox: Buf(u8)
+    // The opcode (text or binary) of a message that is coming in
+    // fragments, with what has come of it; -1 between messages.
+    kind: i64
+    part: Buf(u8)
+    // A client's secret, from which its masking keys are made, and how
+    // many keys it has made; empty for a server.
+    seed: Buf(u8)
+    masks: i64
+    // Has a close frame gone out?
+    closing: bool
+    // The subprotocol the server chose, as connect found it; empty if none.
+    protocol: Buf(u8)
+
+    fn deinit(sink self: Conn, a: Allocator) void {
+        a.free(self.inbox)
+        a.free(self.part)
+        a.free(self.seed)
+        a.free(self.protocol)
+        @forget(self)
+    }
+}
+
+// A server's end of a connection, with what came after the handshake
+// (what http.read_request left in its inbox).
+fn server(sink inbox: Buf(u8)) Conn {
+    return Conn{ .client = false, .inbox = inbox, .kind = -1, .part = .empty, .seed = .empty, .masks = 0, .closing = false, .protocol = .empty }
+}
+
+// A client's end of a connection, before connect. Its masking keys come
+// from 32 bytes of rng, through SHA-1, so they cannot be predicted
+// (section 5.3) though rng is read once.
+fn client(rng: Random, a: Allocator) Conn {
+    var seed = a.alloc(32, @as(u8, 0))
+    rng.fill(&seed)
+    return Conn{ .client = true, .inbox = .empty, .kind = -1, .part = .empty, .seed = seed, .masks = 0, .closing = false, .protocol = .empty }
+}
+
+// Has conn sent a close frame?
+fn closing(conn: Conn) bool {
+    return conn.closing
+}
 
 // Is key a Sec-WebSocket-Key: the Base64 of 16 bytes?
 fn valid_key(a: Allocator, key: []u8) bool {
@@ -45,81 +113,130 @@ fn accept(a: Allocator, key: []u8) Buf(u8) {
     return out
 }
 
-// A whole frame of opcode with payload, at the end of out.
-fn frame(a: Allocator, inout out: Buf(u8), opcode: i64, payload: []u8) void {
+// 20 bytes no one can tell from the ones before: the SHA-1 of a client's
+// seed and how many it has made.
+fn next_mask(a: Allocator, inout conn: Conn) Buf(u8) {
+    var input = a.concat(conn.seed, "")
+    defer a.free(input)
+    var shift = 56
+    while (shift >= 0) {
+        a.push(&input, @as(u8, (conn.masks >> shift) & 0xFF))
+        shift = shift - 8
+    }
+    conn.masks = conn.masks + 1
+    return sha1.sum(a, input)
+}
+
+// A whole frame of opcode with payload at the end of out, masked if conn
+// is a client's.
+fn append_frame(a: Allocator, inout out: Buf(u8), inout conn: Conn, opcode: i64, payload: []u8) void {
     a.push(&out, @as(u8, 0x80 | opcode))
+    const m: u8 = if (conn.client) 0x80 else 0
     const n = @len(payload)
     if (n < 126) {
-        a.push(&out, @as(u8, n))
+        a.push(&out, m | @as(u8, n))
     } else if (n < 65536) {
-        a.push(&out, 126)
+        a.push(&out, m | 126)
         a.push(&out, @as(u8, n >> 8))
         a.push(&out, @as(u8, n & 0xFF))
     } else {
-        a.push(&out, 127)
+        a.push(&out, m | 127)
         var shift = 56
         while (shift >= 0) {
             a.push(&out, @as(u8, (n >> shift) & 0xFF))
             shift = shift - 8
         }
     }
-    a.append_str(&out, payload)
-}
-
-// A text frame of payload, by itself.
-fn text_frame(a: Allocator, payload: []u8) Buf(u8) {
-    var out: Buf(u8) = .empty
-    frame(a, &out, TEXT, payload)
-    return out
-}
-
-// A close frame with code and no reason.
-fn close_frame(a: Allocator, code: i64) Buf(u8) {
-    var body: Buf(u8) = .empty
-    defer a.free(body)
-    a.push(&body, @as(u8, code >> 8))
-    a.push(&body, @as(u8, code & 0xFF))
-    var out: Buf(u8) = .empty
-    frame(a, &out, CLOSE, body)
-    return out
-}
-
-// What a connection has received of a message that came in fragments.
-const Partial = owned struct {
-    // Its opcode (text or binary), or -1 between messages.
-    kind: i64
-    data: Buf(u8)
-
-    fn deinit(sink self: Partial, a: Allocator) void {
-        a.free(self.data)
-        @forget(self)
+    if (!conn.client) {
+        a.append_str(&out, payload)
+        return
+    }
+    const key = next_mask(a, &conn)
+    defer a.free(key)
+    a.append_str(&out, key[0..4])
+    var i = 0
+    while (i < n) {
+        a.push(&out, payload[i] ^ key[i & 3])
+        i = i + 1
     }
 }
 
-fn partial() Partial {
-    return Partial{ .kind = -1, .data = .empty }
+// A frame of opcode (TEXT, BINARY, PING or PONG) with payload, as conn
+// sends it. A ping's or pong's payload is at most 125 bytes.
+fn frame(a: Allocator, inout conn: Conn, opcode: i64, payload: []u8) Buf(u8) {
+    var out: Buf(u8) = .empty
+    append_frame(a, &out, &conn, opcode, payload)
+    return out
 }
 
-// What take gives when inbox does not hold a whole frame yet.
-const NEED_MORE = -1
+// A close frame with code and reason (at most 123 bytes of UTF-8), or with
+// neither if code is NO_STATUS; conn is closing from then on.
+fn close_frame(a: Allocator, inout conn: Conn, code: i64, reason: []u8) Buf(u8) {
+    var body: Buf(u8) = .empty
+    defer a.free(body)
+    if (code != NO_STATUS) {
+        a.push(&body, @as(u8, (code >> 8) & 0xFF))
+        a.push(&body, @as(u8, code & 0xFF))
+        a.append_str(&body, reason)
+    }
+    conn.closing = true
+    return frame(a, &conn, CLOSE, body)
+}
 
-// The next message from the bytes received so far (inbox, from which it
-// takes what it reads), in data in place of what it held: a text or binary
+// The code of a close frame's payload, or NO_STATUS if it has none.
+fn close_code(payload: []u8) i64 {
+    if (@len(payload) < 2) {
+        return NO_STATUS
+    }
+    return @as(i64, payload[0]) << 8 | @as(i64, payload[1])
+}
+
+// The reason of a close frame's payload, maybe empty.
+fn close_reason(payload: []u8) []u8 from payload {
+    if (@len(payload) < 2) {
+        return payload[0..0]
+    }
+    return payload[2..]
+}
+
+// May a close frame carry code (section 7.4)? 1004, 1005, 1006 and 1015
+// are not to be sent, and 1016 to 2999 are not assigned.
+fn valid_code(code: i64) bool {
+    return (code >= 1000 and code <= 1003) or (code >= 1007 and code <= 1014) or (code >= 3000 and code <= 4999)
+}
+
+// inbox without its first `used` bytes.
+fn drop(a: Allocator, inout inbox: Buf(u8), used: i64) void {
+    if (used > 0) {
+        const rest = a.concat(inbox[used..], "")
+        a.free(@replace(&inbox, rest))
+    }
+}
+
+// The next message from what conn has received (taking what it reads from
+// conn's inbox), in data in place of what it held: a text or binary
 // message whole, or a control frame (CLOSE, PING, PONG) with its payload,
-// which may come between the fragments of a message (kept in part
-// meanwhile). Its opcode, NEED_MORE until a whole frame has come, or
-// PROTOCOL_ERROR or TOO_BIG.
-fn take(a: Allocator, inout inbox: Buf(u8), inout part: Partial, inout data: Buf(u8)) i64 {
+// which may come between the fragments of a message. Its opcode,
+// NEED_MORE until a whole frame has come, or PROTOCOL_ERROR, BAD_TEXT or
+// TOO_BIG. A close frame's payload is checked: no code, or a valid one
+// with a UTF-8 reason.
+fn take(a: Allocator, inout conn: Conn, inout data: Buf(u8)) i64 {
     a.free(@replace(&data, .empty))
+    var used = 0
+    defer drop(a, &conn.inbox, used)
     while (true) {
-        const n_in = @len(inbox)
+        const n_in = @len(conn.inbox) - used
         if (n_in < 2) {
             return NEED_MORE
         }
-        const fin = (inbox[0] & 0x80) != 0
-        const opcode = @as(i64, inbox[0] & 0x0F)
-        var n = @as(i64, inbox[1] & 0x7F)
-        if ((inbox[0] & 0x70) != 0 or (inbox[1] & 0x80) == 0) {
+        const b0 = conn.inbox[used]
+        const b1 = conn.inbox[used + 1]
+        const fin = (b0 & 0x80) != 0
+        const opcode = @as(i64, b0 & 0x0F)
+        const masked = (b1 & 0x80) != 0
+        var n = @as(i64, b1 & 0x7F)
+        // A client's frames come masked, a server's not.
+        if ((b0 & 0x70) != 0 or masked == conn.client) {
             return PROTOCOL_ERROR
         }
         var at = 2
@@ -127,19 +244,19 @@ fn take(a: Allocator, inout inbox: Buf(u8), inout part: Partial, inout data: Buf
             if (n_in < 4) {
                 return NEED_MORE
             }
-            n = @as(i64, inbox[2]) << 8 | @as(i64, inbox[3])
+            n = @as(i64, conn.inbox[used + 2]) << 8 | @as(i64, conn.inbox[used + 3])
             at = 4
         } else if (n == 127) {
             if (n_in < 10) {
                 return NEED_MORE
             }
-            if ((inbox[2] & 0x80) != 0) {
+            if ((conn.inbox[used + 2] & 0x80) != 0) {
                 return PROTOCOL_ERROR
             }
             n = 0
             var i = 2
             while (i < 10) {
-                n = n << 8 | @as(i64, inbox[i])
+                n = n << 8 | @as(i64, conn.inbox[used + i])
                 i = i + 1
             }
             at = 10
@@ -151,44 +268,61 @@ fn take(a: Allocator, inout inbox: Buf(u8), inout part: Partial, inout data: Buf
         if (control and (!fin or n > 125)) {
             return PROTOCOL_ERROR
         }
-        if (!control and (opcode == CONTINUATION) == (part.kind < 0)) {
+        if (!control and (opcode == CONTINUATION) == (conn.kind < 0)) {
             return PROTOCOL_ERROR
         }
-        if (!control and @len(part.data) + n > MAX_MESSAGE) {
+        if (!control and @len(conn.part) + n > MAX_MESSAGE) {
             return TOO_BIG
         }
-        if (n_in < at + 4 + n) {
+        const key_at = used + at
+        const from = if (masked) key_at + 4 else key_at
+        if (@len(conn.inbox) < from + n) {
             return NEED_MORE
         }
-        const mask = at
-        const from = at + 4
         var i = 0
         while (i < n) {
-            const b = inbox[from + i] ^ inbox[mask + i % 4]
+            var b = conn.inbox[from + i]
+            if (masked) {
+                b = b ^ conn.inbox[key_at + (i & 3)]
+            }
             if (control) {
                 a.push(&data, b)
             } else {
-                a.push(&part.data, b)
+                a.push(&conn.part, b)
             }
             i = i + 1
         }
-        // What is left of the bytes, without this frame.
-        const rest = a.concat(inbox[from + n..], "")
-        a.free(@replace(&inbox, rest))
+        used = from + n
         if (control) {
+            if (opcode == CLOSE and @len(data) > 0) {
+                if (@len(data) == 1 or !valid_code(close_code(data))) {
+                    return PROTOCOL_ERROR
+                }
+                if (!text.is_utf8(close_reason(data))) {
+                    return BAD_TEXT
+                }
+            }
             return opcode
         }
-        if (part.kind < 0) {
-            part.kind = opcode
+        if (conn.kind < 0) {
+            conn.kind = opcode
         }
         if (fin) {
-            const kind = part.kind
-            part.kind = -1
-            a.free(@replace(&data, @replace(&part.data, .empty)))
+            const kind = conn.kind
+            conn.kind = -1
+            a.free(@replace(&data, @replace(&conn.part, .empty)))
+            if (kind == TEXT and !text.is_utf8(data)) {
+                return BAD_TEXT
+            }
             return kind
         }
     }
     return NEED_MORE
+}
+
+// Adds bytes received to conn's inbox, for take.
+fn received(a: Allocator, inout conn: Conn, bytes: []u8) void {
+    a.append_str(&conn.inbox, bytes)
 }
 
 // Is req a WebSocket handshake this module can answer: a GET with
@@ -223,28 +357,148 @@ fn handshake(a: Allocator, key: []u8, protocol: []u8) Buf(u8) {
     return out
 }
 
-// The next message from c, as take gives it, reading into inbox as long as
-// it takes (keep inbox for the life of the connection, with what http's
-// read_request left in it). A timeout only means the client is quiet:
-// waiting goes on. Fails with error.Closed if c ends first.
-fn read_message(c: TcpConn, a: Allocator, inout inbox: Buf(u8), inout part: Partial, inout data: Buf(u8)) !i64 {
+// Sends a message of opcode (TEXT or BINARY; PING or PONG with at most 125
+// bytes) on c.
+fn send(c: TcpConn, a: Allocator, inout conn: Conn, opcode: i64, payload: []u8) !void {
+    const out = frame(a, &conn, opcode, payload)
+    defer a.free(out)
+    try c.write(out)
+}
+
+// Starts the close handshake on c: a close frame with code and reason
+// (NO_STATUS for neither). Read on until read_message gives CLOSE, the
+// other end's answer; a server then closes c, a client waits for the
+// server to (read_message fails with error.Closed).
+fn close(c: TcpConn, a: Allocator, inout conn: Conn, code: i64, reason: []u8) !void {
+    const out = close_frame(a, &conn, code, reason)
+    defer a.free(out)
+    try c.write(out)
+}
+
+// The next text or binary message from c, or CLOSE, as take gives it,
+// reading into conn's inbox as long as it takes. A ping is answered with a
+// pong, and a pong passed over. A close frame is answered with one of the
+// same code, unless conn has sent one already, and gives CLOSE with its
+// payload in data (close_code, close_reason). PROTOCOL_ERROR, BAD_TEXT and
+// TOO_BIG send a close frame of their code first; the connection is done.
+// A timeout only means the other end is quiet: waiting goes on. Fails with
+// error.Closed if c ends first.
+fn read_message(c: TcpConn, a: Allocator, inout conn: Conn, inout data: Buf(u8)) !i64 {
     var chunk: Buf(u8) = .empty
     defer a.free(chunk)
     while (true) {
-        const kind = take(a, &inbox, &part, &data)
-        if (kind != NEED_MORE) {
+        const kind = take(a, &conn, &data)
+        if (kind == NEED_MORE) {
+            const n = c.read(a, &chunk, 65536) catch |e| {
+                if (e == error.TimedOut) {
+                    continue
+                }
+                return e
+            }
+            if (n == 0) {
+                return error.Closed
+            }
+            a.append_str(&conn.inbox, chunk)
+        } else if (kind == PING) {
+            // Answered until the other end's close frame has come, even
+            // after this end has sent its own (section 5.5.2).
+            try send(c, a, &conn, PONG, data)
+        } else if (kind == CLOSE) {
+            if (!conn.closing) {
+                try close(c, a, &conn, close_code(data), "")
+            }
+            return kind
+        } else if (kind < 0) {
+            if (!conn.closing) {
+                try close(c, a, &conn, -kind, "")
+            }
+            return kind
+        } else if (kind != PONG) {
             return kind
         }
-        const n = c.read(a, &chunk, 65536) catch |e| {
-            if (e == error.TimedOut) {
-                continue
-            }
-            return e
-        }
-        if (n == 0) {
-            return error.Closed
-        }
-        a.append_str(&inbox, chunk)
     }
     return NEED_MORE
+}
+
+// Is protocol, byte for byte, one of the comma-separated protocols?
+// Subprotocol names are compared exactly, not as header words are.
+fn offered(protocols: []u8, protocol: []u8) bool {
+    var at = 0
+    while (at <= @len(protocols)) {
+        const comma = text.find_from(protocols, ",", at) orelse @len(protocols)
+        if (text.strip(protocols[at..comma]) == protocol) {
+            return true
+        }
+        at = comma + 1
+    }
+    return false
+}
+
+// Opens a connection to url (ws://host[:port][/path][?query]) and makes
+// the handshake as conn, a client's end: protocols lists the
+// subprotocols to offer, comma-separated (empty for none), and headers
+// adds lines of the caller's (each ending in \r\n; Origin, Cookie, ...).
+// The protocol the server chose is in conn.protocol after. Fails with
+// error.Unsupported for wss://, error.BadUrl for what is not a ws:// URL,
+// error.Handshake if the server does not switch to WebSocket correctly,
+// or as net.tcp_connect and http.read_response do.
+fn connect(net: Net, a: Allocator, inout conn: Conn, url: []u8, protocols: []u8, headers: []u8) !TcpConn {
+    if (@len(url) >= 6 and http.same(url[0..6], "wss://")) {
+        return error.Unsupported
+    }
+    if (@len(url) < 5 or !http.same(url[0..5], "ws://")) {
+        return error.BadUrl
+    }
+    // The URL as http:// for http.parse_url, which takes it apart the same.
+    const http_url = a.concat("http://", url[5..])
+    defer a.free(http_url)
+    const u = try http.parse_url(http_url)
+    const c = try net.tcp_connect(http.url_host(http_url, u), u.port)
+    opening(c, a, &conn, http_url, u, protocols, headers) catch |e| {
+        c.close()
+        return e
+    }
+    return c
+}
+
+// The client's side of the handshake on c, for connect.
+fn opening(c: TcpConn, a: Allocator, inout conn: Conn, http_url: []u8, u: http.Url, protocols: []u8, headers: []u8) !void {
+    const raw = next_mask(a, &conn)
+    defer a.free(raw)
+    var key: Buf(u8) = .empty
+    defer a.free(key)
+    codec.base64_encode(a, &key, raw[0..16])
+    var all = a.concat("Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ", key, "\r\nSec-WebSocket-Version: 13\r\n")
+    defer a.free(all)
+    if (@len(protocols) > 0) {
+        a.append_str(&all, "Sec-WebSocket-Protocol: ")
+        a.append_str(&all, protocols)
+        a.append_str(&all, "\r\n")
+    }
+    a.append_str(&all, headers)
+    const target = http.url_target(http_url, u)
+    const slash = if (text.starts_with(target, "?")) "/" else ""
+    const line_target = a.concat(slash, target)
+    defer a.free(line_target)
+    try http.send_request(c, a, "GET", line_target, http_url[u.authority_lo..u.authority_hi], all, "")
+    const resp = http.read_response(c, a, &conn.inbox, 0, false) catch |e| {
+        return if (e == error.BodyTooLarge) error.Handshake else e
+    }
+    defer resp.deinit(a)
+    const expected = accept(a, key)
+    defer a.free(expected)
+    const upgrade = resp.header("Upgrade") orelse ""
+    const accepted = resp.header("Sec-WebSocket-Accept") orelse ""
+    if (resp.status != 101 or !http.same(upgrade, "websocket") or !http.head_lists(resp.head, resp.headers[0..], "Connection", "upgrade") or accepted != expected) {
+        return error.Handshake
+    }
+    const chosen = resp.header("Sec-WebSocket-Protocol") orelse ""
+    if (@len(chosen) > 0 and !offered(protocols, chosen)) {
+        return error.Handshake
+    }
+    // An extension was not offered, so none may be used.
+    if (resp.header("Sec-WebSocket-Extensions") != null) {
+        return error.Handshake
+    }
+    a.free(@replace(&conn.protocol, a.concat(chosen, "")))
 }
