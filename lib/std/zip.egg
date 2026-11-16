@@ -179,7 +179,7 @@ fn open(a: Allocator, data: []u8) !Archive {
     var count = le(data, p + 10, 2)
     var size = le(data, p + 12, 4)
     var offset = le(data, p + 16, 4)
-    // The central directory ends where the records after it start.
+    // The central directory ends at most where the records after it start.
     var end = p
     var base = 0
     if (p >= 20 and le(data, p - 20, 4) == 0x07064b50) {
@@ -223,9 +223,12 @@ fn open(a: Allocator, data: []u8) !Archive {
         }
         base = p - size - offset
     }
-    if (offset > end - base) {
+    // The central directory lies within the data, before the end records;
+    // its records must stay within the size it is given.
+    if (offset > end - base or size > end - base - offset) {
         return error.BadZip
     }
+    end = base + offset + size
     var ar = Archive{ .entries = .empty, .names = .empty, .comment = .empty }
     errdefer a.free(ar)
     a.append_str(&ar.comment, data[p + 22..p + 22 + le(data, p + 20, 2)])

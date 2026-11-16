@@ -40,6 +40,7 @@
 // expect: BadZip
 // expect: BadZip
 // expect: BadZip
+// expect: BadZip
 uses alloc, io
 
 const zip = @import("std/zip")
@@ -205,14 +206,17 @@ fn main(io: Io, a: Allocator) !void {
     defer a.free(b64)
     try pre64.read(a, &b64, z64pre, 1)
     io.print(pre64.entries[1].offset, " ", b64[0..6])
-    // An entry whose ZIP64 field is missing (its id changed), and a count
-    // past what an i64 holds.
+    // An entry whose ZIP64 field is missing (its id changed), a count past
+    // what an i64 holds, and a central directory larger than the data.
     var z64bad = a.concat(z64, "")
     defer a.free(z64bad)
     z64bad[187] = 2
     refused(io, a, z64bad)
     z64bad[187] = 1
     z64bad[333] = 0x80
+    refused(io, a, z64bad)
+    z64bad[333] = 0
+    z64bad[341] = 0x7F
     refused(io, a, z64bad)
 
     const cut = zip.open(a, data[0..@len(data) - 30]) catch |err| {
