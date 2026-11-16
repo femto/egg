@@ -1,0 +1,551 @@
+// std/time/zone: time zones. A Zone gives the offset from UTC in force at
+// an instant, from the system's time zone database (TZif files, RFC
+// 8536), the local zone, a POSIX TZ rule or a fixed offset; std/time does
+// the calendar.
+// const zone = @import("std/time/zone")
+// const z = try zone.load(fs, a, "America/New_York")
+// defer a.free(z)
+// z.at(ns) is the date and time there; z.offset(ns) the seconds east of
+// UTC, for time.append_rfc3339; z.instant(t) the instant of a local time.
+uses alloc, args, fs
+
+const time = @import("std/time")
+
+// One kind of local time in a zone: offset seconds east of UTC, whether it
+// is daylight saving time, and its abbreviation ("EST"), abbr_len bytes at
+// abbr in the zone's names.
+const ZoneType = struct {
+    offset: i64
+    dst: bool
+    abbr: i64
+    abbr_len: i64
+}
+
+const DayKind = enum { julian, zero, month }
+
+// When a POSIX TZ rule changes over: .julian is day 1 to 365, never
+// counting February 29th ("J60" is always March 1st); .zero day 0 to 365;
+// .month the week-th weekday day (0 Sunday) of month, week 5 being the
+// last. time is seconds after midnight local time, which may be negative
+// or past a day.
+const RuleDay = struct {
+    kind: DayKind
+    month: i64
+    week: i64
+    day: i64
+    time: i64
+}
+
+// A POSIX TZ rule ("EST5EDT,M3.2.0,M11.1.0"): standard time, and
+// daylight saving time from start to end of each year if has_dst.
+const Rule = struct {
+    std: ZoneType
+    dst: ZoneType
+    has_dst: bool
+    start: RuleDay
+    end: RuleDay
+}
+
+// A time zone. Its changes of offset up to the last one listed are in
+// times (seconds since 1970, ascending), each to the type types[kinds[i]];
+// before the first, types[0] holds; after the last, the rule, when there
+// is one. utc() has no types at all. It owns its buffers: free it
+// with a.free.
+const Zone = struct {
+    names: Buf(u8)
+    times: Buf(i64)
+    kinds: Buf(u8)
+    types: Buf(ZoneType)
+    rule: ?Rule
+
+    // The type in force at secs seconds since 1970.
+    fn lookup(self: Zone, secs: i64) ZoneType {
+        const n = @len(self.times)
+        if (n == 0 or secs >= self.times[n - 1]) {
+            if (self.rule) |r| {
+                return rule_type(r, secs)
+            }
+        }
+        if (@len(self.types) == 0) {
+            return ZoneType{ .offset = 0, .dst = false, .abbr = 0, .abbr_len = 0 }
+        }
+        if (n == 0 or secs < self.times[0]) {
+            return self.types[0]
+        }
+        // The last change at or before secs.
+        var lo = 0
+        var hi = n
+        while (hi - lo > 1) {
+            const mid = lo + (hi - lo) / 2
+            if (self.times[mid] <= secs) {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        return self.types[@as(i64, self.kinds[lo])]
+    }
+
+    // Seconds east of UTC at the instant ns.
+    fn offset(self: Zone, ns: i64) i64 {
+        return self.lookup(time.floor_div(ns, time.SECOND)).offset
+    }
+
+    fn dst(self: Zone, ns: i64) bool {
+        return self.lookup(time.floor_div(ns, time.SECOND)).dst
+    }
+
+    // The abbreviation in use at the instant ns, such as "EST" or "+08";
+    // "UTC" for utc().
+    fn abbr(self: Zone, ns: i64) []u8 {
+        if (@len(self.types) == 0 and self.rule == null) {
+            return "UTC"
+        }
+        const t = self.lookup(time.floor_div(ns, time.SECOND))
+        return self.names[t.abbr..t.abbr + t.abbr_len]
+    }
+
+    // The local date and time at the instant ns.
+    fn at(self: Zone, ns: i64) time.DateTime {
+        const secs = time.floor_div(ns, time.SECOND)
+        var t = time.utc_s(secs + self.lookup(secs).offset)
+        t.nano = time.floor_mod(ns, time.SECOND)
+        return t
+    }
+
+    // The instant at which the local time is t; null if an i64 of
+    // nanoseconds cannot hold it. When clocks go back, a time that happens
+    // twice is the first of the two; when they go forward, a time that is
+    // skipped is taken with the offset from before, so 02:30 on the day New
+    // York skips to 03:00 is 03:30. Python's fold=0 does the same.
+    fn instant(self: Zone, t: time.DateTime) ?i64 {
+        if (!t.fits()) {
+            return null
+        }
+        const wall = t.unix()
+        const before = self.lookup(wall - 86400).offset
+        const after = self.lookup(wall + 86400).offset
+        // Either offset gives the time t when it is the one in force then;
+        // in a gap neither is, and the one from before is taken.
+        const u1 = wall - before
+        const u2 = wall - after
+        const ok1 = self.lookup(u1).offset == before
+        const ok2 = self.lookup(u2).offset == after
+        const u = if (ok2 and (!ok1 or u2 < u1)) u2 else u1
+        return time.from_parts(u, time.floor_mod(t.nano, time.SECOND))
+    }
+}
+
+// UTC, which has no types at all: offset 0, abbreviation "UTC".
+fn utc() Zone {
+    return Zone{ .names = .empty, .times = .empty, .kinds = .empty, .types = .empty, .rule = null }
+}
+
+// A zone always offset seconds east of UTC, called name; error.BadZone
+// for an offset outside -24:59:59 to +25:59:59, what RFC 8536 allows a
+// zone, so that no local time can overflow.
+fn fixed(a: Allocator, name: []u8, offset: i64) !Zone {
+    if (offset < -89999 or offset > 93599) {
+        return error.BadZone
+    }
+    var types: Buf(ZoneType) = .empty
+    a.push(&types, ZoneType{ .offset = offset, .dst = false, .abbr = 0, .abbr_len = @len(name) })
+    return Zone{ .names = a.concat(name, ""), .times = .empty, .kinds = .empty, .types = types, .rule = null }
+}
+
+// The type a rule gives at secs seconds since 1970.
+fn rule_type(r: Rule, secs: i64) ZoneType {
+    if (!r.has_dst) {
+        return r.std
+    }
+    // The last change at or before secs, of the year as standard time has
+    // it and the years around it, since a rule's time may move a change
+    // into the year before or after ("M1.1.0/-1"). The start is given in
+    // standard time, the end in daylight saving time; where an end and the
+    // next start meet, as in a rule for daylight saving time all year, the
+    // start wins.
+    const year = time.utc_s(secs + r.std.offset).year
+    var last = 0
+    var in_dst = false
+    var found = false
+    var y = year - 1
+    while (y <= year + 1) {
+        const end = rule_day(r.end, y) - r.dst.offset
+        if (end <= secs and (!found or end > last)) {
+            last = end
+            in_dst = false
+            found = true
+        }
+        const start = rule_day(r.start, y) - r.std.offset
+        if (start <= secs and (!found or start >= last)) {
+            last = start
+            in_dst = true
+            found = true
+        }
+        y = y + 1
+    }
+    return if (in_dst) r.dst else r.std
+}
+
+// Local seconds since 1970 of a rule's day in a year, at its time.
+fn rule_day(d: RuleDay, year: i64) i64 {
+    var day = time.epoch_days(year, 1, 1)
+    switch (d.kind) {
+        .julian => {
+            day = day + d.day - 1
+            if (time.is_leap(year) and d.day >= 60) {
+                day = day + 1
+            }
+        }
+        .zero => {
+            day = day + d.day
+        }
+        .month => {
+            const first = time.epoch_days(year, d.month, 1)
+            day = first + time.floor_mod(d.day - time.weekday_index(first), 7) + (d.week - 1) * 7
+            const next = first + time.days_in_month(year, d.month)
+            while (day >= next) {
+                day = day - 7
+            }
+        }
+    }
+    return day * 86400 + d.time
+}
+
+// A POSIX TZ zone name at s[i]: letters ("EST"), or anything but '>'
+// between '<' and '>' ("<+0530>"), at least 3 bytes either way. Its start
+// and length, with i past it; null if there is none.
+fn tz_name(s: []u8, inout i: i64) ?[2]i64 {
+    if (time.byte_is(s, i, '<')) {
+        var j = i + 1
+        while (j < @len(s) and s[j] != '>') {
+            j = j + 1
+        }
+        if (j == @len(s) or j - i - 1 < 3) {
+            return null
+        }
+        const r = [2]i64{ i + 1, j - i - 1 }
+        i = j + 1
+        return r
+    }
+    var j = i
+    while (j < @len(s) and ((s[j] >= 'a' and s[j] <= 'z') or (s[j] >= 'A' and s[j] <= 'Z'))) {
+        j = j + 1
+    }
+    if (j - i < 3) {
+        return null
+    }
+    const r = [2]i64{ i, j - i }
+    i = j
+    return r
+}
+
+// [+-]h[h][:mm[:ss]] at s[i] in seconds, hours up to max_hours, with i past
+// it; null if there is none.
+fn tz_hms(s: []u8, inout i: i64, max_hours: i64) ?i64 {
+    var sign = 1
+    if (time.byte_is(s, i, '+') or time.byte_is(s, i, '-')) {
+        if (s[i] == '-') {
+            sign = -1
+        }
+        i = i + 1
+    }
+    var h = 0
+    var nd = 0
+    while (nd < 3 and i < @len(s) and s[i] >= '0' and s[i] <= '9') {
+        h = h * 10 + @as(i64, s[i] - '0')
+        i = i + 1
+        nd = nd + 1
+    }
+    if (nd == 0 or h > max_hours) {
+        return null
+    }
+    var secs = h * 3600
+    var unit = 60
+    while (unit >= 1 and time.byte_is(s, i, ':')) {
+        const v = time.digits(s, i + 1, 2)
+        if (v < 0 or v > 59) {
+            return null
+        }
+        secs = secs + v * unit
+        i = i + 3
+        unit = unit / 60
+    }
+    return sign * secs
+}
+
+// A number of up to 3 digits at s[i], with i past it, or -1.
+fn tz_num(s: []u8, inout i: i64) i64 {
+    var v = 0
+    var nd = 0
+    while (nd < 3 and i < @len(s) and s[i] >= '0' and s[i] <= '9') {
+        v = v * 10 + @as(i64, s[i] - '0')
+        i = i + 1
+        nd = nd + 1
+    }
+    return if (nd == 0) -1 else v
+}
+
+// ",Jn[/time]", ",n[/time]" or ",Mm.w.d[/time]" at s[i]; the time is 02:00
+// unless given, and may be -167 to 167 hours (RFC 8536).
+fn tz_day(s: []u8, inout i: i64) ?RuleDay {
+    if (!time.byte_is(s, i, ',')) {
+        return null
+    }
+    i = i + 1
+    var d = RuleDay{ .kind = .zero, .month = 0, .week = 0, .day = 0, .time = 7200 }
+    if (time.byte_is(s, i, 'J')) {
+        i = i + 1
+        d.kind = .julian
+        d.day = tz_num(s, &i)
+        if (d.day < 1 or d.day > 365) {
+            return null
+        }
+    } else if (time.byte_is(s, i, 'M')) {
+        i = i + 1
+        d.kind = .month
+        d.month = tz_num(s, &i)
+        if (!time.byte_is(s, i, '.')) {
+            return null
+        }
+        i = i + 1
+        d.week = tz_num(s, &i)
+        if (!time.byte_is(s, i, '.')) {
+            return null
+        }
+        i = i + 1
+        d.day = tz_num(s, &i)
+        if (d.month < 1 or d.month > 12 or d.week < 1 or d.week > 5 or d.day < 0 or d.day > 6) {
+            return null
+        }
+    } else {
+        d.day = tz_num(s, &i)
+        if (d.day < 0 or d.day > 365) {
+            return null
+        }
+    }
+    if (time.byte_is(s, i, '/')) {
+        i = i + 1
+        d.time = tz_hms(s, &i, 167) orelse return null
+    }
+    return d
+}
+
+// A POSIX TZ rule, its abbreviations appended to names; null if s is not
+// one. Daylight saving time without a rule for when is the United States'
+// since 2007, as in Go.
+fn tz_rule(a: Allocator, inout names: Buf(u8), s: []u8) ?Rule {
+    var i = 0
+    const std_name = tz_name(s, &i) orelse return null
+    // POSIX counts hours west of UTC.
+    const std_off = 0 - (tz_hms(s, &i, 24) orelse return null)
+    var r = Rule{ .std = ZoneType{ .offset = std_off, .dst = false, .abbr = @len(names), .abbr_len = std_name[1] }, .dst = ZoneType{ .offset = std_off, .dst = false, .abbr = 0, .abbr_len = 0 }, .has_dst = false, .start = RuleDay{ .kind = .month, .month = 3, .week = 2, .day = 0, .time = 7200 }, .end = RuleDay{ .kind = .month, .month = 11, .week = 1, .day = 0, .time = 7200 } }
+    a.append_str(&names, s[std_name[0]..std_name[0] + std_name[1]])
+    if (i == @len(s)) {
+        return r
+    }
+    const dst_name = tz_name(s, &i) orelse return null
+    var dst_off = std_off + 3600
+    if (i < @len(s) and s[i] != ',') {
+        dst_off = 0 - (tz_hms(s, &i, 24) orelse return null)
+    }
+    r.has_dst = true
+    r.dst = ZoneType{ .offset = dst_off, .dst = true, .abbr = @len(names), .abbr_len = dst_name[1] }
+    a.append_str(&names, s[dst_name[0]..dst_name[0] + dst_name[1]])
+    if (i < @len(s)) {
+        r.start = tz_day(s, &i) orelse return null
+        r.end = tz_day(s, &i) orelse return null
+    }
+    return if (i == @len(s)) r else null
+}
+
+// A zone of a POSIX TZ rule alone, such as "CST-8" or
+// "EST5EDT,M3.2.0,M11.1.0"; error.BadZone if s is not one.
+fn posix(a: Allocator, s: []u8) !Zone {
+    var names: Buf(u8) = .empty
+    const r = tz_rule(a, &names, s) orelse {
+        a.free(names)
+        return error.BadZone
+    }
+    return Zone{ .names = names, .times = .empty, .kinds = .empty, .types = .empty, .rule = r }
+}
+
+// The big-endian n-byte integer at data[i], signed if n is 4 or 8.
+fn be(data: []u8, i: i64, n: i64) i64 {
+    var v = 0
+    for (data[i..i + n]) |c| {
+        v = (v << 8) | @as(i64, c)
+    }
+    if (n == 4 and v >= 0x80000000) {
+        v = v - 0x100000000
+    }
+    return v
+}
+
+// A zone from the bytes of a TZif file (RFC 8536, versions 1 to 4), as
+// /usr/share/zoneinfo holds them; error.BadZone if data is not one. Leap
+// seconds in it are ignored, as everywhere in std/time.
+fn parse_tzif(a: Allocator, data: []u8) !Zone {
+    if (@len(data) < 44 or data[0..4] != "TZif") {
+        return error.BadZone
+    }
+    // Version 1 is a 0 byte; each later one, '2' to '4' so far, keeps the
+    // layout of version 2 and is read as it, as RFC 8536 asks of readers.
+    const version = data[4]
+    if (version != 0 and (version < '2' or version > '9')) {
+        return error.BadZone
+    }
+    var p = 0
+    var tsize = 4
+    if (version >= '2') {
+        // Past the version 1 block, to the second header and its 8-byte
+        // times.
+        p = 44 + be(data, 32, 4) * 5 + be(data, 36, 4) * 6 + be(data, 40, 4) + be(data, 28, 4) * 8 + be(data, 24, 4) + be(data, 20, 4)
+        if (p < 44 or p + 44 > @len(data) or data[p..p + 4] != "TZif") {
+            return error.BadZone
+        }
+        tsize = 8
+    }
+    const isutcnt = be(data, p + 20, 4)
+    const isstdcnt = be(data, p + 24, 4)
+    const leapcnt = be(data, p + 28, 4)
+    const timecnt = be(data, p + 32, 4)
+    const typecnt = be(data, p + 36, 4)
+    const charcnt = be(data, p + 40, 4)
+    if (isutcnt < 0 or isstdcnt < 0 or leapcnt < 0 or timecnt < 0 or typecnt < 1 or charcnt < 1) {
+        return error.BadZone
+    }
+    const tp = p + 44
+    const kp = tp + timecnt * tsize
+    const yp = kp + timecnt
+    const cp = yp + typecnt * 6
+    const end = cp + charcnt + leapcnt * (tsize + 4) + isstdcnt + isutcnt
+    if (end > @len(data)) {
+        return error.BadZone
+    }
+    var z = utc()
+    errdefer a.free(z)
+    a.append_str(&z.names, data[cp..cp + charcnt])
+    var i = 0
+    while (i < typecnt) {
+        const q = yp + i * 6
+        const idx = @as(i64, data[q + 5])
+        // An offset of -2^31 is not allowed (RFC 8536): it has no negation.
+        if (idx >= charcnt or data[q + 4] > 1 or be(data, q, 4) == -2147483648) {
+            return error.BadZone
+        }
+        var n = 0
+        while (idx + n < charcnt and data[cp + idx + n] != 0) {
+            n = n + 1
+        }
+        a.push(&z.types, ZoneType{ .offset = be(data, q, 4), .dst = data[q + 4] == 1, .abbr = idx, .abbr_len = n })
+        i = i + 1
+    }
+    i = 0
+    while (i < timecnt) {
+        const t = be(data, tp + i * tsize, tsize)
+        const k = data[kp + i]
+        if (@as(i64, k) >= typecnt or (i > 0 and t <= z.times[i - 1])) {
+            return error.BadZone
+        }
+        a.push(&z.times, t)
+        a.push(&z.kinds, k)
+        i = i + 1
+    }
+    // The footer: a POSIX TZ rule between newlines, for times after the
+    // last change, maybe empty.
+    if (tsize == 8 and end < @len(data)) {
+        if (data[end] != '\n' or data[@len(data) - 1] != '\n' or @len(data) - end < 2) {
+            return error.BadZone
+        }
+        const footer = data[end + 1..@len(data) - 1]
+        if (@len(footer) > 0) {
+            z.rule = tz_rule(a, &z.names, footer) orelse return error.BadZone
+        }
+    }
+    return z
+}
+
+// Where load looks, in order, as Go does.
+fn zone_dir(i: i64) str {
+    if (i == 0) {
+        return "/usr/share/zoneinfo/"
+    }
+    if (i == 1) {
+        return "/usr/share/lib/zoneinfo/"
+    }
+    if (i == 2) {
+        return "/usr/lib/locale/TZ/"
+    }
+    return "/etc/zoneinfo/"
+}
+
+// The zone called name in the system's database ("Asia/Shanghai"), or
+// utc() for "UTC"; error.UnknownZone if no file has it (Windows has
+// none) or the name could leave the database ("../x", "/etc/x"), and
+// error.BadZone if the file is not TZif.
+fn load(fs: Fs, a: Allocator, name: []u8) !Zone {
+    if (name == "UTC") {
+        return utc()
+    }
+    if (@len(name) == 0 or name[0] == '/' or name[0] == '\\' or contains_dotdot(name)) {
+        return error.UnknownZone
+    }
+    var d = 0
+    while (d < 4) {
+        const path = a.concat(zone_dir(d), name)
+        defer a.free(path)
+        const data = fs.read(a, path) catch {
+            d = d + 1
+            continue
+        }
+        defer a.free(data)
+        return parse_tzif(a, data)
+    }
+    return error.UnknownZone
+}
+
+fn contains_dotdot(s: []u8) bool {
+    var i = 0
+    while (i + 1 < @len(s)) {
+        if (s[i] == '.' and s[i + 1] == '.') {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// The local time zone, as the C library finds it: the TZ environment
+// variable if set ("" is UTC; ":Europe/Paris", "Europe/Paris" or
+// "/path/to/file" a file of the database; otherwise a POSIX rule such as
+// "CST-8"), else /etc/localtime. Anything it cannot read is UTC, as in Go,
+// so on Windows the local zone is UTC unless TZ holds a POSIX rule.
+fn local(fs: Fs, env: Args, a: Allocator) Zone {
+    const tz = env.env("TZ") orelse {
+        return file_zone(fs, a, "/etc/localtime")
+    }
+    const name = without_colon(tz)
+    if (@len(name) == 0) {
+        return utc()
+    }
+    if (name[0] == '/') {
+        return file_zone(fs, a, name)
+    }
+    return load(fs, a, name) catch {
+        return posix(a, name) catch utc()
+    }
+}
+
+fn without_colon(s: []u8) []u8 {
+    return if (@len(s) > 0 and s[0] == ':') s[1..] else s
+}
+
+// The zone in a TZif file, or UTC.
+fn file_zone(fs: Fs, a: Allocator, path: []u8) Zone {
+    const data = fs.read(a, path) catch {
+        return utc()
+    }
+    defer a.free(data)
+    return parse_tzif(a, data) catch utc()
+}
