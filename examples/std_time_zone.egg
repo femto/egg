@@ -29,6 +29,9 @@
 // expect: 2023-12-31T22:30:00Z AAA false
 // expect: 2024-01-01T00:30:00+01:00 BBB true
 // expect: 2024-07-01T00:00:00Z AAA false
+// expect: 2025-04-10T03:30:00+01:00 BBB true
+// expect: 2025-04-10T03:30:00+01:00 BBB true
+// expect: 2025-04-10T05:30:00+01:00 BBB true
 // expect: 1970-01-01T00:00:00Z UTC false
 // expect: BadZone
 // expect: BadZone
@@ -171,6 +174,13 @@ fn main(io: Io, files: Fs, env: Args, a: Allocator) !void {
     show(io, a, early, 1704061800)
     show(io, a, early, 1704065400)
     show(io, a, early, 1719792000)
+    // Three hours of daylight saving time, 02:00 to 05:00 UTC on April
+    // 10th: shorter than the days around it, still found.
+    const brief = try zone.posix(a, "AAA0BBB,J100/2,J100/6")
+    defer a.free(brief)
+    instant(io, a, brief, at(2025, 4, 10, 3, 30))
+    instant(io, a, brief, at(2025, 4, 10, 2, 30))
+    instant(io, a, brief, at(2025, 4, 10, 5, 30))
     const utc = zone.utc()
     defer a.free(utc)
     show(io, a, utc, 0)

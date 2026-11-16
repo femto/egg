@@ -105,6 +105,26 @@ const Zone = struct {
         return self.names[t.abbr..t.abbr + t.abbr_len]
     }
 
+    // The k-th offset the zone may have: each of its types, then its
+    // rule's standard and daylight saving time (UTC's 0 for a zone with
+    // neither); null past them.
+    fn candidate(self: Zone, k: i64) ?i64 {
+        const n = @len(self.types)
+        if (k < n) {
+            return self.types[k].offset
+        }
+        if (self.rule) |r| {
+            if (k == n) {
+                return r.std.offset
+            }
+            if (k == n + 1 and r.has_dst) {
+                return r.dst.offset
+            }
+            return null
+        }
+        return if (k == n and n == 0) 0 else null
+    }
+
     // The local date and time at the instant ns.
     fn at(self: Zone, ns: i64) time.DateTime {
         const secs = time.floor_div(ns, time.SECOND)
@@ -123,15 +143,35 @@ const Zone = struct {
             return null
         }
         const wall = t.unix()
-        const before = self.lookup(wall - 86400).offset
-        const after = self.lookup(wall + 86400).offset
-        // Either offset gives the time t when it is the one in force then;
-        // in a gap neither is, and the one from before is taken.
-        const u1 = wall - before
-        const u2 = wall - after
-        const ok1 = self.lookup(u1).offset == before
-        const ok2 = self.lookup(u2).offset == after
-        const u = if (ok2 and (!ok1 or u2 < u1)) u2 else u1
+        // Every offset the zone has is tried: one that is in force at
+        // wall - offset gives an instant with the local time t, and the
+        // earliest of those is taken. In a gap none is. The offset from
+        // before it lands past the change, where a larger offset holds,
+        // and is in force again that much earlier, before the change.
+        var found = false
+        var u = 0
+        var skipped = false
+        var gap = 0
+        var k = 0
+        while (k < @len(self.types) + 2) {
+            if (self.candidate(k)) |o| {
+                const at = wall - o
+                const there = self.lookup(at).offset
+                if (there == o) {
+                    if (!found or at < u) {
+                        u = at
+                    }
+                    found = true
+                } else if (there > o and self.lookup(at - (there - o)).offset == o and (!skipped or at < gap)) {
+                    gap = at
+                    skipped = true
+                }
+            }
+            k = k + 1
+        }
+        if (!found) {
+            u = if (skipped) gap else wall - self.lookup(wall - 86400).offset
+        }
         return time.from_parts(u, time.floor_mod(t.nano, time.SECOND))
     }
 }
