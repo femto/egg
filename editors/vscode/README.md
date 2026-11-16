@@ -7,7 +7,9 @@ Language support for Egg (`.egg` files).
 - `use cap.io` capability declarations
 - `//` comments, with `expect:` / `panic:` / `error:` test directives
 - Bracket matching, auto-closing, `//` toggle comment, brace indentation
-- Go to definition (F12 / Cmd-click) on functions, locals and parameters
+- Go to definition (F12 / Cmd-click) on functions, types, constants, locals
+  and parameters, into imported files, std and packages (`json.parse` opens
+  the package's source)
 - Hover shows a function's signature or a variable's type
 - Outline and Cmd-Shift-O list the file's functions
 - Errors as you type, with the same codes as `eggc check`
