@@ -1,0 +1,164 @@
+// std/time: the calendar in UTC, RFC 3339 and HTTP dates.
+// expect: 1970-1-1 0:0:0.0 thursday 1
+// expect: 1969-12-31 23:59:59.999999999 wednesday 365
+// expect: 2000-2-29 0:0:0.123 tuesday 60
+// expect: 1677-9-21 0:12:43.145224192 tuesday 264
+// expect: 2262-4-11 23:47:16.854775807 friday 101
+// expect: 9999-12-31 23:59:59.0 friday 365
+// expect: 1-1-1 0:0:0.0 monday 1
+// expect: -1-12-31 0:0:0.0 friday 365
+// expect: 11017 -1 -135140
+// expect: true true
+// expect: true false true 28
+// expect: 1794821405 true
+// expect: 1794821405250000000
+// expect: none
+// expect: false
+// expect: thursday 1 sunday 365 monday 1
+// expect: none
+// expect: none
+// expect: 9223372036854775807
+// expect: true
+// expect: 1970-01-01T00:00:00Z
+// expect: 2026-11-16T09:30:05.25Z
+// expect: 2026-11-16T17:30:05.000000001+08:00
+// expect: 1969-12-31T18:29:59.999999999-05:30
+// expect: 1677-09-21T00:12:43.145224192Z
+// expect: Sun, 06 Nov 1994 08:49:37 GMT
+// expect: Wed, 31 Dec 1969 23:59:59 GMT
+// expect: 0
+// expect: 1794821405250000000
+// expect: 1794821405123456789
+// expect: -1
+// expect: -9223372036854775808
+// expect: none
+// expect: 9223372036854775807
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: 784111777000000000
+// expect: 784111777000000000
+// expect: 3119417377000000000
+// expect: 784111777000000000
+// expect: 784975777000000000
+// expect: 784111777000000000
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+// expect: none
+uses alloc, io
+
+const time = @import("std/time")
+
+fn show(io: Io, n: ?i64) void {
+    if (n) |v| {
+        io.print(v)
+    } else {
+        io.print("none")
+    }
+}
+
+fn date(io: Io, t: time.DateTime) void {
+    io.print(t.year, "-", t.month, "-", t.day, " ", t.hour, ":", t.minute, ":", t.second, ".", t.nano, " ", t.weekday(), " ", t.yearday())
+}
+
+fn rfc(io: Io, a: Allocator, ns: i64, offset: i64) void {
+    var out: Buf(u8) = a.alloc(0, 0)
+    defer a.free(out)
+    time.append_rfc3339(a, &out, ns, offset)
+    io.print(out)
+}
+
+fn http(io: Io, a: Allocator, ns: i64) void {
+    var out: Buf(u8) = a.alloc(0, 0)
+    defer a.free(out)
+    time.append_http_date(a, &out, ns)
+    io.print(out)
+}
+
+fn main(io: Io, a: Allocator) void {
+    date(io, time.utc(0))
+    date(io, time.utc(-1))
+    date(io, time.utc(951782400 * time.SECOND + 123))
+    date(io, time.utc(-9223372036854775807 - 1))
+    date(io, time.utc(9223372036854775807))
+    date(io, time.utc_s(253402300799))
+    date(io, time.utc_s(-62135596800))
+    date(io, time.utc_s(-62167219200 - 86400))
+    io.print(time.epoch_days(2000, 3, 1), " ", time.epoch_days(1969, 12, 31), " ", time.epoch_days(1600, 1, 1))
+    io.print(time.epoch_days(2025, 13, 1) == time.epoch_days(2026, 1, 1), " ", time.epoch_days(2024, 3, 0) == time.epoch_days(2024, 2, 29))
+    io.print(time.is_leap(2000), " ", time.is_leap(1900), " ", time.is_leap(2024), " ", time.days_in_month(2023, 2))
+    const t = time.DateTime{ .year = 2026, .month = 11, .day = 16, .hour = 9, .minute = 30, .second = 5, .nano = 250000000 }
+    io.print(t.unix(), " ", t.valid())
+    show(io, t.unix_ns())
+    show(io, time.DateTime{ .year = 2262, .month = 4, .day = 12, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.unix_ns())
+    io.print(time.DateTime{ .year = 2023, .month = 2, .day = 29, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.valid())
+    // Carried over: 2025-13-01 is 2026-01-01, 2024-01-00 is 2023-12-31,
+    // and hour 24 of 2023-12-31 is 2024-01-01.
+    const c1 = time.DateTime{ .year = 2025, .month = 13, .day = 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }
+    const c2 = time.DateTime{ .year = 2024, .month = 1, .day = 0, .hour = 0, .minute = 0, .second = 0, .nano = 0 }
+    const c3 = time.DateTime{ .year = 2023, .month = 12, .day = 31, .hour = 24, .minute = 0, .second = 0, .nano = 0 }
+    io.print(c1.weekday(), " ", c1.yearday(), " ", c2.weekday(), " ", c2.yearday(), " ", c3.weekday(), " ", c3.yearday())
+    // Too far out to add up: null, not an overflow.
+    show(io, time.DateTime{ .year = 9223372036854775807, .month = 1, .day = 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.unix_ns())
+    show(io, time.DateTime{ .year = 2000, .month = 1, .day = -9223372036854775807 - 1, .hour = 0, .minute = 0, .second = 0, .nano = 0 }.unix_ns())
+    show(io, time.DateTime{ .year = 1970, .month = 1, .day = 1, .hour = 0, .minute = 0, .second = 0, .nano = 9223372036854775807 }.unix_ns())
+    // Every day from 1900 to 2100 goes there and back.
+    var ok = true
+    var d = time.epoch_days(1900, 1, 1)
+    while (d < time.epoch_days(2100, 1, 1)) {
+        const u = time.utc_s(d * 86400 + 86399)
+        ok = ok and u.unix() == d * 86400 + 86399 and u.valid()
+        d = d + 1
+    }
+    io.print(ok)
+    rfc(io, a, 0, 0)
+    rfc(io, a, 1794821405250000000, 0)
+    rfc(io, a, 1794821405000000001, 8 * 3600)
+    rfc(io, a, -1, -(5 * 3600 + 30 * 60))
+    rfc(io, a, -9223372036854775807 - 1, 0)
+    http(io, a, 784111777 * time.SECOND)
+    http(io, a, -1)
+    show(io, time.parse_rfc3339("1970-01-01T08:00:00+08:00"))
+    show(io, time.parse_rfc3339("2026-11-16T09:30:05.25Z"))
+    show(io, time.parse_rfc3339("2026-11-16t09:30:05.1234567899z"))
+    show(io, time.parse_rfc3339("1969-12-31T23:59:59.999999999-00:00"))
+    show(io, time.parse_rfc3339("1677-09-21T00:12:43.145224192Z"))
+    show(io, time.parse_rfc3339("1677-09-21T00:12:43.145224191Z"))
+    show(io, time.parse_rfc3339("2262-04-11T23:47:16.854775807Z"))
+    show(io, time.parse_rfc3339("2262-04-11T23:47:16.854775808Z"))
+    show(io, time.parse_rfc3339("9999-12-31T23:59:59Z"))
+    show(io, time.parse_rfc3339("2023-02-29T00:00:00Z"))
+    show(io, time.parse_rfc3339("2026-11-16 09:30:05Z"))
+    show(io, time.parse_rfc3339("2026-11-16T09:30:05"))
+    show(io, time.parse_rfc3339("2026-11-16T09:30:05.Z"))
+    show(io, time.parse_rfc3339("2026-11-16T09:30:60Z"))
+    show(io, time.parse_rfc3339("2026-11-16T09:30:05+24:00"))
+    show(io, time.parse_rfc3339("2026-11-16T09:30:05+08:00x"))
+    show(io, time.parse_rfc3339("2026-1-16T09:30:05Z"))
+    show(io, time.parse_rfc3339(""))
+    show(io, time.parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sunday, 06-Nov-94 08:49:37 GMT"))
+    show(io, time.parse_http_date("Wednesday, 06-Nov-68 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sun Nov  6 08:49:37 1994"))
+    show(io, time.parse_http_date("Sun Nov 16 08:49:37 1994"))
+    show(io, time.parse_http_date("Mon, 06 Nov 1994 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sun, 06 Nov 1994 08:49:37 UTC"))
+    show(io, time.parse_http_date("Sun, 31 Nov 1994 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sun, 06 Nob 1994 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sunday, 06 Nov 1994 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT "))
+    show(io, time.parse_http_date("Xyz, 06 Nov 1994 08:49:37 GMT"))
+    show(io, time.parse_http_date("Sun"))
+}
