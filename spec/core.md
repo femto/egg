@@ -1911,9 +1911,13 @@ moves a file or directory to a new name, replacing a file already called
 so give a directory a name that is free.
 
 `fs.stat(path) !Stat` tells what a path names, following symbolic links. A
-`Stat` is a plain value with two fields: `kind`, a `FileKind` (`.file`,
-`.dir` or `.other`, such as a device), and `size`, the bytes of a file (0
-for anything else). `fs.real_path(a, path) !Buf(u8)` is the absolute path
+`Stat` is a plain value with three fields: `kind`, a `FileKind` (`.file`,
+`.dir` or `.other`, such as a device), `size`, the bytes of a file (0
+for anything else), and `modified`, when it was last written, in
+nanoseconds since 1970-01-01 UTC as `clock.now()` counts them (as finely as
+the file system keeps it; a time before 1677-09-21T00:12:43.145224192Z or
+after 2262-04-11T23:47:16.854775807Z, which an `i64` of nanoseconds cannot
+hold, is the smallest or largest `i64`). `fs.real_path(a, path) !Buf(u8)` is the absolute path
 with every symbolic link, `.` and `..` resolved, for checking that a path
 stays inside a directory; it fails with `error.NotFound` unless the path
 exists. `Stat`, `FileKind` and `DirReader` are names of the language, as
