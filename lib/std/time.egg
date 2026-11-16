@@ -251,23 +251,47 @@ fn append_rfc3339(a: Allocator, inout out: Buf(u8), ns: i64, offset: i64) void {
 // The instant ns as an HTTP date (RFC 9110's IMF-fixdate) at the end of
 // out: "Sun, 06 Nov 1994 08:49:37 GMT".
 fn append_http_date(a: Allocator, inout out: Buf(u8), ns: i64) void {
+    const d = http_date(ns)
+    a.append_str(&out, d[0..])
+}
+
+// The same 29 bytes as an array, for a header made without a Buf of its
+// own: a.concat("Date: ", time.http_date(ns)[0..], "\r\n"). Years past
+// 9999 do not fit; an i64 of nanoseconds ends in 2262.
+fn http_date(ns: i64) [29]u8 {
     const secs = floor_div(ns, SECOND)
     const t = utc_s(secs)
     const wd = weekday_index(floor_div(secs, 86400))
-    a.append_str(&out, DAY_NAMES[wd * 3..wd * 3 + 3])
-    a.append_str(&out, ", ")
-    append_padded(a, &out, t.day, 2)
-    a.push(&out, ' ')
-    a.append_str(&out, MONTH_NAMES[t.month * 3 - 3..t.month * 3])
-    a.push(&out, ' ')
-    append_padded(a, &out, t.year, 4)
-    a.push(&out, ' ')
-    append_padded(a, &out, t.hour, 2)
-    a.push(&out, ':')
-    append_padded(a, &out, t.minute, 2)
-    a.push(&out, ':')
-    append_padded(a, &out, t.second, 2)
-    a.append_str(&out, " GMT")
+    var d: [29]u8 = @splat(' ')
+    var i = 0
+    while (i < 3) {
+        d[i] = DAY_NAMES[wd * 3 + i]
+        d[8 + i] = MONTH_NAMES[t.month * 3 - 3 + i]
+        i = i + 1
+    }
+    d[3] = ','
+    put_digits(&d, 5, t.day, 2)
+    put_digits(&d, 12, t.year, 4)
+    put_digits(&d, 17, t.hour, 2)
+    d[19] = ':'
+    put_digits(&d, 20, t.minute, 2)
+    d[22] = ':'
+    put_digits(&d, 23, t.second, 2)
+    d[26] = 'G'
+    d[27] = 'M'
+    d[28] = 'T'
+    return d
+}
+
+// n, 0 to 10^width - 1, as width digits at d[at].
+fn put_digits(inout d: [29]u8, at: i64, n: i64, width: i64) void {
+    var v = n
+    var i = width - 1
+    while (i >= 0) {
+        d[at + i] = @as(u8, v % 10) + '0'
+        v = v / 10
+        i = i - 1
+    }
 }
 
 // The n digits of s at i as a number, or -1 if they are not all digits.

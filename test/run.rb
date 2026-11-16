@@ -843,6 +843,10 @@ def check_http_server(dir)
       body = big.split("\r\n\r\n", 2)[1]
       report(status.(big) == "200" && body == blob, "http serves binary data whole", big.bytesize.to_s)
       report(head.("/note.txt?v=1").end_with?("hello\n"), "http ignores the query", "")
+      modified = note[/^Last-Modified: (.*)\r$/, 1].to_s
+      report(note.match?(/^Date: \w{3}, \d\d \w{3} \d{4} \d\d:\d\d:\d\d GMT\r$/) && !modified.empty? && note.include?("ETag: W/\""), "http sends Date, Last-Modified and ETag", note)
+      again = ask.(port, "GET /note.txt HTTP/1.0\r\nIf-Modified-Since: #{modified}\r\n\r\n")
+      report(status.(again) == "304" && again.end_with?("\r\n\r\n"), "http 304 for If-Modified-Since", again)
       report(status.(head.("/missing")) == "404", "http 404", "")
       headed = ask.(port, "HEAD /note.txt HTTP/1.0\r\n\r\n")
       report(status.(headed) == "200" && headed.include?("Content-Length: 6\r\n") && headed.end_with?("\r\n\r\n"), "http answers HEAD with the length and no body", headed)
