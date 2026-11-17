@@ -646,7 +646,12 @@ module Egg
         t = arm.names&.length == 1 ? member.(arm.names[0]) : nil
         if !arm.capture.nil? && arm.capture != "_" && !t.nil? && owned?(t)
           cap = arm.capture
-          if !path.nil? && kind != :bparam && kind != :borrowed && probe_moves?(arm, cap, t, path)
+          if subject.is_a?(Call) || subject.is_a?(MethodCall) || subject.is_a?(Builtin)
+            # A call's result, which nothing else owns: the arm owns what it
+            # captures. (An element has no path either, but its buffer still
+            # owns it: its capture only borrows, below.)
+            pre = -> { declare(cap, :local, arm.line, arm.col, t) }
+          elsif !path.nil? && kind != :bparam && kind != :borrowed && probe_moves?(arm, cap, t, path)
             pre = lambda do
               use(path, arm.line, arm.col, false)
               declare(cap, :local, arm.line, arm.col, t)

@@ -1,0 +1,31 @@
+// error: E133 @13
+// error: E133 @20
+// error: E133 @27
+// error: E133 @27
+uses alloc, io, thread
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 1)
+    const tx = rx.sender()
+    switch (tx.try_send(a.concat("x", ""))) {
+        .sent => {}
+        // The buffer would stay in the temporary: it must be captured.
+        .full => {}
+        .closed => |b| {
+            a.free(b)
+        }
+    }
+    switch (tx.try_send(a.concat("x", ""))) {
+        .sent => {}
+        .full => |_| {}
+        .closed => |b| {
+            a.free(b)
+        }
+    }
+    switch (tx.try_send(a.concat("x", ""))) {
+        .sent => {}
+        else => {}
+    }
+    tx.close()
+    rx.close()
+}

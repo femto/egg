@@ -1,0 +1,19 @@
+// error: E135 @10
+uses alloc, io, thread
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 1)
+    const tx = rx.sender()
+    // Captured, the arm owns the buffer, and must free it or pass it on.
+    switch (tx.try_send(a.concat("x", ""))) {
+        .sent => {}
+        .full => |b| {
+            io.print(b)
+        }
+        .closed => |b| {
+            a.free(b)
+        }
+    }
+    tx.close()
+    rx.close()
+}

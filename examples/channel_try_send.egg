@@ -1,0 +1,119 @@
+// tx.try_send(v) sends without waiting: .sent, or v comes back in .full
+// (no room now) or .closed (every receiver has closed), so nothing is
+// lost and nothing waits: a queue that drops when it is full. A switch can
+// take the result as it is, as long as every owned payload is captured.
+// expect: 0 sent
+// expect: 1 sent
+// expect: 20 full
+// expect: got 0
+// expect: got 10
+// expect: kept 0, dropped 3
+// expect: closed, back: late
+// expect: 1 full: nobody waits
+// expect: ping
+// expect: text 1
+// expect: took 7
+uses alloc, io, thread
+
+const Msg = union(enum) { text: Buf(u8), ping }
+
+fn make(a: Allocator, n: i64) Msg {
+    if (n == 0) {
+        return .ping
+    }
+    return Msg{ .text = a.int_str(n) }
+}
+
+fn plain(io: Io, threads: Threads) void {
+    const rx = threads.channel(i64, 2)
+    const tx = rx.sender()
+    var i = 0
+    while (i < 3) {
+        const r: TrySend(i64) = tx.try_send(i * 10)
+        switch (r) {
+            .sent => { io.print(i, " sent") }
+            .full => |v| { io.print(v, " full") }
+            .closed => |v| { io.print(v, " closed") }
+        }
+        i = i + 1
+    }
+    tx.close()
+    while (rx.recv()) |v| {
+        io.print("got ", v)
+    }
+    rx.close()
+}
+
+fn buffers(io: Io, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(Buf(u8), 1)
+    const tx = rx.sender()
+    var dropped = 0
+    var i = 0
+    while (i < 4) {
+        switch (tx.try_send(a.int_str(i))) {
+            .sent => {}
+            .full => |back| {
+                dropped = dropped + 1
+                a.free(back)
+            }
+            .closed => |back| { a.free(back) }
+        }
+        i = i + 1
+    }
+    const first = rx.recv() orelse a.concat("none", "")
+    io.print("kept ", first, ", dropped ", dropped)
+    a.free(first)
+    rx.close()
+    // Every receiver is gone: the value comes back instead of a panic.
+    switch (tx.try_send(a.concat("late", ""))) {
+        .sent => { io.print("sent late") }
+        .full => |back| { a.free(back) }
+        .closed => |back| {
+            io.print("closed, back: ", back)
+            a.free(back)
+        }
+    }
+    tx.close()
+}
+
+// With room for none, a value goes only to a receiver already waiting.
+fn rendezvous(io: Io, threads: Threads) void {
+    const rx = threads.channel(i64, 0)
+    const tx = rx.sender()
+    switch (tx.try_send(1)) {
+        .sent => { io.print("sent") }
+        .full => |v| { io.print(v, " full: nobody waits") }
+        .closed => |v| { io.print(v, " closed") }
+    }
+    tx.close()
+    rx.close()
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    plain(io, threads)
+    buffers(io, a, threads)
+    rendezvous(io, threads)
+    // Any owned union can be switched on as a call's result the same way.
+    var n = 0
+    while (n < 2) {
+        switch (make(a, n)) {
+            .text => |t| {
+                io.print("text ", t)
+                a.free(t)
+            }
+            .ping => { io.print("ping") }
+        }
+        n = n + 1
+    }
+    // An element's payload comes out with @replace, a result like any other.
+    var box: Buf(Msg) = .empty
+    defer a.free(box)
+    a.push(&box, make(a, 7))
+    switch (@replace(&box[0], .ping)) {
+        .text => |t| {
+            io.print("took ", t)
+            a.free(t)
+        }
+        .ping => {}
+    }
+}
