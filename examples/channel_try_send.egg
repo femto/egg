@@ -12,6 +12,7 @@
 // expect: 1 full: nobody waits
 // expect: ping
 // expect: text 1
+// expect: took 7
 uses alloc, io, thread
 
 const Msg = union(enum) { text: Buf(u8), ping }
@@ -103,5 +104,16 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
             .ping => { io.print("ping") }
         }
         n = n + 1
+    }
+    // An element's payload comes out with @replace, a result like any other.
+    var box: Buf(Msg) = .empty
+    defer a.free(box)
+    a.push(&box, make(a, 7))
+    switch (@replace(&box[0], .ping)) {
+        .text => |t| {
+            io.print("took ", t)
+            a.free(t)
+        }
+        .ping => {}
     }
 }

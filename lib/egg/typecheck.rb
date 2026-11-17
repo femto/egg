@@ -1707,9 +1707,15 @@ module Egg
       end
     end
 
-    # A switch on an owned union that is no place (a call's result).
+    # A switch on an owned union that a call has just made, which nothing
+    # else owns: a function's or method's result, or @replace's. A place
+    # that is not followed (an element, a field of a temporary) is not one.
     def temp_union_switch?(subject, t)
-      owned?(t) && @types[t]&.kind == :union && !owned_place?(subject) && !subject.is_a?(IfExpr)
+      owned?(t) && @types[t]&.kind == :union && fresh_value?(subject)
+    end
+
+    def fresh_value?(e)
+      e.is_a?(Call) || e.is_a?(MethodCall) || e.is_a?(Builtin)
     end
 
     # Each member that holds something owned needs an arm of its own that

@@ -2815,10 +2815,12 @@ payload owns nothing (`.ping`, which may also fill `a.alloc`). `a.free(m)`
 frees the payload of the member that is live. Only that member is live, so
 the union is followed as one value: it is moved whole or not at all.
 
-A `switch` over an owned union reads it from a place, or takes a
-temporary, such as a call's result (`switch (tx.try_send(v))`), when each
-member whose payload is owned has an arm of its own that captures it:
-that arm owns the capture and gives it away (E135). A payload an arm
+A `switch` over an owned union reads it from a place, or takes one a
+call has just made (`switch (tx.try_send(v))`, `switch (@replace(&xs[i],
+.ping))`) when each member whose payload is owned has an arm of its own
+that captures it: that arm owns the capture and gives it away (E135).
+An element is a place, not such a result: its buffer still owns the
+payload, so a capture of it only borrows (E139 to move it). A payload an arm
 leaves uncaptured (an `else`, `|_|`, or an arm for several members) would
 stay in the temporary and never be freed: E133. Each capture borrows the payload, unless its arm moves the capture
 or any part of it: then that arm **takes the payload out**, which moves

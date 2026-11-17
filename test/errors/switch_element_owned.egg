@@ -1,0 +1,19 @@
+// error: E139 @15
+uses alloc, io
+
+const Msg = union(enum) { text: Buf(u8), ping }
+
+// An element is no temporary: its buffer still owns the payload, so the
+// capture only borrows it (taking it would free it twice). @replace takes
+// it out first.
+fn main(io: Io, a: Allocator) void {
+    var xs: Buf(Msg) = .empty
+    defer a.free(xs)
+    a.push(&xs, Msg{ .text = a.concat("hi", "") })
+    switch (xs[0]) {
+        .text => |t| {
+            a.free(t)
+        }
+        .ping => {}
+    }
+}
