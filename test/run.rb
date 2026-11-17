@@ -420,7 +420,12 @@ def check_fs_modified(dir)
     File.write(path, "x")
     File.utime(dates[name], dates[name], path)
     kept = File.mtime(path)
-    [name, (kept.to_i * 1_000_000_000 + kept.nsec).clamp(-2**63, 2**63 - 1)]
+    ns = kept.to_i * 1_000_000_000 + kept.nsec
+    # APFS keeps an i64 of nanoseconds and holds 1600 to its smallest,
+    # which Ruby's File.mtime reads a few seconds off (-9223372033 s +
+    # 440191488 ns, where stat says -2^63 ns): that close, it is the end.
+    ns = -2**63 if ns < -2**63 + 10_000_000_000
+    [name, ns.clamp(-2**63, 2**63 - 1)]
   end
   check_program("fs_modified_range", <<~EGG, work)
     // expect: #{want["now.txt"]}
