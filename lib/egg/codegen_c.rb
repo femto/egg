@@ -143,7 +143,7 @@ module Egg
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_kind egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_dir_next egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
-                      egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_recv egg_chan_recv_for
+                      egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_try_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
@@ -1705,6 +1705,18 @@ module Egg
             if (w.state == 2) egg_panic("send on a closed channel");
         }
       C
+      # Without waiting: 0 the value went (to a waiting receiver or into
+      # the ring), 1 no room for it now, 2 every receiver has closed.
+      # TrySend(T)'s tags, in that order.
+      "egg_chan_try_send" => <<~C,
+        static int32_t egg_chan_try_send(void *v, const void *value) {
+            egg_chan *c = (egg_chan *)v;
+            EGG_CHAN_LOCK(c);
+            int32_t r = !c->open ? 2 : egg_chan_put(c, value, NULL, 0) == 1 ? 0 : 1;
+            EGG_CHAN_UNLOCK(c);
+            return r;
+        }
+      C
       "egg_chan_recv" => <<~C,
         static bool egg_chan_recv(void *v, void *out) {
             egg_chan *c = (egg_chan *)v;
@@ -3075,7 +3087,7 @@ module Egg
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
-                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_queue" => ["egg_chan"], "egg_chan_line" => %w[egg_chan egg_chan_queue], "egg_chan_get" => ["egg_chan_line"], "egg_chan_put" => ["egg_chan_line"], "egg_chan_line_close" => ["egg_chan"], "egg_chan_wait" => %w[egg_chan egg_chan_queue], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_recv" => %w[egg_chan_get egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_get egg_chan_wait],
+                    "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_queue" => ["egg_chan"], "egg_chan_line" => %w[egg_chan egg_chan_queue], "egg_chan_get" => ["egg_chan_line"], "egg_chan_put" => ["egg_chan_line"], "egg_chan_line_close" => ["egg_chan"], "egg_chan_wait" => %w[egg_chan egg_chan_queue], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_try_send" => ["egg_chan_put"], "egg_chan_recv" => %w[egg_chan_get egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_get egg_chan_wait],
                     "egg_chan_tx_close" => %w[egg_chan_line_close egg_chan_free], "egg_chan_rx_close" => %w[egg_chan_line_close egg_chan_free],
                     "egg_select" => %w[egg_chan_get egg_chan_put egg_chan_queue], "egg_net_recv" => ["egg_net_base"],
                     "egg_net_timeout" => %w[egg_net_base egg_net_last], "egg_sockaddr_port" => ["egg_net_base"],
@@ -4597,6 +4609,15 @@ module Egg
         elem = @types[obj.ty].elem
         v = hoist(coerce(expr(args[0]), args[0].ty, elem), elem)
         "#{helper('egg_chan_send')}(#{c}, &#{v})"
+      when "Sender.try_send"
+        # The value comes back in .full or .closed when it did not go.
+        elem = @types[obj.ty].elem
+        v = hoist(coerce(expr(args[0]), args[0].ty, elem), elem)
+        r = tmp
+        line("#{c_type(ret)} #{r};")
+        line("#{r}.tag = #{helper('egg_chan_try_send')}(#{c}, &#{v});")
+        line("if (#{r}.tag == 1) #{r}.u.m_full = #{v}; else if (#{r}.tag == 2) #{r}.u.m_closed = #{v};")
+        r
       when "Sender.clone", "Receiver.sender"
         hoist("(#{c_type(ret)}){ #{helper('egg_chan_sender')}(#{c}) }", ret)
       when "Receiver.clone"

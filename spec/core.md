@@ -2152,7 +2152,25 @@ sender comes from it. Both ends are owned, and only `Threads` makes them.
 | Type | Methods |
 | --- | --- |
 | `Receiver(T)` | `rx.recv() ?T`: the next value, waiting for one; null when every sender has closed and nothing is left; `rx.recv_timeout(ms) ?T`: the same, but waiting at most ms milliseconds, and null when none came in time (ms is an `i64`; 0 does not wait; a negative ms panics: `negative timeout`); `rx.sender() Sender(T)`; `rx.clone() Receiver(T)`; `rx.close()` |
-| `Sender(T)` | `tx.send(v)`: takes v, waiting while the channel is full (and for the receiver, with n of 0); `tx.clone() Sender(T)`; `tx.close()` |
+| `Sender(T)` | `tx.send(v)`: takes v, waiting while the channel is full (and for the receiver, with n of 0); `tx.try_send(v) TrySend(T)`: the same without waiting, see below; `tx.clone() Sender(T)`; `tx.close()` |
+
+`tx.try_send(v)` never waits: v goes to a receiver already waiting or
+into the channel's room, or it comes back. Its result is a `TrySend(T)`,
+a union of `.sent` (v went), `.full` with v (no room now, and with n of 0
+no receiver waiting) and `.closed` with v (every `Receiver` has closed,
+where `send` panics). A switch on it handles all three, and gets v back
+whenever it did not go: a queue that drops what it has no room for, such
+as one of spans or log lines, frees it there.
+
+```
+switch (tx.try_send(line)) {
+    .sent => {}
+    .full, .closed => |back| { ... }   // E127: one member per capture
+}
+```
+
+`examples/channel_try_send.egg` is the tested version, with plain and
+owned values, a channel with no room and one whose receivers closed.
 
 A value sent moves, so an owned one still has one owner. Values from one
 sender arrive in order. Threads waiting in `send` take their turns in the order
@@ -2797,8 +2815,12 @@ payload owns nothing (`.ping`, which may also fill `a.alloc`). `a.free(m)`
 frees the payload of the member that is live. Only that member is live, so
 the union is followed as one value: it is moved whole or not at all.
 
-A `switch` over an owned union reads it from a place (a temporary is
-E133). Each capture borrows the payload, unless its arm moves the capture
+A `switch` over an owned union reads it from a place, or takes a
+temporary, such as a call's result (`switch (tx.try_send(v))`), when each
+member whose payload is owned has an arm of its own that captures it:
+that arm owns the capture and gives it away (E135). A payload an arm
+leaves uncaptured (an `else`, `|_|`, or an arm for several members) would
+stay in the temporary and never be freed: E133. Each capture borrows the payload, unless its arm moves the capture
 or any part of it: then that arm **takes the payload out**, which moves
 the union, and the capture is owned there and must be given away like any
 local (E135). An arm for members that own nothing has nothing to free, so

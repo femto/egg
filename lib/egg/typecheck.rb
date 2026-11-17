@@ -158,7 +158,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver]).freeze
+    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -1078,6 +1078,7 @@ module Egg
         return "error" if args.include?("error")
         return buf_type(args, line, col) if t.name == "Buf"
         return chan_type(t.name, args, line, col) if %w[Sender Receiver].include?(t.name)
+        return try_send_type(args, line, col) if t.name == "TrySend"
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
         inner = resolve_type(t.inner, line, col)
@@ -1116,6 +1117,26 @@ module Egg
     # method of a type function's struct), where T may be any type?
     def generic_instance?
       !@current.nil? && !@current.tenv.nil? && !@current.tenv.empty?
+    end
+
+    # TrySend(T), what tx.try_send(v) did with v: .sent, or .full and
+    # .closed, which give it back. A union of its own for each T, owned
+    # when T is, so a switch must take v back on both.
+    def try_send_type(args, line, col)
+      if args.length != 1
+        err("E104", "TrySend takes one type argument, but #{args.length} were given", line, col)
+        return "error"
+      end
+      t = args[0]
+      return "error" if t == "error"
+      return value_type_error(t, "a channel's value", line, col) unless storable?(t)
+      return owned_place_error(t, "a channel's value", line, col) if owned_err?(t)
+      canon = "TrySend(#{t})"
+      return canon if @types.key?(canon)
+      info = register(canon, :union, line, col)
+      info.fields = [["sent", "void", line], ["full", t, line], ["closed", t, line]]
+      info.mod = ""
+      canon
     end
 
     # Sender(T), Receiver(T): the two ends of a channel, owned. Types of
@@ -1686,11 +1707,36 @@ module Egg
       end
     end
 
+    # A switch on an owned union that is no place (a call's result).
+    def temp_union_switch?(subject, t)
+      owned?(t) && @types[t]&.kind == :union && !owned_place?(subject) && !subject.is_a?(IfExpr)
+    end
+
+    # Each member that holds something owned needs an arm of its own that
+    # captures it: anything else would leave it in the temporary, unfreed.
+    def check_temp_switch(t, arms)
+      @types[t].fields.each do |name, ft, _|
+        next if ft == "void" || !owned?(ft)
+        arm = arms.find { |a| !a.names.nil? && a.names.include?(name) } || arms.find { |a| a.names.nil? }
+        next if arm.nil? # a missing member is reported with the others
+        next if arm.names&.length == 1 && !arm.capture.nil? && arm.capture != "_"
+        err("E133", "this #{t} is a temporary: the arm for '.#{name}' must capture its #{ft} (|v|) and free or keep it, or store the #{t} in a variable first", arm.line, arm.col)
+      end
+    end
+
     # switch over an enum or a union: every member handled once, or an else.
     def check_switch(stmt, subject, arms, line, col)
       t = check_expr(subject)
-      # Its arms borrow from it, or move it: it must be a place.
-      check_borrowed(subject, t) if t != "error"
+      # Its arms borrow from it, or move it: it must be a place, but for an
+      # owned union whose every owned payload an arm takes over, which then
+      # owns it: switch (tx.try_send(v)) { .full => |back| ... }.
+      if t != "error"
+        if temp_union_switch?(subject, t)
+          check_temp_switch(t, arms)
+        else
+          check_borrowed(subject, t)
+        end
+      end
       return check_error_switch(stmt, arms, line, col) if t == "anyerror"
       info = @types[t]
       if t != "error" && (info.nil? || (info.kind != :enum && info.kind != :union))
@@ -2858,7 +2904,7 @@ module Egg
       chan_type("Receiver", [t], line, col)
     end
 
-    CHAN_METHODS = { "Sender" => %w[send clone close], "Receiver" => %w[recv recv_timeout sender clone close] }.freeze
+    CHAN_METHODS = { "Sender" => %w[send try_send clone close], "Receiver" => %w[recv recv_timeout sender clone close] }.freeze
 
     def check_chan_method(e, t, name, args, line, col)
       kind = t[0...t.index("(")]
@@ -2868,7 +2914,7 @@ module Egg
         err("E122", "#{kind} has no method '#{name}' (methods: #{CHAN_METHODS[kind].join(', ')})", line, col)
         return check_all_error(args)
       end
-      params = { "send" => [[elem, "sink"]], "recv_timeout" => [["i64", nil]] }.fetch(name, [])
+      params = { "send" => [[elem, "sink"]], "try_send" => [[elem, "sink"]], "recv_timeout" => [["i64", nil]] }.fetch(name, [])
       check_args(Sig.new(name, params, "void"), args, name, line, col)
       e.info[:cap_method] = "#{kind}.#{name}"
       e.info[:args] = args
@@ -2876,6 +2922,7 @@ module Egg
       case name
       when "send", "close" then "void"
       when "recv", "recv_timeout" then opt_type(elem)
+      when "try_send" then try_send_type([elem], line, col)
       when "clone" then t
       else chan_type("Sender", [elem], line, col)
       end
