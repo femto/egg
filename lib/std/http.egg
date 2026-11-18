@@ -1369,9 +1369,19 @@ fn read_response(c: TcpConn, a: Allocator, inout inbox: Buf(u8), max_body: i64, 
     return error.BadResponse
 }
 
-// One request on a connection of its own, closed after the response.
-// gzip: ask for gzip and decompress it.
-fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options, gzip: bool) !Response {
+// One request on a connection of its own, closed after the response,
+// without following a redirect: a 3xx is returned as it is. Like fetch,
+// it asks for gzip and decompresses it when opts.decompress is set and
+// the caller's headers say nothing of Accept-Encoding. (tls/https calls
+// it for its http:// requests, so its signature stays as it was.)
+fn fetch_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options) !Response {
+    return request_once(net, a, method, url, headers, body, opts, opts.decompress and !names(headers, "Accept-Encoding"))
+}
+
+// fetch_once with gzip decided by the caller: fetch decides it once from
+// the first request's headers, which a redirect to another server goes
+// without.
+fn request_once(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: []u8, opts: Options, gzip: bool) !Response {
     const u = try parse_url(url)
     const c = try net.tcp_connect(url_host(url, u), u.port)
     defer c.close()
@@ -1482,7 +1492,7 @@ fn fetch(net: Net, a: Allocator, method: []u8, url: []u8, headers: []u8, body: [
     const gzip = opts.decompress and !names(headers, "Accept-Encoding")
     while (true) {
         const own = if (same_origin(url, current)) headers else ""
-        const resp = try fetch_once(net, a, if (get) "GET" else method, current, own, if (get) "" else body, opts, gzip)
+        const resp = try request_once(net, a, if (get) "GET" else method, current, own, if (get) "" else body, opts, gzip)
         if (hops >= opts.redirects or !is_redirect(resp.status)) {
             return resp
         }

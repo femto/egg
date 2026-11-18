@@ -39,6 +39,7 @@
 // expect: GET 302 [] location=/plain
 // expect: HEAD 200 [] location=-
 // expect: GET 200 [hello] location=-
+// expect: once 302 location=/plain
 // expect: GET 200 [in dir] location=-
 // expect: POST 200 [GET []] location=-
 // expect: PUT 200 [PUT [data]] location=-
@@ -258,6 +259,11 @@ fn main(io: Io, net: Net, a: Allocator, threads: Threads) !void {
     const redirect = a.concat(base, "/redirect")
     defer a.free(redirect)
     get(io, net, a, "GET", redirect, "", 3)
+    // fetch_once makes one request and follows nothing (tls/https calls
+    // it for http:// URLs with these seven arguments).
+    const once = try http.fetch_once(net, a, "GET", redirect, "", "", http.options())
+    io.print("once ", once.status, " location=", once.header("Location") orelse "-")
+    once.deinit(a)
     const dir = a.concat(base, "/dir/a")
     defer a.free(dir)
     get(io, net, a, "GET", dir, "", 3)
