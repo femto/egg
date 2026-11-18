@@ -4132,7 +4132,9 @@ module Egg
     def gen_select(stmt)
       entries = []
       ms = nil
-      took = {}
+      # Keyed by the arms themselves: an AST node's hash walks what its
+      # info reaches, the functions an arm calls among it (as in #91).
+      took = {}.compare_by_identity
       stmt.arms.each do |arm|
         case arm.kind
         when :recv
