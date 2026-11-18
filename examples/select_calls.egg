@@ -1,0 +1,43 @@
+// A select whose arms call a function that reaches a lot of code (here
+// all of std/http's client): compiling it once hashed the arms, and a
+// call's signature holds the function it calls, so that walked all the
+// code it reaches, over and over. Nothing is fetched here.
+// expect: 3
+// expect: done
+uses alloc, io, net, thread
+
+const http = @import("std/http")
+
+fn fetch(net: Net, a: Allocator, url: []u8) i64 {
+    const r = http.fetch(net, a, "GET", url, "", "", http.options()) catch {
+        return -1
+    }
+    const status = r.status
+    r.deinit(a)
+    return status
+}
+
+fn main(io: Io, net: Net, a: Allocator, threads: Threads) void {
+    const rx = threads.channel(i64, 1)
+    const tx = rx.sender()
+    tx.send(3)
+    tx.close()
+    while (true) {
+        select {
+            rx => |v| {
+                io.print(v)
+                if (v < 0) {
+                    io.print(fetch(net, a, "http://127.0.0.1:1/"))
+                }
+            }
+            timeout(1000) => {
+                io.print(fetch(net, a, "http://127.0.0.1:1/"))
+            }
+            closed => {
+                break
+            }
+        }
+    }
+    io.print("done")
+    rx.close()
+}
