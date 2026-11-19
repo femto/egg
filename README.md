@@ -347,10 +347,9 @@ v3 (memory without GC, and what realistic programs needed):
   read (`parse_rfc3339`, `parse_http_date`, which takes all three forms
   RFC 9110 names). Time zones are the package
   [egg-timezone](https://github.com/femto/egg-timezone) (`clutch add
-  timezone --git https://github.com/femto/egg-timezone`): the system's
-  TZif files, the local zone, POSIX TZ rules and fixed offsets; Windows
-  has no zone files, so there the local zone is UTC unless `TZ` holds a
-  POSIX rule.
+  timezone`): the system's TZif files, the local zone, POSIX TZ rules and
+  fixed offsets; Windows has no zone files, so there the local zone is
+  UTC unless `TZ` holds a POSIX rule.
   `std/flate` is DEFLATE in Egg, at zlib's levels 0 to 9 (lazy matching,
   and each block stored, fixed or dynamic Huffman, whichever is smaller),
   raw (`deflate`, `inflate`) or wrapped (`gzip_compress` and
