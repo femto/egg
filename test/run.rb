@@ -191,6 +191,16 @@ def eggc_command
   ENV["EGGC"] ? [env_command(ENV["EGGC"])] : [RbConfig.ruby, File.join(ROOT, "bin", "eggc")]
 end
 
+# The standard library the eggc command uses: a native one at
+# PREFIX/bin/eggc has PREFIX/lib/std when there is one (lib/egg/home.rb).
+def eggc_std_root
+  if ENV["EGGC"]
+    d = File.join(File.dirname(File.dirname(File.expand_path(env_command(ENV["EGGC"])))), "lib", "std")
+    return d if File.directory?(d)
+  end
+  Egg::STD_ROOT
+end
+
 # A command given as a path is taken from the repository's root (the tests
 # run it in other directories); a bare name is looked up on PATH.
 def env_command(cmd)
@@ -1496,7 +1506,8 @@ def check_lsp_cross_file
   report(hover.(3) == "fn show(io: Io, r: shapes.Rect) void  // uses io", "lsp hover on an imported function shows its capabilities", hover.(3).inspect)
   report(hover.(4) == "const shapes = @import(\"lib/shapes.egg\")", "lsp hover on an import", hover.(4).inspect)
   std = replies.dig(5, "result")
-  report(std && File.realpath(lsp_path(std["uri"])) == File.realpath(File.join(Egg::STD_ROOT, "text.egg")) && std.dig("range", "start", "line") == File.readlines(File.join(Egg::STD_ROOT, "text.egg")).index { |l| l.start_with?("fn find(") },
+  text = File.join(eggc_std_root, "text.egg")
+  report(std && File.realpath(lsp_path(std["uri"])) == File.realpath(text) && std.dig("range", "start", "line") == File.readlines(text).index { |l| l.start_with?("fn find(") },
          "lsp definition in std", replies[5].inspect)
   report(replies.dig(6, "result", "range", "start") == { "line" => 3, "character" => 6 }, "lsp definition of a top-level constant", replies[6].inspect)
   report(replies.key?(7) && replies.dig(7, "result").nil?, "lsp an imported enum's member has no definition", replies[7].inspect)
