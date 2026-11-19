@@ -194,7 +194,9 @@ end
 # The standard library the eggc command uses: a native one at
 # PREFIX/bin/eggc has PREFIX/lib/std when there is one. A bare name is
 # found on PATH and links are followed, as eggc finds itself (lib/egg/home.rb).
+# EGG_STD, when set, comes first for it too (lib/egg/loader.rb).
 def eggc_std_root
+  return Egg::STD_ROOT unless ENV["EGG_STD"].to_s.empty?
   if ENV["EGGC"]
     exe = env_command(ENV["EGGC"])
     unless exe.include?("/") || exe.include?("\\")
