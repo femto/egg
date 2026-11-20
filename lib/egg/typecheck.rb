@@ -4178,7 +4178,9 @@ module Egg
         err("E103", "@errorName needs an anyerror (error.X, or e in catch |e|), found #{t}", a.line, a.col) unless t == "anyerror" || t == "error"
         "str"
       when "splat"
-        info = expected.nil? ? nil : @types[expected]
+        # The array beneath any ! and ? levels; the value is wrapped after.
+        target = value_target(expected)
+        info = target.nil? ? nil : @types[target]
         if info.nil? || info.kind != :array
           err("E115", "cannot infer the array type for @splat; give the variable a type such as [8]i64", line, col) unless expected == "error"
           check_expr(a)
@@ -4187,7 +4189,7 @@ module Egg
         vt = check_expr(a, info.elem)
         expect_type(info.elem, vt, a)
         check_empty_fill(a, "@splat") if vt == info.elem
-        expected
+        target
       when "replace", "take"
         check_swap(name, args, line, col)
       when "secureZero"

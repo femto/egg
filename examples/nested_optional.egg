@@ -19,6 +19,7 @@
 // expect: opt ptr other
 // expect: 5 6
 // expect: 5 4 0
+// expect: 6 7
 uses io, alloc
 allow unsafe
 
@@ -159,5 +160,9 @@ fn main(io: Io, a: Allocator) void {
     defer a.free(opts)
     a.push(&opts, null)
     io.print((filled[1] orelse 0) orelse 0, " ", opts[0] orelse 0, " ", opts[2] orelse 0)
+    // @splat fills the array beneath the optional levels.
+    const arr: ?[3]i64 = @splat(6)
+    const arr2: ??[3]i64 = @splat(7)
+    io.print((arr orelse [3]i64{ 0, 0, 0 })[2], " ", ((arr2 orelse null) orelse [3]i64{ 0, 0, 0 })[1])
     n = 6
 }
