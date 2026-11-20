@@ -18,6 +18,7 @@
 // expect: 5
 // expect: opt ptr other
 // expect: 5 6
+// expect: 5 4 0
 uses io, alloc
 allow unsafe
 
@@ -151,5 +152,12 @@ fn main(io: Io, a: Allocator) void {
     const first_add = add(&p.*, reset(&p))
     p = a.create(@as(i64, 6))
     io.print(first_add, " ", add(&p.*, reset(&p)))
+
+    // A fill value is wrapped into the element type, as in a declaration.
+    const filled: [2]??i8 = @splat(5)
+    var opts: Buf(?i8) = a.alloc(2, 4)
+    defer a.free(opts)
+    a.push(&opts, null)
+    io.print((filled[1] orelse 0) orelse 0, " ", opts[0] orelse 0, " ", opts[2] orelse 0)
     n = 6
 }

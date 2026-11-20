@@ -3001,7 +3001,8 @@ module Egg
           return value_type_error(at, "a Buf element", a.line, a.col) unless storable?(at)
           return owned_place_error(at, "a Buf element", a.line, a.col) if owned_err?(at)
           check_empty_fill(a, "a.#{name}") unless name == "push"
-          ret = buf_type([at], a.line, a.col) if name == "alloc"
+          # Buf(?i8) from a.alloc(n, 4) where one is expected.
+          ret = buf_type([elem.nil? ? at : elem], a.line, a.col) if name == "alloc"
         elsif pt == "buffer"
           at = check_expr(a)
           if at != "error" && !owned?(at) && generic_instance? && storable?(at)

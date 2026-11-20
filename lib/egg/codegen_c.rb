@@ -5049,7 +5049,7 @@ module Egg
                line("#{b}.len = #{codes[0]};")
                line("#{b}.ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(NULL, #{b}.len, sizeof(#{c_type(elem)}));")
                line("#{b}.cap = #{b}.len;")
-               v = hoist(codes[1], elem)
+               v = hoist(coerce(codes[1], args[1].ty, elem), elem)
                i = tmp
                line("for (int64_t #{i} = 0; #{i} < #{b}.len; #{i}++) #{b}.ptr[#{i}] = #{v};")
                b
@@ -5259,7 +5259,7 @@ module Egg
         "((void)0)"
       when "splat"
         info = @types[e.ty]
-        v = hoist(expr(a), info.elem)
+        v = hoist(coerce(expr(a), a.ty, info.elem), info.elem)
         out = tmp
         i = tmp
         line("#{c_type(e.ty)} #{out};")
