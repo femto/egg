@@ -1,0 +1,23 @@
+// error: E155 @16
+// error: E155 @17
+// error: E155 @18
+uses alloc, net, thread
+
+const Wrap = struct { tx: Sender(i64) }
+
+const Db = owned struct {
+    n: i64
+
+    fn deinit(sink self: Db) void {
+        @forget(self)
+    }
+}
+
+fn keep(s: Shared(Db)) void {}
+fn conn(s: Shared(TcpConn)) void {}
+fn wrapped(s: Shared(Wrap)) void {}
+
+fn main(threads: Threads) void {
+    const s = threads.share(1)
+    s.close()
+}

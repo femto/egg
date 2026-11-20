@@ -914,6 +914,12 @@ module Egg
         end
       # info[:args]: the runtime arguments, without a generic call's types.
       in Call[args:, info:] then walk_args(info&.[](:args) || args, info)
+      in MethodCall[obj:, line:, col:] if @checker.shared_get?(e)
+        # s.get() lends the shared value: it may be read, not moved.
+        if !borrow && owned?(e.ty)
+          err("E139", "'#{place_text(obj)}.get()' only lends the shared #{e.ty}; it cannot be moved. Copy it with #{place_text(obj)}.copy(a)", line, col)
+        end
+        walk(obj, true)
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
