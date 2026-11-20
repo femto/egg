@@ -6,7 +6,9 @@
 // const z = try zone.load(fs, a, "America/New_York")
 // defer a.free(z)
 // z.at(ns) is the date and time there; z.offset(ns) the seconds east of
-// UTC, for time.append_rfc3339; z.instant(t) the instant of a local time.
+// UTC, for time.append_rfc3339 (RFC 3339 goes to ±23:59, so a wider
+// offset is better written in UTC); z.instant(t) the instant of a local
+// time.
 uses alloc, args, fs
 
 const time = @import("std/time")
@@ -209,7 +211,9 @@ fn rule_type(r: Rule, secs: i64) ZoneType {
     }
     // The last change at or before secs, of the year as standard time has
     // it and the years around it, since a rule's time may move a change
-    // into the year before or after ("M1.1.0/-1"). The start is given in
+    // into the year before or after ("M1.1.0/-1"), and both changes of the
+    // year before into this one ("J365/167,J364/167"), leaving the year
+    // before that's in force on January 1st. The start is given in
     // standard time, the end in daylight saving time; where an end and the
     // next start meet, as in a rule for daylight saving time all year, the
     // start wins.
@@ -217,7 +221,7 @@ fn rule_type(r: Rule, secs: i64) ZoneType {
     var last = 0
     var in_dst = false
     var found = false
-    var y = year - 1
+    var y = year - 2
     while (y <= year + 1) {
         const end = rule_day(r.end, y) - r.dst.offset
         if (end <= secs and (!found or end > last)) {
@@ -250,7 +254,7 @@ fn rule_wall_type(r: Rule, wall: i64) ZoneType {
     var last = 0
     var in_dst = false
     var found = false
-    var y = year - 1
+    var y = year - 2
     while (y <= year + 1) {
         var start = rule_day(r.start, y)
         var end = rule_day(r.end, y)
@@ -471,7 +475,9 @@ fn be(data: []u8, i: i64, n: i64) i64 {
 
 // A zone from the bytes of a TZif file (RFC 8536, versions 1 to 4), as
 // /usr/share/zoneinfo holds them; error.BadZone if data is not one. Leap
-// seconds in it are ignored, as everywhere in std/time.
+// seconds are not counted, as everywhere in std/time: in a file with leap
+// records ("right/UTC"), whose times count them, the changes are moved to
+// the instants they are without them.
 fn parse_tzif(a: Allocator, data: []u8) !Zone {
     if (@len(data) < 44 or data[0..4] != "TZif") {
         return error.BadZone
@@ -535,9 +541,33 @@ fn parse_tzif(a: Allocator, data: []u8) !Zone {
         a.push(&z.types, ZoneType{ .offset = be(data, q, 4), .dst = data[q + 4] == 1, .abbr = idx, .abbr_len = n })
         i = i + 1
     }
+    // The leap records, each the time a leap second happens and the
+    // correction in force from then on, the times counting the leap
+    // seconds before them as the changes' times do.
+    const lp = cp + charcnt
+    i = 1
+    while (i < leapcnt) {
+        if (be(data, lp + i * (tsize + 4), tsize) <= be(data, lp + (i - 1) * (tsize + 4), tsize)) {
+            return error.BadZone
+        }
+        i = i + 1
+    }
+    var leap = 0
     i = 0
     while (i < timecnt) {
-        const t = be(data, tp + i * tsize, tsize)
+        var t = be(data, tp + i * tsize, tsize)
+        while (leap < leapcnt and be(data, lp + leap * (tsize + 4), tsize) <= t) {
+            leap = leap + 1
+        }
+        if (leap > 0) {
+            // A correction is at most 2^31 seconds; a change at the ends
+            // of an i64 cannot take it.
+            const c = be(data, lp + (leap - 1) * (tsize + 4) + tsize, 4)
+            if ((c > 0 and t < -9223372036854775807 + c) or (c < 0 and t > 9223372036854775807 + c)) {
+                return error.BadZone
+            }
+            t = t - c
+        }
         const k = data[kp + i]
         if (@as(i64, k) >= typecnt or (i > 0 and t <= z.times[i - 1])) {
             return error.BadZone
@@ -546,10 +576,10 @@ fn parse_tzif(a: Allocator, data: []u8) !Zone {
         a.push(&z.kinds, k)
         i = i + 1
     }
-    // The footer: a POSIX TZ rule between newlines, for times after the
-    // last change, maybe empty.
-    if (tsize == 8 and end < @len(data)) {
-        if (data[end] != '\n' or data[@len(data) - 1] != '\n' or @len(data) - end < 2) {
+    // The footer, which every file but a version 1 one has: a POSIX TZ
+    // rule between newlines, for times after the last change, maybe empty.
+    if (tsize == 8) {
+        if (@len(data) - end < 2 or data[end] != '\n' or data[@len(data) - 1] != '\n') {
             return error.BadZone
         }
         const footer = data[end + 1..@len(data) - 1]
@@ -589,6 +619,10 @@ fn load(fs: Fs, a: Allocator, name: []u8) !Zone {
     while (d < 4) {
         const path = a.concat(zone_dir(d), name)
         defer a.free(path)
+        if (!is_file(fs, path)) {
+            d = d + 1
+            continue
+        }
         const data = fs.read(a, path) catch {
             d = d + 1
             continue
@@ -637,9 +671,21 @@ fn without_colon(s: []u8) []u8 {
 
 // The zone in a TZif file, or UTC.
 fn file_zone(fs: Fs, a: Allocator, path: []u8) Zone {
+    if (!is_file(fs, path)) {
+        return utc()
+    }
     const data = fs.read(a, path) catch {
         return utc()
     }
     defer a.free(data)
     return parse_tzif(a, data) catch utc()
+}
+
+// Is path a regular file? Only one is read: a device such as /dev/zero
+// would never end.
+fn is_file(fs: Fs, path: []u8) bool {
+    const st = fs.stat(path) catch {
+        return false
+    }
+    return st.kind == .file
 }

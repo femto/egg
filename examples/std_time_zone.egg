@@ -54,6 +54,13 @@
 // expect: UnknownZone
 // expect: UTC 0
 // expect: true
+// expect: 2024-01-01T01:00:00+01:00 BBB true
+// expect: 2024-01-01T12:00:00+01:00 BBB true
+// expect: 1970-01-01T00:16:37Z AAA false
+// expect: 1970-01-01T01:16:38+01:00 BBB false
+// expect: BadZone
+// expect: BadZone
+// expect: UTC
 uses alloc, args, fs, io
 
 const time = @import("std/time")
@@ -85,6 +92,10 @@ const SWING_UNUSED = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAA
 // (7200 s), with nothing overflowing on the way.
 const AT_END = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAgAAAAZ//////////wEAAAAAAAAAAA4QAANaMABaMQAKCg=="
 const AT_START = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAgAAAAaAAAAAAAAAAAH///HwAAD//+PgAANaMABaMQAKCg=="
+
+// A change at 1000 s as a file with leap records counts them, after two
+// leap seconds at 100 and 200 s: 998 s without them.
+const LEAPS = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAABAAAAAgAAAAgAAAAAAAAD6AEAAAAAAAAAAA4QAARBQUEAQkJCAAAAAAAAAABkAAAAAQAAAAAAAADIAAAAAgpCQkItMQo="
 
 fn show(io: Io, a: Allocator, z: zone.Zone, secs: i64) void {
     const ns = secs * time.SECOND
@@ -261,9 +272,30 @@ fn main(io: Io, files: Fs, env: Args, a: Allocator) !void {
     const named_utc = try zone.load(files, a, "UTC")
     defer a.free(named_utc)
     io.print(named_utc.abbr(0), " ", named_utc.offset(0))
-    // Whatever the machine's zone is, it is one.
+    // Whatever the machine's zone is, it is one, within what RFC 8536
+    // allows (TZ may be any POSIX rule).
     const here = zone.local(files, env, a)
     defer a.free(here)
     const off = here.offset(1700000000 * time.SECOND)
-    io.print(off >= -18 * 3600 and off <= 18 * 3600)
+    io.print(off >= -89999 and off <= 93599)
+    // Both changes of 2023 moved into 2024, so on January 1st 2024 the
+    // start of 2022's daylight saving time, in January 2023, holds.
+    const late = try zone.posix(a, "AAA0BBB,J365/167,J364/167")
+    defer a.free(late)
+    show(io, a, late, 1704067200)
+    instant(io, a, late, at(2024, 1, 1, 12, 0))
+    var leaps_data: Buf(u8) = .empty
+    defer a.free(leaps_data)
+    _ = codec.base64_decode(a, &leaps_data, LEAPS)
+    const leaps = try zone.parse_tzif(a, leaps_data)
+    defer a.free(leaps)
+    show(io, a, leaps, 997)
+    show(io, a, leaps, 998)
+    // A version 2 file needs its footer, even an empty one.
+    tzif(io, a, data[0..@len(data) - 24])
+    tzif(io, a, data[0..@len(data) - 1])
+    // A device is not read: /dev/zero never ends.
+    const dev = zone.file_zone(files, a, "/dev/zero")
+    defer a.free(dev)
+    io.print(dev.abbr(0))
 }
