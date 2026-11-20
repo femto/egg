@@ -1,0 +1,22 @@
+// An Atomic's results are taken where they stand in an expression, before
+// the operands after them run: here bump changes x after each is read.
+// expect: 0 1
+// expect: 1 6
+// expect: 6 10
+uses io, thread
+
+fn bump(x: Atomic) i64 {
+    return x.add(1)
+}
+
+fn observe(io: Io, before: i64, after: i64) void {
+    io.print(before, " ", after)
+}
+
+fn main(io: Io, threads: Threads) void {
+    const x = threads.atomic(0)
+    observe(io, x.load(), bump(x))
+    observe(io, x.swap(5), bump(x))
+    observe(io, x.compare_swap(6, 9), bump(x))
+    x.close()
+}

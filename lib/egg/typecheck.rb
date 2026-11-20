@@ -891,7 +891,7 @@ module Egg
         saved = @mod
         @mod = mod
         begin
-          resource_elem_error(elem, what, line, col)
+          what == :shared ? shared_value_error(elem, line, col) : resource_elem_error(elem, what, line, col)
         ensure
           @mod = saved
         end
@@ -1183,15 +1183,11 @@ module Egg
       return "error" if t == "error"
       return value_type_error(t, "a shared value", line, col) unless storable?(t)
       return owned_place_error(t, "a shared value", line, col) if owned_err?(t)
-      r = any_resource(t)
-      unless r.nil?
-        held = r == t ? "" : " (it holds a #{r})"
-        err("E155", "a shared value cannot be a #{t}#{held}: #{r} is an owned struct, which copying could not duplicate; share the data it holds", line, col)
-        return "error"
-      end
-      p = ptr_in(t)
-      unless p.nil?
-        err("E155", "a shared value cannot hold a pointer (#{p}): what it points at could change under other threads", line, col)
+      # A struct still being registered (Node { next: Shared(Node) }) has
+      # no fields yet: checked once every type is.
+      if @registering.positive?
+        @elem_checks << [t, :shared, line, col, @mod]
+      elsif shared_value_error(t, line, col)
         return "error"
       end
       canon = "Shared(#{t})"
@@ -1201,6 +1197,20 @@ module Egg
       info.elem = t
       info.mod = ""
       canon
+    end
+
+    # E155 for a T no Shared(T) can hold.
+    def shared_value_error(t, line, col)
+      r = any_resource(t)
+      unless r.nil?
+        held = r == t ? "" : " (it holds a #{r})"
+        err("E155", "a shared value cannot be a #{t}#{held}: #{r} is an owned struct, which copying could not duplicate; share the data it holds", line, col)
+        return true
+      end
+      p = ptr_in(t)
+      return false if p.nil?
+      err("E155", "a shared value cannot hold a pointer (#{p}): what it points at could change under other threads", line, col)
+      true
     end
 
     def shared?(t)
@@ -1215,7 +1225,9 @@ module Egg
       info = @types[t]
       case info&.kind
       when :ptr then t
-      when :array, :buf, :opt then ptr_in(info.elem || info.inner, seen)
+      when :array, :buf, :opt, :err
+        inner = info.elem || info.inner
+        inner.nil? || inner == "void" ? nil : ptr_in(inner, seen)
       when :struct, :union
         (info.fields || []).each do |_, ft, _|
           next if ft == "void"
@@ -2846,7 +2858,7 @@ module Egg
       return check_spawn(e, args, line, col) if t == "Threads" && name == "spawn"
       return check_channel(e, args, line, col) if t == "Threads" && name == "channel"
       return check_share(e, args, line, col) if t == "Threads" && name == "share"
-      return check_shared_method(e, t, name, args, line, col) if shared?(t)
+      return check_shared_method(e, obj, t, name, args, line, col) if shared?(t)
       return check_chan_method(e, t, name, args, line, col) if chan_end?(t)
       if CAP_METHODS.key?(t)
         r = check_cap_method(e, obj, t, name, args, line, col, expected)
@@ -3001,13 +3013,15 @@ module Egg
 
     SHARED_METHODS = %w[get copy clone close].freeze
 
-    def check_shared_method(e, t, name, args, line, col)
+    def check_shared_method(e, obj, t, name, args, line, col)
       elem = @types[t].elem
       @current.direct["thread"] ||= [line, col, "Shared.#{name}"]
       unless SHARED_METHODS.include?(name)
         err("E122", "Shared has no method '#{name}' (methods: #{SHARED_METHODS.join(', ')})", line, col)
         return check_all_error(args)
       end
+      # A holder that is a temporary would never be closed.
+      check_borrowed(obj, t) unless name == "close"
       params = name == "copy" ? [["Allocator", nil]] : []
       check_args(Sig.new(name, params, "void"), args, name, line, col)
       @current.direct["alloc"] ||= [line, col, "Shared.copy"] if name == "copy"
@@ -3636,6 +3650,9 @@ module Egg
       in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
       in Call[args:, info:] then sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
       in Builtin[args:] then args.any? { |x| holds?(x, path) }
+      in MethodCall[obj:] if shared_get?(e)
+        # s.get() lends what s holds.
+        holds?(obj, path)
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]

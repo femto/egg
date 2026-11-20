@@ -1,0 +1,28 @@
+// error: E139 @16
+// error: E137 @24
+uses alloc, io, thread
+
+const Post = struct { id: i64, body: Buf(u8) }
+
+fn reset(threads: Threads, a: Allocator, inout s: Shared(Buf(Buf(u8)))) void {
+    var fresh: Buf(Buf(u8)) = .empty
+    a.push(&fresh, a.concat("x", ""))
+    @replace(&s, threads.share(fresh)).close()
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const p = threads.share(Post{ .id = 1, .body = a.concat("a", "b") })
+    // A field of what get() lends: still not the caller's to free.
+    const b = p.get().body
+    a.free(b)
+    p.close()
+    var items: Buf(Buf(u8)) = .empty
+    a.push(&items, a.concat("a", ""))
+    a.push(&items, a.concat("b", ""))
+    var s = threads.share(items)
+    for (s.get()) |item| {
+        reset(threads, a, &s)
+        io.print(item)
+    }
+    s.close()
+}

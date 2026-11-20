@@ -726,6 +726,9 @@ module Egg
     # one), or nil.
     def iter_root(iter)
       v = iter.is_a?(SliceExpr) ? iter.obj : iter
+      # for (s.get().items): the loop holds s.
+      holder = shared_holder(v)
+      return path_of(holder) unless holder.nil?
       p = path_of(v)
       !p.nil? && owned?(v.ty) ? p : nil
     end
@@ -1176,7 +1179,20 @@ module Egg
 
     # Moving a value out of an element (xs[i], xs[i].f): not followed, so
     # not allowed.
+    # The Shared(T) whose s.get() e is, or a field or element of: what
+    # lends it. nil for anything else.
+    def shared_holder(e)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      @checker.shared_get?(e) ? e.obj : nil
+    end
+
     def moved_out(e, line, col)
+      holder = shared_holder(e)
+      unless holder.nil?
+        h = place_text(holder)
+        err("E139", "cannot move a #{e.ty} out of '#{h}.get()': it only lends the shared value; copy it with #{h}.copy(a)", line, col)
+        return
+      end
       p = e
       p = p.obj while p.is_a?(Field)
       return unless p.is_a?(Index)

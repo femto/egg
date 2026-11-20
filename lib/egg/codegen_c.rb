@@ -4810,7 +4810,7 @@ module Egg
           when "Shared.get" then value
           when "Shared.copy"
             line("(void)#{expr(args[0])};")
-            @checker.owned?(elem) ? "#{dup(elem)}(#{value})" : value
+            hoist(@checker.owned?(elem) ? "#{dup(elem)}(#{value})" : value, elem)
           when "Shared.clone"
             hoist("(#{c_type(ret)}){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c}) }", ret)
           else
@@ -4820,15 +4820,17 @@ module Egg
           end
         else
           cell = "(int64_t *)#{c}"
+          # Each result is computed here, before any later operand of the
+          # expression it is in runs: observe(x.load(), bump(x)).
           case m
-          when "Atomic.load" then "#{helper('egg_atomic_load')}(#{cell})"
+          when "Atomic.load" then hoist("#{helper('egg_atomic_load')}(#{cell})", "i64")
           when "Atomic.store" then "(void)#{helper('egg_atomic_swap')}(#{cell}, #{expr(args[0])})"
-          when "Atomic.add" then "#{helper('egg_atomic_add')}(#{c}, #{expr(args[0])})"
-          when "Atomic.swap" then "#{helper('egg_atomic_swap')}(#{cell}, #{expr(args[0])})"
+          when "Atomic.add" then hoist("#{helper('egg_atomic_add')}(#{c}, #{expr(args[0])})", "i64")
+          when "Atomic.swap" then hoist("#{helper('egg_atomic_swap')}(#{cell}, #{expr(args[0])})", "i64")
           when "Atomic.compare_swap"
             expected = hoist(expr(args[0]), "i64")
-            "#{helper('egg_atomic_cas')}(#{cell}, #{expected}, #{expr(args[1])})"
-          when "Atomic.clone" then "(egg_atomic){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c} + 1) }"
+            hoist("#{helper('egg_atomic_cas')}(#{cell}, #{expected}, #{expr(args[1])})", "i64")
+          when "Atomic.clone" then hoist("(egg_atomic){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c} + 1) }", ret)
           else "#{helper('egg_atomic_close')}(#{c})"
           end
         end

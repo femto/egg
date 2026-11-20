@@ -1,0 +1,15 @@
+// error: E133 @12
+// error: E117 @14
+uses alloc, thread
+
+fn consume(b: Buf(u8), n: i64) void {}
+fn close_and_zero(sink s: Shared(Buf(u8))) i64 {
+    s.close()
+    return 0
+}
+
+fn main(a: Allocator, threads: Threads) void {
+    const c = threads.share(a.concat("a", "b")).copy(a)
+    const s = threads.share(c)
+    consume(s.get(), close_and_zero(s))
+}

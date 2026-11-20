@@ -1,6 +1,9 @@
-// error: E155 @16
-// error: E155 @17
-// error: E155 @18
+// error: E155 @19
+// error: E155 @20
+// error: E155 @21
+// error: E155 @22
+// error: E155 @26
+allow unsafe
 uses alloc, net, thread
 
 const Wrap = struct { tx: Sender(i64) }
@@ -16,6 +19,12 @@ const Db = owned struct {
 fn keep(s: Shared(Db)) void {}
 fn conn(s: Shared(TcpConn)) void {}
 fn wrapped(s: Shared(Wrap)) void {}
+fn pointer(s: Shared(!*i64)) void {}
+
+// A struct still being registered when Shared(Node) is met.
+const Node = struct {
+    next: Shared(Node)
+}
 
 fn main(threads: Threads) void {
     const s = threads.share(1)
