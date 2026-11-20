@@ -646,7 +646,8 @@ module Egg
         t = arm.names&.length == 1 ? member.(arm.names[0]) : nil
         if !arm.capture.nil? && arm.capture != "_" && !t.nil? && owned?(t)
           cap = arm.capture
-          if subject.is_a?(Call) || subject.is_a?(MethodCall) || subject.is_a?(Builtin)
+          holder = shared_holder(subject)
+          if (subject.is_a?(Call) || subject.is_a?(MethodCall) || subject.is_a?(Builtin)) && holder.nil?
             # A call's result, which nothing else owns: the arm owns what it
             # captures. (An element has no path either, but its buffer still
             # owns it: its capture only borrows, below.)
@@ -657,7 +658,14 @@ module Egg
               declare(cap, :local, arm.line, arm.col, t)
             end
           else
+            h = holder.nil? ? nil : place_text(holder)
             why = case kind
+                  when nil
+                    if h.nil?
+                      "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
+                    else
+                      "'#{h}.get()', which only lends the shared value; copy it with #{h}.copy(a) and switch on that"
+                    end
                   when :bparam then "'#{text}', which is only borrowed here; to take its payload, declare parameter '#{root(path)}' as sink"
                   when :borrowed
                     c = @borrowed[root(path)]

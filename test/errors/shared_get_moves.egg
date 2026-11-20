@@ -1,5 +1,6 @@
-// error: E139 @16
-// error: E137 @24
+// error: E139 @17
+// error: E137 @25
+// error: E139 @37
 uses alloc, io, thread
 
 const Post = struct { id: i64, body: Buf(u8) }
@@ -25,4 +26,16 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
         io.print(item)
     }
     s.close()
+}
+
+const Msg = union(enum) { text: Buf(u8), none }
+
+// The payload of what get() lends is borrowed too.
+fn take_payload(a: Allocator, s: Shared(Msg)) void {
+    switch (s.get()) {
+        .text => |t| {
+            a.free(t)
+        }
+        .none => {}
+    }
 }

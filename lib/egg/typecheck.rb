@@ -1795,8 +1795,9 @@ module Egg
       owned?(t) && @types[t]&.kind == :union && fresh_value?(subject)
     end
 
+    # A call's result, which nothing else owns (s.get() lends its value).
     def fresh_value?(e)
-      e.is_a?(Call) || e.is_a?(MethodCall) || e.is_a?(Builtin)
+      (e.is_a?(Call) || e.is_a?(MethodCall) || e.is_a?(Builtin)) && !shared_get?(e)
     end
 
     # Each member that holds something owned needs an arm of its own that
@@ -2307,6 +2308,8 @@ module Egg
         t = check_expr(obj)
         check_borrowed(obj, t)
         expect_type("i64", check_expr(index), index)
+        # s.get()[i]: i must not close or replace s first.
+        check_bounds_writes(obj, index, nil, "an index into") unless shared_root(obj).nil?
         e.info[:len] = @types[t]&.len
         index_type(t, line, col)
       in SliceExpr[obj:, lo:, hi:, line:, col:]
@@ -2858,11 +2861,16 @@ module Egg
       return check_spawn(e, args, line, col) if t == "Threads" && name == "spawn"
       return check_channel(e, args, line, col) if t == "Threads" && name == "channel"
       return check_share(e, args, line, col) if t == "Threads" && name == "share"
-      return check_shared_method(e, obj, t, name, args, line, col) if shared?(t)
-      return check_chan_method(e, t, name, args, line, col) if chan_end?(t)
+      # The receiver is an operand too: an argument must not take it
+      # (x.add(close(x))) before it is used.
+      if shared?(t) || chan_end?(t)
+        r = shared?(t) ? check_shared_method(e, obj, t, name, args, line, col) : check_chan_method(e, t, name, args, line, col)
+        check_nested_writes([obj] + args)
+        return r
+      end
       if CAP_METHODS.key?(t)
         r = check_cap_method(e, obj, t, name, args, line, col, expected)
-        check_nested_writes(args)
+        check_nested_writes([obj] + args)
         return r
       end
       if t == "type"
@@ -3318,12 +3326,12 @@ module Egg
     # x[lo..hi]: the bounds may not change x (E117). x may be an element of
     # a buffer (b[i][lo..hi]), which a bound that grew b would move while
     # it is being sliced.
-    def check_bounds_writes(obj, lo, hi)
-      root = root_name(obj)
+    def check_bounds_writes(obj, lo, hi, what = "a bound of a slice of")
+      root = root_name(obj) || shared_root(obj)
       return if root.nil?
       [lo, hi].compact.each do |b|
         if inout_writes(b).any? { |p| p.is_a?(String) && p.split(".").first == root }
-          err("E117", "'#{root}' is changed by this bound of a slice of it; compute the bound into a local first", b.line, b.col)
+          err("E117", "'#{root}' is changed by #{what} it; compute it into a local first", b.line, b.col)
         end
       end
     end
@@ -3597,6 +3605,13 @@ module Egg
       in Field | Index | SliceExpr then viewable?(e.obj)
       else false
       end
+    end
+
+    # The variable holding the Shared(T) whose s.get() e is, or a field,
+    # element or slice of; nil for anything else.
+    def shared_root(e)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      shared_get?(e) ? root_name(e.obj) : nil
     end
 
     def root_name(e)
