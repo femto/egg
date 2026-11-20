@@ -4521,7 +4521,9 @@ module Egg
         later = args[(i + 1)..]
         codes << case a
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
-                 in AddrOf[expr: place] then "&#{lvalue(place)}"
+                 in AddrOf[expr: place]
+                   # A pointer argument may go to a ?*T parameter.
+                   mode == "inout" ? "&#{lvalue(place)}" : coerce("&#{lvalue(place)}", a.ty, pt)
                  else
                    if by_ptr?(pt, mode) && a.ty == pt && !a.is_a?(SliceExpr)
                      big_arg(a, later, inouts)

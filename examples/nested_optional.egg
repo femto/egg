@@ -13,6 +13,8 @@
 // expect: 2
 // expect: a
 // expect: true false
+// expect: 7 true 5
+// expect: 5 -1
 uses io, alloc
 allow unsafe
 
@@ -20,6 +22,7 @@ const map = @import("std/map")
 
 const Node = struct { value: i64 }
 const MaybeInt = ?i64
+const Color = enum { red, green }
 
 fn first(comptime V: type, xs: []V) ?V {
     if (@len(xs) == 0) {
@@ -38,6 +41,11 @@ fn head(s: []u8, ok: bool) ??[]u8 {
         return none
     }
     return s[0..1]
+}
+
+fn deref_or(p: ?*i64) i64 {
+    const q = p orelse return -1
+    return q.*
 }
 
 fn show(io: Io, x: ??i64) void {
@@ -98,4 +106,13 @@ fn main(io: Io, a: Allocator) void {
         }
     }
     io.print(head("", true) != null, " ", head("abc", false) != null)
+
+    // A literal, an enum member and an address take the innermost type.
+    const small: ??i8 = 7
+    const color: ??Color = .green
+    var n = 5
+    const pp: ??*i64 = &n
+    io.print((small orelse 0) orelse 1, " ", ((color orelse .red) orelse .red) == .green, " ", ((pp orelse null) orelse null).*)
+    io.print(deref_or(&n), " ", deref_or(null))
+    n = 6
 }

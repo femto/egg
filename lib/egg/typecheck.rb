@@ -472,6 +472,12 @@ module Egg
       info&.kind == :ptr ? info.inner : nil
     end
 
+    # t without its optional levels: i64 for ??i64.
+    def opt_base(t)
+      t = @types[t].inner while !t.nil? && @types[t]&.kind == :opt
+      t
+    end
+
     # Methods are keyed apart from functions, which may be named "m.f".
     def method_key(owner, name)
       "#{owner}::#{name}"
@@ -2070,8 +2076,7 @@ module Egg
     # is reported once: the declaration resolves it again.)
     def pointer_type_expr?(type, line, col)
       return false if type.nil?
-      t = resolve_type(type, line, col)
-      t = @types[t].inner if @types[t]&.kind == :opt
+      t = opt_base(resolve_type(type, line, col))
       @types[t]&.kind == :ptr
     end
 
@@ -2561,12 +2566,12 @@ module Egg
 
     # The number type a literal should take where `expected` is wanted
     # (T, or the T of !T or ?T), or nil.
-    # The type a value has where expected wants it: T for !T, ?T and !?T.
+    # The type a value has where expected wants it: T for !T, ?T, ??T
+    # and !?T.
     def value_target(expected)
       t = expected
       t = @types[t].inner if !t.nil? && @types[t]&.kind == :err
-      t = @types[t].inner if !t.nil? && @types[t]&.kind == :opt
-      t
+      opt_base(t)
     end
 
     def num_target(expected)
@@ -3142,7 +3147,7 @@ module Egg
         elsif slice_expr?(a)
           at = check_slice_arg(a, pt)
           expect_type(pt, at, a)
-        elsif a.is_a?(AddrOf) && !pointee(pt).nil?
+        elsif a.is_a?(AddrOf) && !pointee(opt_base(pt)).nil?
           at = check_expr(a, pt)
           expect_type(pt, at, a)
         elsif a.is_a?(AddrOf)
