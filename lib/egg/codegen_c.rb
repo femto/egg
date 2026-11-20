@@ -4613,10 +4613,13 @@ module Egg
         "#{helper('egg_chan_send')}(#{c}, &#{v})"
       when "Sender.try_send"
         # The value comes back in .full or .closed when it did not go.
+        # Zeroed first: .sent leaves the payload unset, and copying it
+        # uninitialized is gcc's -Wmaybe-uninitialized at -O2.
         elem = @types[obj.ty].elem
         v = hoist(coerce(expr(args[0]), args[0].ty, elem), elem)
         r = tmp
         line("#{c_type(ret)} #{r};")
+        line("memset(&#{r}, 0, sizeof #{r});")
         line("#{r}.tag = #{helper('egg_chan_try_send')}(#{c}, &#{v});")
         line("if (#{r}.tag == 1) #{r}.u.m_full = #{v}; else if (#{r}.tag == 2) #{r}.u.m_closed = #{v};")
         r
