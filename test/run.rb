@@ -1536,6 +1536,11 @@ def check_lexer
   r = Egg.compile_to_c("fn main() void {\n    \"é\" ±\n}\n", "lexer.egg")
   d = r.diagnostics.first
   report(d && d.message.include?("'±'") && d.col == 9, "an unexpected character is shown whole, at its column", d&.to_text("lexer.egg"))
+  ["\"\\é\"", "'\\é'"].each do |lit|
+    r = Egg.compile_to_c("fn main() void {\n    _ = #{lit}\n}\n", "lexer.egg")
+    d = r.diagnostics.first
+    report(d && d.message.include?("'\\é'") && d.message.valid_encoding?, "an unknown escape of a several-byte character is shown whole: #{lit}", d&.to_text("lexer.egg"))
+  end
 end
 
 def check_loader(dir)

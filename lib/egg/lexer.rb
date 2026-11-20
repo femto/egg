@@ -170,7 +170,7 @@ module Egg
             advance
             utf8_bytes(lex_code_point(ecol)).each { |b| out << b.chr }
           else
-            raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in string (\\n \\r \\t \\\\ \\\" \\0 \\xNN \\u{N})", @line, ecol))
+            raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e == "" ? "" : char_at(@pos)}' in string (\\n \\r \\t \\\\ \\\" \\0 \\xNN \\u{N})", @line, ecol))
           end
         else
           out << c
@@ -236,7 +236,7 @@ module Egg
         elsif e == "u"
           raise CompileError.new(Diagnostic.new("E001", "a character literal holds one byte, and \\u{N} is a code point that may need several: use a string (\"\\u{e9}\"), or \\xNN for a byte", @line, @col))
         else
-          raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in character literal (\\n \\r \\t \\\\ \\' \\\" \\0 \\xNN)", @line, @col))
+          raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{char_at(@pos)}' in character literal (\\n \\r \\t \\\\ \\' \\\" \\0 \\xNN)", @line, @col))
         end
       elsif c.ord >= 0x80 && !(ch = char_at(@pos)).valid_encoding?
         raise CompileError.new(Diagnostic.new("E001", "a character literal holds one byte, and this one is not valid UTF-8: use \\xNN for a byte", line, col))
