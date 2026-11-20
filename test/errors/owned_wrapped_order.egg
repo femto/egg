@@ -1,0 +1,15 @@
+// error: E133 @6
+// error: E119 @11
+// A Buf element ?Node is judged once Node is known to own a buffer,
+// whatever the order the declarations are met in.
+const Tree = struct {
+    kids: Buf(?Tree)
+    name: Buf(u8)
+}
+
+// A struct containing itself ends the ownership check too (no crash).
+const Loop = struct { next: Loop }
+
+fn f(n: !?Loop) void {}
+
+fn main() void {}

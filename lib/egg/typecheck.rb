@@ -891,7 +891,11 @@ module Egg
         saved = @mod
         @mod = mod
         begin
-          what == :shared ? shared_value_error(elem, line, col) : resource_elem_error(elem, what, line, col)
+          case what
+          when :shared then shared_value_error(elem, line, col)
+          when :owned_err then owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
+          else resource_elem_error(elem, what, line, col)
+          end
         ensure
           @mod = saved
         end
@@ -1273,7 +1277,13 @@ module Egg
       end
       elem = args[0]
       return value_type_error(elem, "a Buf element", line, col) unless storable?(elem)
-      return owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
+      # ?Node while Node is being registered: whether Node owns anything is
+      # known once it is (as for E141 below).
+      if %i[err opt].include?(@types[elem]&.kind) && @registering.positive?
+        @elem_checks << [elem, :owned_err, line, col, @mod]
+      elsif owned_err?(elem)
+        return owned_place_error(elem, "a Buf element", line, col)
+      end
       return "error" if resource_elem_error(elem, "a Buf element", line, col)
       canon = "Buf(#{elem})"
       register(canon, :buf, line, col).elem = elem
@@ -1281,15 +1291,22 @@ module Egg
     end
 
     # An owned value: a buffer, or a struct or array holding one. It is
-    # moved, not copied (own.rb).
-    def owned?(t)
+    # moved, not copied (own.rb). seen: the structs and unions on the way
+    # here, so that one containing itself (E119, reported elsewhere) ends.
+    def owned?(t, seen = nil)
       info = @types[t]
       return false if info.nil?
       case info.kind
       when :buf then true
-      when :array then owned?(info.elem)
-      when :struct then info.resource || (info.fields || []).any? { |_, ft, _| owned?(ft) }
-      when :union then (info.fields || []).any? { |_, ft, _| ft != "void" && owned?(ft) }
+      when :array then owned?(info.elem, seen)
+      when :struct, :union
+        return true if info.resource
+        fields = info.fields || []
+        return false if fields.empty?
+        seen ||= {}
+        return false if seen[t]
+        seen[t] = true
+        fields.any? { |_, ft, _| ft != "void" && owned?(ft, seen) }
       else false
       end
     end
