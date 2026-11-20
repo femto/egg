@@ -26,10 +26,16 @@ module Egg
   NOT_BLANK = /[^ \t\r]/
 
   class Lexer
+    # The bytes that continue a UTF-8 character, for String#count.
+    CONTINUATION = "\x80-\xBF".b.freeze
+
     def initialize(src)
-      # Source is UTF-8 whatever the locale's default encoding is.
-      @src = src.encoding == Encoding::UTF_8 ? src : src.dup.force_encoding(Encoding::UTF_8)
-      @valid = @src.valid_encoding?
+      # Source is UTF-8 whatever the locale's default encoding is, read a
+      # byte at a time: indexing a String by characters walks it from the
+      # start once it holds one that is not ASCII, which made a file with
+      # a "±" in a comment lex in quadratic time. Columns still count
+      # characters (advance), and the text of a token is UTF-8 again.
+      @src = src.b
       @pos = 0
       @line = 1
       @col = 1
@@ -48,7 +54,7 @@ module Egg
           # Skip to the newline (not past it) in one step: a comment holds
           # no newline, so only the column moves.
           stop = @src.index("\n", @pos) || @src.length
-          @col += stop - @pos
+          @col += chars_between(@pos, stop)
           @pos = stop
         elsif digit?(c)
           lex_number
@@ -95,7 +101,7 @@ module Egg
         advance unless digit?(@src[@pos])
         lex_digits
       end
-      text = @src[start...@pos].delete("_")
+      text = utf8(@src[start...@pos].delete("_"))
       @tokens << Token.new(kind, text, line, col)
     end
 
@@ -105,7 +111,7 @@ module Egg
       advance
       advance
       advance while @pos < @src.length && ident_char?(@src[@pos])
-      text = @src[start...@pos]
+      text = utf8(@src[start...@pos])
       digits = text[2..].delete("_")
       valid = hex ? digits.match?(/\A[0-9A-Fa-f]+\z/) : digits.match?(/\A[01]+\z/)
       unless valid && text[2] != "_"
@@ -167,7 +173,7 @@ module Egg
             raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in string (\\n \\r \\t \\\\ \\\" \\0 \\xNN \\u{N})", @line, ecol))
           end
         else
-          out << c.dup.force_encoding(Encoding::BINARY)
+          out << c
           advance
         end
       end
@@ -232,10 +238,10 @@ module Egg
         else
           raise CompileError.new(Diagnostic.new("E001", "unknown escape '\\#{e}' in character literal (\\n \\r \\t \\\\ \\' \\\" \\0 \\xNN)", @line, @col))
         end
-      elsif !c.valid_encoding?
+      elsif c.ord >= 0x80 && !(ch = char_at(@pos)).valid_encoding?
         raise CompileError.new(Diagnostic.new("E001", "a character literal holds one byte, and this one is not valid UTF-8: use \\xNN for a byte", line, col))
-      elsif c.bytesize > 1
-        raise CompileError.new(Diagnostic.new("E001", "'#{c}' is #{c.bytesize} bytes; a character literal holds one byte: use a string, or \\xNN for a byte", line, col))
+      elsif c.ord >= 0x80
+        raise CompileError.new(Diagnostic.new("E001", "'#{ch}' is #{ch.bytesize} bytes; a character literal holds one byte: use a string, or \\xNN for a byte", line, col))
       else
         value = c.ord
         advance
@@ -253,7 +259,7 @@ module Egg
       col = @col
       start = @pos
       skip_ident_chars
-      text = @src[start...@pos]
+      text = utf8(@src[start...@pos])
       kind = KEYWORD_SET.key?(text) ? :kw : :ident
       @tokens << Token.new(kind, text, line, col)
     end
@@ -267,7 +273,7 @@ module Egg
       if @pos == start
         raise CompileError.new(Diagnostic.new("E001", "expected a builtin name after '@'", line, col))
       end
-      @tokens << Token.new(:builtin, @src[start...@pos], line, col)
+      @tokens << Token.new(:builtin, utf8(@src[start...@pos]), line, col)
     end
 
     # Longest first, as OPERATORS is ordered: "==" wins over "=".
@@ -285,12 +291,11 @@ module Egg
         @pos += 1
         return
       end
-      raise CompileError.new(Diagnostic.new("E001", "unexpected character '#{@src[@pos]}'", @line, @col))
+      raise CompileError.new(Diagnostic.new("E001", "unexpected character '#{char_at(@pos)}'", @line, @col))
     end
 
     # Moves past spaces, tabs and carriage returns (an indentation, say).
     def skip_blanks
-      return advance unless @valid
       stop = @src.index(NOT_BLANK, @pos) || @src.length
       @col += stop - @pos
       @pos = stop
@@ -298,12 +303,6 @@ module Egg
 
     # Moves past letters, digits and underscores, which hold no newline.
     def skip_ident_chars
-      # A regexp cannot search text that is not valid UTF-8 (a stray byte
-      # is reported later): go a character at a time there.
-      unless @valid
-        advance while @pos < @src.length && ident_char?(@src[@pos])
-        return
-      end
       stop = @src.index(NOT_IDENT_CHAR, @pos) || @src.length
       @col += stop - @pos
       @pos = stop
@@ -313,14 +312,35 @@ module Egg
       @tokens << Token.new(kind, text, @line, @col)
     end
 
+    # A column is a character: the bytes that continue one (10xxxxxx) do
+    # not move it.
     def advance
-      if @src[@pos] == "\n"
+      b = @src.getbyte(@pos)
+      if b == 10
         @line += 1
         @col = 1
-      else
+      elsif b.nil? || (b & 0xC0) != 0x80
         @col += 1
       end
       @pos += 1
+    end
+
+    # The characters from byte i to byte j, on one line.
+    def chars_between(i, j)
+      j - i - @src.byteslice(i, j - i).count(CONTINUATION)
+    end
+
+    # The character that starts at byte i, as UTF-8 (one byte, if it is
+    # not valid there).
+    def char_at(i)
+      b = @src.getbyte(i)
+      n = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1
+      c = utf8(@src.byteslice(i, n))
+      c.valid_encoding? ? c : utf8(@src.byteslice(i, 1))
+    end
+
+    def utf8(s)
+      s.force_encoding(Encoding::UTF_8)
     end
 
     def peek(n)
