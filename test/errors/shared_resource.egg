@@ -1,9 +1,11 @@
-// error: E155 @20
-// error: E155 @21
 // error: E155 @22
 // error: E155 @23
-// error: E155 @27
-// error: E155 @30
+// error: E155 @24
+// error: E155 @25
+// error: E155 @29
+// error: E133 @32
+// error: E133 @33
+// error: E133 @34
 allow unsafe
 uses alloc, net, thread
 
@@ -28,6 +30,8 @@ const Node = struct {
 }
 
 fn nested(s: Shared(!?Atomic)) void {}
+fn wrapped_buf(s: Shared(!?Buf(u8))) void {}
+const Holder = struct { f: !?Buf(u8) }
 
 fn main(threads: Threads) void {
     const s = threads.share(1)

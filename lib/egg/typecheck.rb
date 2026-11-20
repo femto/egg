@@ -1384,10 +1384,11 @@ module Egg
       true
     end
 
-    # !T or ?T with an owned T: it must be unwrapped right away.
+    # !T or ?T with an owned T, or a wrapper of one (!?Buf(u8)): it must be
+    # unwrapped right away.
     def owned_err?(t)
       info = @types[t]
-      %i[err opt].include?(info&.kind) && owned?(info.inner)
+      %i[err opt].include?(info&.kind) && (owned?(info.inner) || owned_err?(info.inner))
     end
 
     def unwrap_how(t)
