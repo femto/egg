@@ -4523,11 +4523,19 @@ module Egg
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
                  in AddrOf[expr: place]
                    # A pointer argument may go to a ?*T parameter.
-                   if mode == "inout" || a.ty == pt
-                     "&#{lvalue(place)}"
+                   addr = "&#{lvalue(place)}"
+                   if mode == "inout"
+                     addr
                    else
-                     code = coerce("&#{lvalue(place)}", a.ty, pt)
-                     by_ptr?(pt, mode) ? "&#{hoist(code, pt)}" : code
+                     # A pointer argument: &p.* reads p now, before a later
+                     # argument can change p.
+                     addr = hoist(addr, a.ty) if later.any? { |l| writes_first?(l) }
+                     if a.ty == pt
+                       addr
+                     else
+                       code = coerce(addr, a.ty, pt)
+                       by_ptr?(pt, mode) ? "&#{hoist(code, pt)}" : code
+                     end
                    end
                  else
                    if by_ptr?(pt, mode) && a.ty == pt && !a.is_a?(SliceExpr)

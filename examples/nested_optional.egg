@@ -17,6 +17,7 @@
 // expect: 5 -1
 // expect: 5
 // expect: opt ptr other
+// expect: 5 6
 uses io, alloc
 allow unsafe
 
@@ -65,6 +66,17 @@ fn kind(comptime V: type) str {
         return "ptr"
     }
     return "other"
+}
+
+// &p.* reads p before reset sets it to null.
+fn reset(inout p: *i64) i64 {
+    p = null
+    return 0
+}
+
+fn add(q: ?*i64, z: i64) i64 {
+    const r = q orelse return -1
+    return r.* + z
 }
 
 fn show(io: Io, x: ??i64) void {
@@ -135,5 +147,9 @@ fn main(io: Io, a: Allocator) void {
     io.print(deref_or(&n), " ", deref_or(null))
     io.print(deref2(&n))
     io.print(kind(MaybeInt), " ", kind(*i64), " ", kind(i64))
+    var p = a.create(@as(i64, 5))
+    const first_add = add(&p.*, reset(&p))
+    p = a.create(@as(i64, 6))
+    io.print(first_add, " ", add(&p.*, reset(&p)))
     n = 6
 }

@@ -1,13 +1,15 @@
-// error: E148 @17
-// error: E148 @18
 // error: E148 @19
 // error: E148 @20
-// error: E103 @21
-// error: E104 @22
+// error: E148 @21
+// error: E148 @22
+// error: E103 @23
+// error: E104 @24
+// error: E148 @25
 uses alloc, thread
 
 fn borrow(b: Buf(i64)) void { _ = @len(b) }
 fn view(xs: []i64) void { _ = @len(xs) }
+fn maybe_view(xs: ?[]i64) void { _ = xs != null }
 fn change(inout b: Buf(i64)) void { b[0] = 1 }
 fn answer() i64 { return 1 }
 fn take(a: Allocator, sink b: Buf(i64)) void { a.free(b) }
@@ -20,5 +22,6 @@ fn main(a: Allocator, threads: Threads) void {
     threads.spawn(answer).join()
     threads.spawn(1).join()
     threads.spawn().join()
+    threads.spawn(maybe_view, b[0..]).join()
     a.free(b)
 }

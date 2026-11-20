@@ -2886,7 +2886,7 @@ module Egg
       err("E148", "a thread's function returns nothing, found #{ft.inner}: nobody could use the result yet", args[0].line, args[0].col) unless ft.inner == "void"
       params = fn_params(ft)
       params.each do |pt, mode|
-        lent = mode == "inout" || (mode.nil? && (owned?(pt) || pt.start_with?("[]")))
+        lent = mode == "inout" || (mode.nil? && (owned?(pt) || !slice_in(pt).nil?))
         next unless lent
         err("E148", "a thread cannot borrow a #{pt}: it may outlive the owner; take it as `sink`, or pass a copy", args[0].line, args[0].col)
       end
