@@ -1525,6 +1525,24 @@ end
 
 # Imports by absolute path, unreadable imports, and debug without a path.
 # A file import stays inside its module's root; other modules go by name.
+# The lexer reads bytes, but columns count characters, and a token's text
+# is UTF-8.
+def check_lexer
+  toks = Egg::Lexer.new("const s = \"é±\" // ±é\nx").tokenize
+  str = toks.find { |t| t.kind == :string }
+  nl = toks.find { |t| t.kind == :nl }
+  report(str.text == "é±" && str.text.encoding == Encoding::UTF_8 && str.col == 11, "a string's text is UTF-8, its column a character's", str.inspect)
+  report(nl.col == 21, "a comment of several-byte characters moves the column by characters", nl.inspect)
+  r = Egg.compile_to_c("fn main() void {\n    \"é\" ±\n}\n", "lexer.egg")
+  d = r.diagnostics.first
+  report(d && d.message.include?("'±'") && d.col == 9, "an unexpected character is shown whole, at its column", d&.to_text("lexer.egg"))
+  ["\"\\é\"", "'\\é'"].each do |lit|
+    r = Egg.compile_to_c("fn main() void {\n    _ = #{lit}\n}\n", "lexer.egg")
+    d = r.diagnostics.first
+    report(d && d.message.include?("'\\é'") && d.message.valid_encoding?, "an unknown escape of a several-byte character is shown whole: #{lit}", d&.to_text("lexer.egg"))
+  end
+end
+
 def check_loader(dir)
   inner = File.join(dir, "app", "main.egg")
   r = Egg.compile_to_c("const m = @import(\"../loader_lib.egg\")\nfn main() void {\n}\n", inner)
@@ -2140,6 +2158,9 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "test", "errors", "*.egg")].sort.each do |path|
     check_errors(File.basename(path), File.read(path), path)
   end
+
+  puts "lexer"
+  check_lexer
 
   puts "loader"
   check_loader(dir)
