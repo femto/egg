@@ -345,11 +345,17 @@ v3 (memory without GC, and what realistic programs needed):
   `DateTime` (`weekday()`, `yearday()`, `unix()`, `unix_ns()`), and RFC 3339
   and HTTP dates are written (`append_rfc3339`, `append_http_date`) and
   read (`parse_rfc3339`, `parse_http_date`, which takes all three forms
-  RFC 9110 names). Time zones are the package
-  [egg-timezone](https://github.com/femto/egg-timezone) (`clutch add
-  timezone`): the system's TZif files, the local zone, POSIX TZ rules and
-  fixed offsets; Windows has no zone files, so there the local zone is
-  UTC unless `TZ` holds a POSIX rule.
+  RFC 9110 names). Time zones are `std/time/zone`, apart so that the
+  calendar comes without them: a `zone.Zone` gives the offset in force at
+  an instant (`z.offset(ns)`, `z.abbr(ns)`, `z.dst(ns)`), the local time
+  there (`z.at(ns)`) and the instant of a local time (`z.instant(t)`; a
+  time skipped when clocks go forward takes the offset from before, one
+  repeated when they go back is the first): `zone.load(fs, a, name)`
+  reads the system's TZif files, `zone.local(fs, args, a)` follows `TZ`
+  and `/etc/localtime`, `zone.posix` takes a POSIX TZ rule, `zone.fixed`
+  a fixed offset and `zone.utc()` is UTC; Windows has no zone files, so
+  there `zone.load` knows only UTC and `zone.local` is UTC unless `TZ`
+  holds a POSIX rule.
   `std/flate` is DEFLATE in Egg, at zlib's levels 0 to 9 (lazy matching,
   and each block stored, fixed or dynamic Huffman, whichever is smaller),
   raw (`deflate`, `inflate`) or wrapped (`gzip_compress` and
