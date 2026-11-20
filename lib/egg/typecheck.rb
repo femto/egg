@@ -3677,12 +3677,19 @@ module Egg
       return owned?(e.ty) && overlap?(p, path) unless p.nil?
       case e
       in SliceExpr[obj:, lo:, hi:] then mentions_path?(obj, path) || holds?(lo, path) || (!hi.nil? && holds?(hi, path))
-      in Index[obj:, index:] then (place_path(obj).nil? && holds?(obj, path)) || holds?(index, path)
+      in Index[obj:, index:]
+        # An owned element is lent by its container: xs[0] holds xs.
+        op = place_path(obj)
+        held = op.nil? ? holds?(obj, path) : owned?(e.ty) && overlap?(op, path)
+        held || holds?(index, path)
       in Field[obj:] then holds?(obj, path)
       in Builtin[name: "len"] then false
       in Unary[operand:] then holds?(operand, path)
       in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
-      in Call[args:, info:] then sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
+      in Call[args:, info:]
+        # A slice result views the arguments it borrows.
+        borrowed = info&.[](:borrow_args) || []
+        (borrowed + sunk(info&.[](:args) || args, info)).any? { |x| holds?(x, path) }
       in Builtin[args:] then args.any? { |x| holds?(x, path) }
       in MethodCall[obj:] if shared_get?(e)
         # s.get() lends what s holds.
@@ -3690,7 +3697,8 @@ module Egg
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]
-        (own_obj && holds?(obj, path)) || sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
+        borrowed = info&.[](:borrow_args) || []
+        (own_obj && holds?(obj, path)) || (borrowed + sunk(info&.[](:args) || args, info)).any? { |x| holds?(x, path) }
       in StructLit[fields:] then fields.any? { |f| holds?(f[1], path) }
       in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
       in AddrOf[expr:] then mentions_path?(expr, path)
