@@ -2132,11 +2132,13 @@ system thread, for `f` a function returning `void`. It returns an owned
 `main` returns, the program ends, detached threads with it. A panic on any
 thread ends the program, and so does failing to start a thread.
 
-Nothing is shared. The arguments must be things a thread can own: `f`
-takes owned values by `sink`, so they move to the new thread, and plain
-values by copy. A parameter that would lend something to it, `inout`, a slice
-or a plain owned value, is E148, as is a function that returns a value. So
-two threads never reach the same memory, without locks. Capability values
+Nothing is shared but what is made to be. The arguments must be things a
+thread can own: `f` takes owned values by `sink`, so they move to the new
+thread, and plain values by copy. A parameter that would lend something to
+it, `inout`, a slice or a plain owned value, is E148, as is a function that
+returns a value. So two threads never reach the same memory, without
+locks, except through a `Shared(T)`, which no thread can change, or an
+`Atomic` (below). Capability values
 are plain values, and `str`s never change, so both may be passed. Raw pointers
 in an `allow unsafe` file are the exception: what they point at is not
 checked.
@@ -2336,6 +2338,115 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     const tx = full.sender()
     defer tx.close()
     offer(io, a, tx, a.alloc(2, 0))
+}
+```
+
+**Shared values.** As in Erlang, memory threads share is either never
+changed or reached only through operations that cannot race; there are no
+locks. `threads.share(v)` moves v into a `Shared(T)`, which every thread
+holding one reads at once, without copying: `s.get()` lends its `T` for
+the expression it is in, as a plain parameter is lent (index it, slice it,
+read its fields, pass it to a plain parameter; moving it, writing to it,
+passing it as `inout` or keeping it in a local borrow is E139, E002, E105
+or E121). `s.copy(a)` is a `T` of the caller's own, every buffer in it
+copied, to change or keep. `s.clone()` is another holder of the same
+value, to send to another thread or move into one; `s.close()` ends a
+holder, and the last one frees the value. `Shared(T)` is owned (E135 if
+not closed), and T is any value type without an owned struct, a channel's
+end, a file or socket (copying could not duplicate them) or a pointer
+(E155). Use `get`; `copy` is for the value that will be changed.
+
+**Atomics.** `threads.atomic(n)` is an `Atomic`: an `i64` every thread
+holding one reads and changes in single steps. `x.load()` reads it,
+`x.store(v)` writes it, `x.add(d)` adds d and returns the new value (an
+overflow panics `integer overflow`, as `+` does: the value has wrapped by
+then, but the program is ending), `x.swap(v)` writes v and returns the old
+value, and `x.compare_swap(expected, v)` writes v if the value is
+expected, and returns the old value either way, so a loop that retries
+has the value to retry with. All are sequentially consistent. `x.clone()`
+and `x.close()` hold and end it, as for a `Shared(T)`.
+
+```egg
+// expect: 4 readers saw 11 bytes
+// expect: hello world 2
+// expect: copy hello world!
+// expect: 10
+uses alloc, io, thread
+
+const Post = struct {
+    id: i64
+    body: Buf(u8)
+}
+
+fn read(sink post: Shared(Post), sink seen: Atomic, sink done: Sender(i64)) void {
+    defer done.close()
+    done.send(@len(post.get().body))
+    post.close()
+    _ = seen.add(1)
+    seen.close()
+}
+
+fn show(io: Io, p: Post) void {
+    io.print(p.body, " ", p.id)
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const post = threads.share(Post{ .id = 2, .body = a.concat("hello", " world") })
+    const seen = threads.atomic(0)
+    const results = threads.channel(i64, 4)
+    var i = 0
+    while (i < 4) {
+        threads.spawn(read, post.clone(), seen.clone(), results.sender()).detach()
+        i = i + 1
+    }
+    var bytes = 0
+    while (results.recv()) |n| {
+        bytes = n
+    }
+    results.close()
+    io.print(seen.load(), " readers saw ", bytes, " bytes")
+    show(io, post.get())                 // lent, not copied
+    var mine = post.copy(a)              // a Post of its own
+    defer a.free(mine)
+    a.append_str(&mine.body, "!")
+    io.print("copy ", mine.body)
+    post.close()
+    // Doubled in a loop that retries: compare_swap gives the value to retry with.
+    var cur = seen.load()
+    while (true) {
+        const old = seen.compare_swap(cur, cur * 2 + 2)
+        if (old == cur) {
+            break
+        }
+        cur = old
+    }
+    io.print(seen.load())
+    seen.close()
+}
+```
+
+```egg
+// error: E139
+uses alloc, io, thread
+
+const Post = struct { id: i64, body: Buf(u8) }
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const post = threads.share(Post{ .id = 1, .body = a.concat("a", "b") })
+    const p = post.get()                 // would take the body from every holder
+    io.print(p.id)
+    post.close()
+}
+```
+
+```egg
+// panic: integer overflow
+uses thread
+
+fn main(threads: Threads) void {
+    const x = threads.atomic(9223372036854775807)
+    _ = x.add(1)
+    x.close()
 }
 ```
 

@@ -646,7 +646,8 @@ module Egg
         t = arm.names&.length == 1 ? member.(arm.names[0]) : nil
         if !arm.capture.nil? && arm.capture != "_" && !t.nil? && owned?(t)
           cap = arm.capture
-          if subject.is_a?(Call) || subject.is_a?(MethodCall) || subject.is_a?(Builtin)
+          holder = shared_holder(subject)
+          if (subject.is_a?(Call) || subject.is_a?(MethodCall) || subject.is_a?(Builtin)) && holder.nil?
             # A call's result, which nothing else owns: the arm owns what it
             # captures. (An element has no path either, but its buffer still
             # owns it: its capture only borrows, below.)
@@ -657,16 +658,30 @@ module Egg
               declare(cap, :local, arm.line, arm.col, t)
             end
           else
+            h = holder.nil? ? nil : place_text(holder)
             why = case kind
+                  when nil
+                    if h.nil?
+                      "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
+                    else
+                      "'#{h}.get()', which only lends the shared value; copy it with #{h}.copy(a) and switch on that"
+                    end
                   when :bparam then "'#{text}', which is only borrowed here; to take its payload, declare parameter '#{root(path)}' as sink"
                   when :borrowed
                     c = @borrowed[root(path)]
                     c.is_a?(Array) ? "'#{text}', which #{c[1].delete_prefix("it ")}" : "'#{text}', which only borrows an element of '#{c}'; loop over an index and take the element out with @replace(&#{c}[i], v) or @take(&#{c}[i])"
                   else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
                   end
+            # What the capture views stays put while it is used: the
+            # subject's variable, or the holder of s.get().
+            lent = holder.nil? ? path : path_of(holder)
             pre = lambda do
               @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
               declare(cap, :borrowed, arm.line, arm.col, t)
+              unless lent.nil?
+                @slices[cap] = [[lent], @rest.length, false, nil, :borrow]
+                @frames.last.slices << cap
+              end
             end
           end
         elsif !path.nil? && !arm.names.nil? && arm.names.all? { |n| (m = member.(n)) == "void" || !owned?(m) }
@@ -726,6 +741,9 @@ module Egg
     # one), or nil.
     def iter_root(iter)
       v = iter.is_a?(SliceExpr) ? iter.obj : iter
+      # for (s.get().items): the loop holds s.
+      holder = shared_holder(v)
+      return path_of(holder) unless holder.nil?
       p = path_of(v)
       !p.nil? && owned?(v.ty) ? p : nil
     end
@@ -914,6 +932,12 @@ module Egg
         end
       # info[:args]: the runtime arguments, without a generic call's types.
       in Call[args:, info:] then walk_args(info&.[](:args) || args, info)
+      in MethodCall[obj:, line:, col:] if @checker.shared_get?(e)
+        # s.get() lends the shared value: it may be read, not moved.
+        if !borrow && owned?(e.ty)
+          err("E139", "'#{place_text(obj)}.get()' only lends the shared #{e.ty}; it cannot be moved. Copy it with #{place_text(obj)}.copy(a)", line, col)
+        end
+        walk(obj, true)
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
@@ -1170,7 +1194,20 @@ module Egg
 
     # Moving a value out of an element (xs[i], xs[i].f): not followed, so
     # not allowed.
+    # The Shared(T) whose s.get() e is, or a field or element of: what
+    # lends it. nil for anything else.
+    def shared_holder(e)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      @checker.shared_get?(e) ? e.obj : nil
+    end
+
     def moved_out(e, line, col)
+      holder = shared_holder(e)
+      unless holder.nil?
+        h = place_text(holder)
+        err("E139", "cannot move a #{e.ty} out of '#{h}.get()': it only lends the shared value; copy it with #{h}.copy(a)", line, col)
+        return
+      end
       p = e
       p = p.obj while p.is_a?(Field)
       return unless p.is_a?(Index)

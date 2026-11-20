@@ -91,12 +91,12 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Poller Waker Addr Threads Thread Clock Random]).freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Poller Waker Addr Threads Thread Atomic Clock Random]).freeze
     CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args", "Clock" => "time", "Random" => "rand" }.freeze
     CAPABILITIES = %w[alloc args fs io net rand thread time].freeze
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
-    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Poller" => "net", "Waker" => "net", "Thread" => "thread" }.freeze
+    FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Poller" => "net", "Waker" => "net", "Thread" => "thread", "Atomic" => "thread" }.freeze
     NET_ERRORS = %w[HostNotFound ConnectionRefused ConnectionReset AddressInUse TimedOut PermissionDenied IoFailed LineTooLong Closed].freeze
     # The errors of Fs methods, in the order the runtime numbers them from 1.
     FS_ERRORS = %w[NotFound PermissionDenied IsDirectory InvalidPath IoFailed AlreadyExists NotEmpty NotDirectory].freeze
@@ -133,7 +133,12 @@ module Egg
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
       "Addr" => { "port" => [[], "i64"] },
-      "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"] },
+      "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"], "share" => [[], "Shared"], "atomic" => [["i64"], "Atomic"] },
+      # An i64 every thread holding a clone reaches; add returns the new
+      # value and panics on overflow, as + does; swap and compare_swap
+      # return the old one (compare_swap stored new if it was expected).
+      "Atomic" => { "load" => [[], "i64"], "store" => [["i64"], "void"], "add" => [["i64"], "i64"], "swap" => [["i64"], "i64"],
+                    "compare_swap" => [%w[i64 i64], "i64"], "clone" => [[], "Atomic"], "close" => [[], "void"] },
 "Clock" => { "now" => [[], "i64"], "monotonic" => [[], "i64"] },
 "Random" => { "fill" => [["inout_buffer"], "void"] },
       "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
@@ -158,7 +163,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend]).freeze
+    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend Shared]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -886,7 +891,11 @@ module Egg
         saved = @mod
         @mod = mod
         begin
-          resource_elem_error(elem, what, line, col)
+          case what
+          when :shared then shared_value_error(elem, line, col)
+          when :owned_err then owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
+          else resource_elem_error(elem, what, line, col)
+          end
         ensure
           @mod = saved
         end
@@ -1079,6 +1088,7 @@ module Egg
         return buf_type(args, line, col) if t.name == "Buf"
         return chan_type(t.name, args, line, col) if %w[Sender Receiver].include?(t.name)
         return try_send_type(args, line, col) if t.name == "TrySend"
+        return shared_type(args, line, col) if t.name == "Shared"
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
         inner = resolve_type(t.inner, line, col)
@@ -1165,6 +1175,73 @@ module Egg
     end
     public :chan_end?
 
+    # Shared(T): a T no thread may change, which every thread holding a
+    # clone may copy out. Owned, like a channel's end, and laid out like
+    # one (a pointer to the T and its count of holders).
+    def shared_type(args, line, col)
+      if args.length != 1
+        err("E104", "Shared takes one type argument, but #{args.length} were given", line, col)
+        return "error"
+      end
+      t = args[0]
+      return "error" if t == "error"
+      return value_type_error(t, "a shared value", line, col) unless storable?(t)
+      return owned_place_error(t, "a shared value", line, col) if owned_err?(t)
+      # A struct still being registered (Node { next: Shared(Node) }) has
+      # no fields yet: checked once every type is.
+      if @registering.positive?
+        @elem_checks << [t, :shared, line, col, @mod]
+      elsif shared_value_error(t, line, col)
+        return "error"
+      end
+      canon = "Shared(#{t})"
+      info = register(canon, :struct, line, col)
+      info.resource = true
+      info.fields = []
+      info.elem = t
+      info.mod = ""
+      canon
+    end
+
+    # E155 for a T no Shared(T) can hold.
+    def shared_value_error(t, line, col)
+      r = any_resource(t)
+      unless r.nil?
+        held = r == t ? "" : " (it holds a #{r})"
+        err("E155", "a shared value cannot be a #{t}#{held}: #{r} is an owned struct, which copying could not duplicate; share the data it holds", line, col)
+        return true
+      end
+      p = ptr_in(t)
+      return false if p.nil?
+      err("E155", "a shared value cannot hold a pointer (#{p}): what it points at could change under other threads", line, col)
+      true
+    end
+
+    def shared?(t)
+      t.start_with?("Shared(") && chan_end?(t)
+    end
+    public :shared?
+
+    # The pointer type t is or holds, or nil.
+    def ptr_in(t, seen = {})
+      return nil if seen[t]
+      seen[t] = true
+      info = @types[t]
+      case info&.kind
+      when :ptr then t
+      when :array, :buf, :opt, :err
+        inner = info.elem || info.inner
+        inner.nil? || inner == "void" ? nil : ptr_in(inner, seen)
+      when :struct, :union
+        (info.fields || []).each do |_, ft, _|
+          next if ft == "void"
+          r = ptr_in(ft, seen)
+          return r unless r.nil?
+        end
+        nil
+      end
+    end
+
     # ?T: a T or null.
     def opt_type(inner)
       canon = "?#{inner}"
@@ -1200,7 +1277,13 @@ module Egg
       end
       elem = args[0]
       return value_type_error(elem, "a Buf element", line, col) unless storable?(elem)
-      return owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
+      # ?Node while Node is being registered: whether Node owns anything is
+      # known once it is (as for E141 below).
+      if %i[err opt].include?(@types[elem]&.kind) && @registering.positive?
+        @elem_checks << [elem, :owned_err, line, col, @mod]
+      elsif owned_err?(elem)
+        return owned_place_error(elem, "a Buf element", line, col)
+      end
       return "error" if resource_elem_error(elem, "a Buf element", line, col)
       canon = "Buf(#{elem})"
       register(canon, :buf, line, col).elem = elem
@@ -1208,15 +1291,22 @@ module Egg
     end
 
     # An owned value: a buffer, or a struct or array holding one. It is
-    # moved, not copied (own.rb).
-    def owned?(t)
+    # moved, not copied (own.rb). seen: the structs and unions on the way
+    # here, so that one containing itself (E119, reported elsewhere) ends.
+    def owned?(t, seen = nil)
       info = @types[t]
       return false if info.nil?
       case info.kind
       when :buf then true
-      when :array then owned?(info.elem)
-      when :struct then info.resource || (info.fields || []).any? { |_, ft, _| owned?(ft) }
-      when :union then (info.fields || []).any? { |_, ft, _| ft != "void" && owned?(ft) }
+      when :array then owned?(info.elem, seen)
+      when :struct, :union
+        return true if info.resource
+        fields = info.fields || []
+        return false if fields.empty?
+        seen ||= {}
+        return false if seen[t]
+        seen[t] = true
+        fields.any? { |_, ft, _| ft != "void" && owned?(ft, seen) }
       else false
       end
     end
@@ -1263,6 +1353,7 @@ module Egg
       info = @types[t]
       case info&.kind
       when :array, :buf then any_resource(info.elem, seen)
+      when :err, :opt then info.inner == "void" ? nil : any_resource(info.inner, seen)
       when :struct, :union
         return t if info.resource
         info.fields.each do |_, ft, _|
@@ -1310,10 +1401,11 @@ module Egg
       true
     end
 
-    # !T or ?T with an owned T: it must be unwrapped right away.
+    # !T or ?T with an owned T, or a wrapper of one (!?Buf(u8)): it must be
+    # unwrapped right away.
     def owned_err?(t)
       info = @types[t]
-      %i[err opt].include?(info&.kind) && owned?(info.inner)
+      %i[err opt].include?(info&.kind) && (owned?(info.inner) || owned_err?(info.inner))
     end
 
     def unwrap_how(t)
@@ -1348,9 +1440,17 @@ module Egg
       in Var then true
       in Field[obj:] then owned_place?(obj)
       in Index[obj:] then owned_place?(obj)
+      in MethodCall then shared_get?(e)
       else false
       end
     end
+
+    # s.get(): a Shared(T)'s value, lent for as long as the expression it
+    # is in; moving it is E139 (own.rb).
+    def shared_get?(e)
+      e.is_a?(MethodCall) && e.info.is_a?(Hash) && e.info[:cap_method] == "Shared.get"
+    end
+    public :shared_get?
 
     # An owned value made without taking anything: Buf(T).empty, and
     # literals and @splat built only of those. a.alloc, a.resize and @splat
@@ -1714,8 +1814,9 @@ module Egg
       owned?(t) && @types[t]&.kind == :union && fresh_value?(subject)
     end
 
+    # A call's result, which nothing else owns (s.get() lends its value).
     def fresh_value?(e)
-      e.is_a?(Call) || e.is_a?(MethodCall) || e.is_a?(Builtin)
+      (e.is_a?(Call) || e.is_a?(MethodCall) || e.is_a?(Builtin)) && !shared_get?(e)
     end
 
     # Each member that holds something owned needs an arm of its own that
@@ -2226,6 +2327,8 @@ module Egg
         t = check_expr(obj)
         check_borrowed(obj, t)
         expect_type("i64", check_expr(index), index)
+        # s.get()[i]: i must not close or replace s first.
+        check_bounds_writes(obj, index, nil, "an index into") unless shared_root(obj).nil?
         e.info[:len] = @types[t]&.len
         index_type(t, line, col)
       in SliceExpr[obj:, lo:, hi:, line:, col:]
@@ -2776,10 +2879,17 @@ module Egg
       return check_all_error(args) if t == "error"
       return check_spawn(e, args, line, col) if t == "Threads" && name == "spawn"
       return check_channel(e, args, line, col) if t == "Threads" && name == "channel"
-      return check_chan_method(e, t, name, args, line, col) if chan_end?(t)
+      return check_share(e, args, line, col) if t == "Threads" && name == "share"
+      # The receiver is an operand too: an argument must not take it
+      # (x.add(close(x))) before it is used.
+      if shared?(t) || chan_end?(t)
+        r = shared?(t) ? check_shared_method(e, obj, t, name, args, line, col) : check_chan_method(e, t, name, args, line, col)
+        check_nested_writes([obj] + args)
+        return r
+      end
       if CAP_METHODS.key?(t)
         r = check_cap_method(e, obj, t, name, args, line, col, expected)
-        check_nested_writes(args)
+        check_nested_writes([obj] + args)
         return r
       end
       if t == "type"
@@ -2910,6 +3020,48 @@ module Egg
       chan_type("Receiver", [t], line, col)
     end
 
+    # threads.share(v): v, moved into a Shared(T).
+    def check_share(e, args, line, col)
+      @current.direct["thread"] ||= [line, col, "Threads.share"]
+      if args.length != 1
+        err("E104", "'share' takes the value to share, but #{args.length} were given", line, col)
+        return check_all_error(args)
+      end
+      t = check_expr(args[0])
+      return "error" if t == "error"
+      st = shared_type([t], args[0].line, args[0].col)
+      return "error" if st == "error"
+      check_args(Sig.new("share", [[t, "sink"]], "void"), args, "share", line, col)
+      e.info[:cap_method] = "Threads.share"
+      e.info[:args] = args
+      e.info[:params] = [[t, "sink"]]
+      st
+    end
+
+    SHARED_METHODS = %w[get copy clone close].freeze
+
+    def check_shared_method(e, obj, t, name, args, line, col)
+      elem = @types[t].elem
+      @current.direct["thread"] ||= [line, col, "Shared.#{name}"]
+      unless SHARED_METHODS.include?(name)
+        err("E122", "Shared has no method '#{name}' (methods: #{SHARED_METHODS.join(', ')})", line, col)
+        return check_all_error(args)
+      end
+      # A holder that is a temporary would never be closed.
+      check_borrowed(obj, t) unless name == "close"
+      params = name == "copy" ? [["Allocator", nil]] : []
+      check_args(Sig.new(name, params, "void"), args, name, line, col)
+      @current.direct["alloc"] ||= [line, col, "Shared.copy"] if name == "copy"
+      e.info[:cap_method] = "Shared.#{name}"
+      e.info[:args] = args
+      e.info[:params] = params
+      case name
+      when "get", "copy" then elem
+      when "clone" then t
+      else "void"
+      end
+    end
+
     CHAN_METHODS = { "Sender" => %w[send try_send clone close], "Receiver" => %w[recv recv_timeout sender clone close] }.freeze
 
     def check_chan_method(e, t, name, args, line, col)
@@ -2965,7 +3117,7 @@ module Egg
         @current.direct["alloc"] ||= [line, col, "Fs.#{name}"] if %w[read real_path].include?(name)
       end
       # Reading standard input can fail, and fills a buffer.
-      if (t == "Io" && name.start_with?("read_")) || (FILE_TYPES.key?(t) && name != "close")
+      if (t == "Io" && name.start_with?("read_")) || (FILE_TYPES.key?(t) && name != "close" && t != "Atomic")
         error_id("IoFailed")
         @current.direct["alloc"] ||= [line, col, "#{t}.#{name}"] if name.start_with?("read") || %w[recv_from next peer_ip].include?(name)
       end
@@ -3193,12 +3345,12 @@ module Egg
     # x[lo..hi]: the bounds may not change x (E117). x may be an element of
     # a buffer (b[i][lo..hi]), which a bound that grew b would move while
     # it is being sliced.
-    def check_bounds_writes(obj, lo, hi)
-      root = root_name(obj)
+    def check_bounds_writes(obj, lo, hi, what = "a bound of a slice of")
+      root = root_name(obj) || shared_root(obj)
       return if root.nil?
       [lo, hi].compact.each do |b|
         if inout_writes(b).any? { |p| p.is_a?(String) && p.split(".").first == root }
-          err("E117", "'#{root}' is changed by this bound of a slice of it; compute the bound into a local first", b.line, b.col)
+          err("E117", "'#{root}' is changed by #{what} it; compute it into a local first", b.line, b.col)
         end
       end
     end
@@ -3474,6 +3626,13 @@ module Egg
       end
     end
 
+    # The variable holding the Shared(T) whose s.get() e is, or a field,
+    # element or slice of; nil for anything else.
+    def shared_root(e)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      shared_get?(e) ? root_name(e.obj) : nil
+    end
+
     def root_name(e)
       case e
       in Var[name:] then name
@@ -3518,17 +3677,28 @@ module Egg
       return owned?(e.ty) && overlap?(p, path) unless p.nil?
       case e
       in SliceExpr[obj:, lo:, hi:] then mentions_path?(obj, path) || holds?(lo, path) || (!hi.nil? && holds?(hi, path))
-      in Index[obj:, index:] then (place_path(obj).nil? && holds?(obj, path)) || holds?(index, path)
+      in Index[obj:, index:]
+        # An owned element is lent by its container: xs[0] holds xs.
+        op = place_path(obj)
+        held = op.nil? ? holds?(obj, path) : owned?(e.ty) && overlap?(op, path)
+        held || holds?(index, path)
       in Field[obj:] then holds?(obj, path)
       in Builtin[name: "len"] then false
       in Unary[operand:] then holds?(operand, path)
       in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
-      in Call[args:, info:] then sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
+      in Call[args:, info:]
+        # A slice result views the arguments it borrows.
+        borrowed = info&.[](:borrow_args) || []
+        (borrowed + sunk(info&.[](:args) || args, info)).any? { |x| holds?(x, path) }
       in Builtin[args:] then args.any? { |x| holds?(x, path) }
+      in MethodCall[obj:] if shared_get?(e)
+        # s.get() lends what s holds.
+        holds?(obj, path)
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]
-        (own_obj && holds?(obj, path)) || sunk(info&.[](:args) || args, info).any? { |x| holds?(x, path) }
+        borrowed = info&.[](:borrow_args) || []
+        (own_obj && holds?(obj, path)) || (borrowed + sunk(info&.[](:args) || args, info)).any? { |x| holds?(x, path) }
       in StructLit[fields:] then fields.any? { |f| holds?(f[1], path) }
       in ArrayLit[items:] then items.any? { |x| holds?(x, path) }
       in AddrOf[expr:] then mentions_path?(expr, path)

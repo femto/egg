@@ -1,0 +1,41 @@
+// error: E139 @17
+// error: E137 @25
+// error: E139 @37
+uses alloc, io, thread
+
+const Post = struct { id: i64, body: Buf(u8) }
+
+fn reset(threads: Threads, a: Allocator, inout s: Shared(Buf(Buf(u8)))) void {
+    var fresh: Buf(Buf(u8)) = .empty
+    a.push(&fresh, a.concat("x", ""))
+    @replace(&s, threads.share(fresh)).close()
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const p = threads.share(Post{ .id = 1, .body = a.concat("a", "b") })
+    // A field of what get() lends: still not the caller's to free.
+    const b = p.get().body
+    a.free(b)
+    p.close()
+    var items: Buf(Buf(u8)) = .empty
+    a.push(&items, a.concat("a", ""))
+    a.push(&items, a.concat("b", ""))
+    var s = threads.share(items)
+    for (s.get()) |item| {
+        reset(threads, a, &s)
+        io.print(item)
+    }
+    s.close()
+}
+
+const Msg = union(enum) { text: Buf(u8), none }
+
+// The payload of what get() lends is borrowed too.
+fn take_payload(a: Allocator, s: Shared(Msg)) void {
+    switch (s.get()) {
+        .text => |t| {
+            a.free(t)
+        }
+        .none => {}
+    }
+}

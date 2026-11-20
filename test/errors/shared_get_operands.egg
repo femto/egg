@@ -1,0 +1,24 @@
+// error: E117 @17
+// error: E117 @18
+// error: E117 @19
+uses io, alloc, thread
+
+fn close_and_zero(sink s: Shared(Buf(u8))) i64 {
+    s.close()
+    return 0
+}
+
+fn closer(sink x: Atomic) i64 {
+    x.close()
+    return 1
+}
+
+fn use(io: Io, sink s: Shared(Buf(u8)), sink x: Atomic) void {
+    io.print(s.get()[close_and_zero(s)])
+    io.print(s.get()[close_and_zero(s)..])
+    _ = x.add(closer(x))
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    use(io, threads.share(a.concat("a", "b")), threads.atomic(0))
+}

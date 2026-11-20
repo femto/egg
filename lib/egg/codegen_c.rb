@@ -129,7 +129,8 @@ module Egg
       "Threads" => "typedef struct { char unused; } egg_threads;\n",
 "Clock" => "typedef struct { char unused; } egg_clock;\n",
 "Random" => "typedef struct { char unused; } egg_random;\n",
-      "Thread" => "typedef struct { void *h; } egg_thread;\n"
+      "Thread" => "typedef struct { void *h; } egg_thread;\n",
+      "Atomic" => "typedef struct { void *c; } egg_atomic;\n"
     }.freeze
 
     # Runtime helpers, emitted only when the program uses them
@@ -145,6 +146,7 @@ module Egg
                       egg_net_base egg_thread_base egg_thread_start egg_thread_join egg_thread_detach
                       egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_try_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
+                      egg_atomic_base egg_atomic_fetch_add egg_atomic_load egg_atomic_swap egg_atomic_cas egg_ref_retain egg_ref_release egg_atomic_new egg_atomic_add egg_atomic_close egg_shared_new
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_conn_new egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
@@ -1291,6 +1293,96 @@ module Egg
         #else
             return fseeko(f, (off_t)pos, SEEK_SET) == 0 ? 0 : -1;
         #endif
+        }
+      C
+      # Sequentially consistent operations on an int64_t: an Atomic's value,
+      # and the count of holders of an Atomic or a Shared(T); each emitted
+      # only when used.
+      "egg_atomic_base" => <<~C,
+        #if defined(_MSC_VER) && !defined(__clang__)
+        #include <intrin.h>
+        #define EGG_ATOMIC_MSVC 1
+        #endif
+      C
+      "egg_atomic_fetch_add" => <<~C,
+        static int64_t egg_atomic_fetch_add(int64_t *p, int64_t d) {
+        #ifdef EGG_ATOMIC_MSVC
+            return _InterlockedExchangeAdd64((volatile __int64 *)p, d);
+        #else
+            return __atomic_fetch_add(p, d, __ATOMIC_SEQ_CST);
+        #endif
+        }
+      C
+      "egg_atomic_load" => <<~C,
+        static int64_t egg_atomic_load(int64_t *p) {
+        #ifdef EGG_ATOMIC_MSVC
+            return _InterlockedOr64((volatile __int64 *)p, 0);
+        #else
+            return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+        #endif
+        }
+      C
+      "egg_atomic_swap" => <<~C,
+        static int64_t egg_atomic_swap(int64_t *p, int64_t v) {
+        #ifdef EGG_ATOMIC_MSVC
+            return _InterlockedExchange64((volatile __int64 *)p, v);
+        #else
+            return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST);
+        #endif
+        }
+      C
+      # The old value either way: on failure, expected becomes what was there.
+      "egg_atomic_cas" => <<~C,
+        static int64_t egg_atomic_cas(int64_t *p, int64_t expected, int64_t v) {
+        #ifdef EGG_ATOMIC_MSVC
+            return _InterlockedCompareExchange64((volatile __int64 *)p, v, expected);
+        #else
+            __atomic_compare_exchange_n(p, &expected, v, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+            return expected;
+        #endif
+        }
+      C
+      "egg_ref_retain" => <<~C,
+        static void *egg_ref_retain(void *p, int64_t *refs) {
+            egg_atomic_fetch_add(refs, 1);
+            return p;
+        }
+      C
+      # Drops a holder: true for the last, which frees what is held.
+      "egg_ref_release" => <<~C,
+        static bool egg_ref_release(int64_t *refs) {
+            return egg_atomic_fetch_add(refs, -1) == 1;
+        }
+      C
+      # An Atomic: its value, then its count of holders.
+      "egg_atomic_new" => <<~C,
+        static void *egg_atomic_new(int64_t v) {
+            int64_t *c = (int64_t *)egg_buf_resize(NULL, 2, sizeof(int64_t));
+            c[0] = v;
+            c[1] = 1;
+            return c;
+        }
+      C
+      # One instruction (no compare-and-swap loop to retry under
+      # contention); an overflow is caught after the fact, and panics.
+      "egg_atomic_add" => <<~C,
+        static int64_t egg_atomic_add(void *c, int64_t d) {
+            int64_t old = egg_atomic_fetch_add((int64_t *)c, d);
+            if ((d > 0 && old > INT64_MAX - d) || (d < 0 && old < INT64_MIN - d)) egg_panic("integer overflow");
+            return old + d;
+        }
+      C
+      "egg_atomic_close" => <<~C,
+        static void egg_atomic_close(void *c) {
+            if (egg_ref_release((int64_t *)c + 1)) free(c);
+        }
+      C
+      # A Shared(T): its count of holders, then the T, 16 bytes in.
+      "egg_shared_new" => <<~C,
+        static void *egg_shared_new(size_t size) {
+            int64_t *p = (int64_t *)egg_buf_resize(NULL, 1, 16 + size);
+            p[0] = 1;
+            return p;
         }
       C
       "egg_thread_base" => <<~C,
@@ -3086,6 +3178,11 @@ module Egg
                     "egg_net_addrinfo" => %w[egg_net_base egg_net_start egg_fs_path],
                     "egg_thread_start" => %w[egg_thread_base egg_buf_resize], "egg_thread_join" => ["egg_thread_base"],
                     "egg_thread_detach" => ["egg_thread_base"], "egg_chan" => ["egg_thread_base"],
+                    "egg_atomic_fetch_add" => ["egg_atomic_base"], "egg_atomic_load" => ["egg_atomic_base"],
+                    "egg_atomic_swap" => ["egg_atomic_base"], "egg_atomic_cas" => ["egg_atomic_base"],
+                    "egg_ref_retain" => ["egg_atomic_fetch_add"], "egg_ref_release" => ["egg_atomic_fetch_add"],
+                    "egg_atomic_new" => ["egg_buf_resize"], "egg_atomic_add" => ["egg_atomic_fetch_add"],
+                    "egg_atomic_close" => ["egg_ref_release"], "egg_shared_new" => ["egg_buf_resize"],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
                     "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_queue" => ["egg_chan"], "egg_chan_line" => %w[egg_chan egg_chan_queue], "egg_chan_get" => ["egg_chan_line"], "egg_chan_put" => ["egg_chan_line"], "egg_chan_line_close" => ["egg_chan"], "egg_chan_wait" => %w[egg_chan egg_chan_queue], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_try_send" => ["egg_chan_put"], "egg_chan_recv" => %w[egg_chan_get egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_get egg_chan_wait],
                     "egg_chan_tx_close" => %w[egg_chan_line_close egg_chan_free], "egg_chan_rx_close" => %w[egg_chan_line_close egg_chan_free],
@@ -3120,7 +3217,7 @@ module Egg
     # Helpers that never panic, so need no egg_panic.
     NO_PANIC = %w[egg_secure_zero egg_mul_wide egg_str_eq egg_str_cmp egg_fmt_float egg_args_state egg_args_len egg_stdin_prepare egg_clock_now egg_clock_monotonic
                   egg_net_base egg_net_last egg_net_close egg_net_prep egg_net_recv egg_sockaddr_port egg_net_port
-                  egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_queue egg_chan_line egg_chan_get egg_chan_line_close
+                  egg_atomic_base egg_atomic_fetch_add egg_atomic_load egg_atomic_swap egg_atomic_cas egg_ref_retain egg_ref_release egg_thread_base egg_thread_join egg_thread_detach egg_chan egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_queue egg_chan_line egg_chan_get egg_chan_line_close
                   egg_chan_tx_close
                   egg_addr_port egg_tcp_close egg_udp_send].freeze
     FLOAT_C = { "f32" => "float", "f64" => "double" }.freeze
@@ -3153,6 +3250,7 @@ module Egg
       @need_cap = {}
       @int_helpers = {} # name -> C text, generated in use order
       @drops = {}       # owned type -> its egg_drop_ function's name
+      @dups = {}        # owned type -> its egg_dup_ function's name
       @out = +""
       @indent = 0
       @locals = []
@@ -3246,6 +3344,7 @@ module Egg
       @spawns.each { |text| out << text << "\n" }
       # After the prototypes: an owned struct's drop calls its deinit.
       emit_drops(out)
+      emit_dups(out)
       out << body
       out
     end
@@ -3271,6 +3370,50 @@ module Egg
         end
       end
       @drops[t]
+    end
+
+    # Deep copy of an owned value without owned structs (a Shared(T)'s T):
+    # each buffer anew, with its elements copied. Returns the function.
+    def dup(t)
+      return @dups[t] if @dups.key?(t)
+      @dups[t] = "egg_dup_#{@types[t].c_name}"
+      info = @types[t]
+      helper("egg_buf_resize") if info.kind == :buf
+      case info.kind
+      when :buf, :array then dup(info.elem) if @checker.owned?(info.elem)
+      when :union then info.fields.each { |_, ft, _| dup(ft) if ft != "void" && @checker.owned?(ft) }
+      when :struct then info.fields.each { |_, ft, _| dup(ft) if @checker.owned?(ft) }
+      end
+      @dups[t]
+    end
+
+    def emit_dups(out)
+      return if @dups.empty?
+      @dups.each { |t, name| out << "static #{c_type(t)} #{name}(#{c_type(t)} v);\n" }
+      @dups.each do |t, name|
+        info = @types[t]
+        body = case info.kind
+               when :buf
+                 copy = if @checker.owned?(info.elem)
+                          "    for (int64_t i = 0; i < v.len; i++) r.ptr[i] = #{dup(info.elem)}(v.ptr[i]);\n"
+                        else
+                          "    memcpy(r.ptr, v.ptr, (size_t)v.len * sizeof(*v.ptr));\n"
+                        end
+                 "    #{c_type(t)} r = { .ptr = NULL, .len = v.len, .cap = v.len };\n    if (v.len == 0) return r;\n" \
+                   "    r.ptr = egg_buf_resize(NULL, v.len, sizeof(*v.ptr));\n#{copy}    return r;\n"
+               when :array
+                 "    #{c_type(t)} r = v;\n    for (int64_t i = 0; i < #{info.len}; i++) r.a[i] = #{dup(info.elem)}(v.a[i]);\n    return r;\n"
+               when :union
+                 members = info.fields.each_with_index.select { |(_, ft, _), _| ft != "void" && @checker.owned?(ft) }
+                               .map { |(m, ft, _), i| "    if (v.tag == #{i}) r.u.m_#{m} = #{dup(ft)}(v.u.m_#{m});\n" }.join
+                 "    #{c_type(t)} r = v;\n#{members}    return r;\n"
+               when :struct
+                 fields = info.fields.select { |_, ft, _| @checker.owned?(ft) }.map { |f, ft, _| "    r.f_#{f} = #{dup(ft)}(v.f_#{f});\n" }.join
+                 "    #{c_type(t)} r = v;\n#{fields}    return r;\n"
+               end
+        out << "static #{c_type(t)} #{name}(#{c_type(t)} v) {\n#{body}}\n"
+      end
+      out << "\n"
     end
 
     def emit_drops(out)
@@ -3494,7 +3637,7 @@ module Egg
       when "Args"
         @need_cap[t] = true
         "egg_args"
-      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread", "Clock", "Random"
+      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread", "Clock", "Random", "Atomic"
         @need_cap[t] = true
         "egg_#{t.downcase}"
       when "TcpConn", "TcpListener", "UdpSocket", "Poller", "Waker"
@@ -4644,6 +4787,56 @@ module Egg
       end
     end
 
+    # threads.share and threads.atomic, and the methods of what they make.
+    def shared_call(m, obj, recv, args, ret)
+      case m
+      when "Threads.share"
+        elem = @types[ret].elem
+        line("(void)#{recv};")
+        v = hoist(coerce(expr(args[0]), args[0].ty, elem), elem)
+        p = tmp
+        line("void *#{p} = #{helper('egg_shared_new')}(sizeof(#{c_type(elem)}));")
+        line("*(#{c_type(elem)} *)((char *)#{p} + 16) = #{v};")
+        hoist("(#{c_type(ret)}){ #{p} }", ret)
+      when "Threads.atomic"
+        line("(void)#{recv};")
+        hoist("(egg_atomic){ #{helper('egg_atomic_new')}(#{expr(args[0])}) }", ret)
+      else
+        c = "#{hoist(recv, obj.ty)}.c"
+        if m.start_with?("Shared.")
+          elem = @types[obj.ty].elem
+          value = "(*(#{c_type(elem)} *)((char *)#{c} + 16))"
+          case m
+          when "Shared.get" then value
+          when "Shared.copy"
+            line("(void)#{expr(args[0])};")
+            hoist(@checker.owned?(elem) ? "#{dup(elem)}(#{value})" : value, elem)
+          when "Shared.clone"
+            hoist("(#{c_type(ret)}){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c}) }", ret)
+          else
+            drop = @checker.owned?(elem) ? " #{drop(elem)}(#{value});" : ""
+            line("if (#{helper('egg_ref_release')}((int64_t *)#{c})) {#{drop} free(#{c}); }")
+            "(void)0"
+          end
+        else
+          cell = "(int64_t *)#{c}"
+          # Each result is computed here, before any later operand of the
+          # expression it is in runs: observe(x.load(), bump(x)).
+          case m
+          when "Atomic.load" then hoist("#{helper('egg_atomic_load')}(#{cell})", "i64")
+          when "Atomic.store" then "(void)#{helper('egg_atomic_swap')}(#{cell}, #{expr(args[0])})"
+          when "Atomic.add" then hoist("#{helper('egg_atomic_add')}(#{c}, #{expr(args[0])})", "i64")
+          when "Atomic.swap" then hoist("#{helper('egg_atomic_swap')}(#{cell}, #{expr(args[0])})", "i64")
+          when "Atomic.compare_swap"
+            expected = hoist(expr(args[0]), "i64")
+            hoist("#{helper('egg_atomic_cas')}(#{cell}, #{expected}, #{expr(args[1])})", "i64")
+          when "Atomic.clone" then hoist("(egg_atomic){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c} + 1) }", ret)
+          else "#{helper('egg_atomic_close')}(#{c})"
+          end
+        end
+      end
+    end
+
     # The FILE of a Reader or a Writer, computed once.
     def file_of_value(recv, obj)
       "#{hoist(recv, obj.ty)}.f"
@@ -4658,6 +4851,7 @@ module Egg
     def cap_call(m, obj, args, ret)
       recv = expr(obj)
       return chan_call(m, obj, recv, args, ret) if m.start_with?("Sender.", "Receiver.") || m == "Threads.channel"
+      return shared_call(m, obj, recv, args, ret) if m.start_with?("Shared.", "Atomic.") || %w[Threads.share Threads.atomic].include?(m)
       codes = args.each_with_index.map do |a, i|
         a.is_a?(AddrOf) && a.expr.is_a?(SliceExpr) ? slice_expr(a.expr) : in_order(expr(a), a, args[(i + 1)..])
       end

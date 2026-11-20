@@ -1,0 +1,41 @@
+// error: E117 @26
+// error: E117 @29
+// error: E117 @32
+uses io, alloc, thread
+
+// A slice a call returns holds what it views; an owned element holds its
+// container. Another operand of the call may not take or change them.
+fn view(b: Buf(u8)) []u8 {
+    return b[0..]
+}
+fn show(io: Io, v: []u8, n: i64) void {}
+fn show_buf(io: Io, v: Buf(u8), n: i64) void {}
+fn close_and_zero(sink s: Shared(Buf(u8))) i64 {
+    s.close()
+    return 0
+}
+fn free_zero(a: Allocator, sink b: Buf(u8)) i64 {
+    a.free(b)
+    return 0
+}
+fn clear(a: Allocator, inout xs: Buf(Buf(u8))) i64 {
+    a.free(@replace(&xs, .empty))
+    return 0
+}
+fn shared(io: Io, sink s: Shared(Buf(u8))) void {
+    show(io, view(s.get()), close_and_zero(s))
+}
+fn plain(io: Io, a: Allocator, sink b: Buf(u8)) void {
+    show(io, view(b), free_zero(a, b))
+}
+fn element(io: Io, a: Allocator, inout xs: Buf(Buf(u8))) void {
+    show_buf(io, xs[0], clear(a, &xs))
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    shared(io, threads.share(a.concat("a", "b")))
+    plain(io, a, a.concat("a", "b"))
+    var xs: Buf(Buf(u8)) = .empty
+    element(io, a, &xs)
+    a.free(xs)
+}

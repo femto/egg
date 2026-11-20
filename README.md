@@ -14,7 +14,7 @@ Egg compiles to portable C99. It is designed to be written by AI and read by peo
 - **Ownership without a GC.** A buffer has one owner. Use after free, double free and leaks are compile errors, with no lifetime annotations.
 - **No undefined behaviour** outside `allow unsafe` code. Integer overflow, integer division by zero and out-of-bounds indexing panic.
 - **Fast enough to be a systems language.** Near C on most programs, with every check on, and 1.3 to 5.6 times the Rust port's throughput on a real web app's benchmark routes, both with caches on ([numbers](#performance)).
-- **Threads without shared data.** Owned values move between threads over channels.
+- **Threads without data races.** Owned values move between threads over channels; what they share is immutable (`Shared(T)`) or atomic, as in Erlang, so there are no locks.
 
 ## Performance
 
@@ -430,7 +430,12 @@ v3 (memory without GC, and what realistic programs needed):
 - Threads: `uses thread` gives a `Threads` value; `threads.spawn(f, x, ...)`
   returns an owned `Thread` to `join` or `detach`. Owned arguments move to the
   thread and plain values are copied, so outside `allow unsafe` raw pointers
-  nothing is shared and no locks are needed. `threads.channel(T, n)` returns
+  nothing is shared but what is made to be, and no locks are needed:
+  `threads.share(v)` makes a `Shared(T)` no thread can change, read in place
+  with `s.get()` (lent, not copied; `s.copy(a)` gives a copy to change),
+  held by more threads with `s.clone()` and freed by the last `s.close()`;
+  `threads.atomic(n)` an `Atomic` i64 (`load`, `store`, `add` giving the new
+  value, `swap`, `compare_swap` giving the old one). `threads.channel(T, n)` returns
   a `Receiver(T)` (with n of 0, `send` waits for the receiver), and
   `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and `rx.recv()` gives
   null once every sender has closed and it is empty; `rx.recv_timeout(ms)`

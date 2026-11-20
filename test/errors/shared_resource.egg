@@ -1,0 +1,39 @@
+// error: E155 @22
+// error: E155 @23
+// error: E155 @24
+// error: E155 @25
+// error: E155 @29
+// error: E133 @32
+// error: E133 @33
+// error: E133 @34
+allow unsafe
+uses alloc, net, thread
+
+const Wrap = struct { tx: Sender(i64) }
+
+const Db = owned struct {
+    n: i64
+
+    fn deinit(sink self: Db) void {
+        @forget(self)
+    }
+}
+
+fn keep(s: Shared(Db)) void {}
+fn conn(s: Shared(TcpConn)) void {}
+fn wrapped(s: Shared(Wrap)) void {}
+fn pointer(s: Shared(!*i64)) void {}
+
+// A struct still being registered when Shared(Node) is met.
+const Node = struct {
+    next: Shared(Node)
+}
+
+fn nested(s: Shared(!?Atomic)) void {}
+fn wrapped_buf(s: Shared(!?Buf(u8))) void {}
+const Holder = struct { f: !?Buf(u8) }
+
+fn main(threads: Threads) void {
+    const s = threads.share(1)
+    s.close()
+}
