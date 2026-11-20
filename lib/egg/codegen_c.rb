@@ -4523,7 +4523,12 @@ module Egg
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
                  in AddrOf[expr: place]
                    # A pointer argument may go to a ?*T parameter.
-                   mode == "inout" ? "&#{lvalue(place)}" : coerce("&#{lvalue(place)}", a.ty, pt)
+                   if mode == "inout" || a.ty == pt
+                     "&#{lvalue(place)}"
+                   else
+                     code = coerce("&#{lvalue(place)}", a.ty, pt)
+                     by_ptr?(pt, mode) ? "&#{hoist(code, pt)}" : code
+                   end
                  else
                    if by_ptr?(pt, mode) && a.ty == pt && !a.is_a?(SliceExpr)
                      big_arg(a, later, inouts)

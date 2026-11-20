@@ -3141,7 +3141,13 @@ module Egg
           t = check_lvalue(a.expr, "pass as inout")
           mark_root_used(a.expr)
           a.ty = t
-          expect_type(pt, t, a)
+          # The callee writes a pt into the place: it must be one, not a
+          # value that would be wrapped (an i64 for an inout ?i64).
+          if t != pt && t != "error" && fits?(pt, t)
+            err("E103", "parameter #{i + 1} of '#{name}' is an inout #{pt}: pass a #{pt} variable, found #{t}", a.line, a.col)
+          else
+            expect_type(pt, t, a)
+          end
           path = inout_path(a.expr)
           inout_roots << [path, a] unless path.nil?
         elsif slice_expr?(a)
@@ -3816,13 +3822,17 @@ module Egg
         end
         return t
       end
+      # ?T, *T, []T written in place (V == ?i64) resolve like a name.
       name = case e
+             in TypeExpr[type:] then type
              in Var[name:] then name
              in Field[obj: Var[name: m], name:] then "#{m}.#{name}"
              else return nil
              end
-      return @tenv[name] if @tenv.key?(name)
-      return nil if lookup(name) # a variable
+      if name.is_a?(String)
+        return @tenv[name] if @tenv.key?(name)
+        return nil if lookup(name) # a variable
+      end
       before = @diagnostics.length
       t = resolve_type(name, e.line, e.col)
       if @diagnostics.length > before || t == "error"

@@ -339,7 +339,9 @@ fn name(p1: T1, inout p2: T2, sink p3: T3, comptime T: type) R { ... }
   owns nothing is E145, except in a generic instance, where T may or may
   not own something.
 - A call must pass exactly as many arguments as there are parameters (E104),
-  each of the declared type (E103).
+  each of the declared type (E103). An `inout` argument must be a place of
+  exactly that type: an `i64` variable does not fit an `inout ?i64`, since
+  the function writes a `?i64` into it.
 - **A non-void function must return on every path** (E107). A block returns
   on every path when at least one of its statements does, where:
   - `return` always returns;

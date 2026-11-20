@@ -44,6 +44,15 @@ fn push_struct(a: Allocator) void {
     a.free(h)
 }
 
+fn clear(inout x: ?i64) void {
+    x = null
+}
+
+fn wrap_inout() void {
+    var v: i64 = 3
+    clear(&v)
+}
+
 fn main() void {
 }
 // error: E108 @4
@@ -55,3 +64,4 @@ fn main() void {
 // error: E113 @29
 // error: E103 @34
 // error: E103 @43
+// error: E103 @53

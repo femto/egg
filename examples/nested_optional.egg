@@ -15,6 +15,8 @@
 // expect: true false
 // expect: 7 true 5
 // expect: 5 -1
+// expect: 5
+// expect: opt ptr other
 uses io, alloc
 allow unsafe
 
@@ -46,6 +48,23 @@ fn head(s: []u8, ok: bool) ??[]u8 {
 fn deref_or(p: ?*i64) i64 {
     const q = p orelse return -1
     return q.*
+}
+
+// ??*i64 is bigger than 16 bytes, so it goes by address.
+fn deref2(p: ??*i64) i64 {
+    const q = (p orelse null) orelse return -1
+    return q.*
+}
+
+// A type written in place compares like a named one.
+fn kind(comptime V: type) str {
+    if (V == ?i64) {
+        return "opt"
+    }
+    if (V == *i64) {
+        return "ptr"
+    }
+    return "other"
 }
 
 fn show(io: Io, x: ??i64) void {
@@ -114,5 +133,7 @@ fn main(io: Io, a: Allocator) void {
     const pp: ??*i64 = &n
     io.print((small orelse 0) orelse 1, " ", ((color orelse .red) orelse .red) == .green, " ", ((pp orelse null) orelse null).*)
     io.print(deref_or(&n), " ", deref_or(null))
+    io.print(deref2(&n))
+    io.print(kind(MaybeInt), " ", kind(*i64), " ", kind(i64))
     n = 6
 }
