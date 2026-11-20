@@ -40,7 +40,7 @@ The core follows Zig but stays smaller: it keeps only features that need no runt
 | `[3][4]u8` | 3 rows of 4 bytes; indexed `grid[2][3]` in the same order |
 | `[]u8` | slice: pointer plus runtime length |
 | `*[4]u8` | pointer to an array of 4 bytes |
-| `?T` | a `T` or `null` (`*T` can already be null, so `?*T` is not used) |
+| `?T` | a `T` or `null`; `*T` is a raw pointer and can already be null, so `?*T` and `??T` have two levels |
 | `!T` | a `T` or an error |
 
 Rust's `[u8; 4]` was considered and rejected: it is the only form that puts the element type in the middle, and nested arrays read inside out.

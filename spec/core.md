@@ -1465,7 +1465,14 @@ fn main(io: Io) void {
 ```
 
 `?T` holds either a `T` or `null`, as in Zig. T may be any value type but
-a pointer (which can already be null), `!U` or `?U` (E108).
+`!U` (E108). T may itself be optional or a pointer, which can already be
+null: a `??U` or `?*U` has two levels, null or a value that may be null.
+They come from generic code: a `?V` with `V = ?i64`, so `get` on a
+`HashMap(i64, ?i64)` tells a missing key (null) from a null value.
+`null` is the outer level; a plain value is wrapped in every level
+(`const x: ??i64 = 7`); each `orelse` or capture unwraps one. An owned
+`?U` is unwrapped where it is made, so it is never wrapped again
+(`??Buf(u8)` is E133).
 
 - A `T` or `null` fits where a `?T` is expected: `var best: ?i64 = null`,
   then `best = 7`. A function may return `!?T`, value or nothing or error:

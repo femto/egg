@@ -847,8 +847,9 @@ module Egg
       elsif kw?("null")
         advance
         NullLit.new(t.line, t.col)
-      elsif op?("*") || kw?("fn")
-        # *T, fn(T) R as a value: a type argument such as @ptrCast(*u8, p)
+      elsif op?("*") || op?("?") || kw?("fn")
+        # *T, ?T, fn(T) R as a value: a type argument such as
+        # @ptrCast(*u8, p) or HashMap(i64, ?i64)
         TypeExpr.new(parse_type, t.line, t.col)
       elsif at?(:string)
         advance

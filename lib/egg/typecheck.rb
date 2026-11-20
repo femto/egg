@@ -1064,12 +1064,16 @@ module Egg
       when OptType
         inner = resolve_type(t.inner, line, col)
         return "error" if inner == "error"
-        unless (storable?(inner) || inner.start_with?("[]")) && !inner.start_with?("!") && !inner.start_with?("?")
+        # ??T and ?*T are two levels: null, or a value that is itself
+        # null or not, as when a ?V is instantiated with V = ?T or *T.
+        unless (storable?(inner) || inner.start_with?("[]")) && !inner.start_with?("!")
           err("E108", "?#{inner} is not a valid optional", line, col)
           return "error"
         end
-        unless pointee(inner).nil?
-          err("E108", "?#{inner} is not needed: a pointer can already be null", line, col)
+        # An owned ?T is unwrapped where it is made, so it is never
+        # wrapped again.
+        if owned_err?(inner)
+          err("E133", "?#{inner} cannot be made: a #{inner} must be unwrapped right away with orelse", line, col)
           return "error"
         end
         opt_type(inner)
@@ -3243,7 +3247,7 @@ module Egg
     def slice_in(t)
       return nil if t.nil?
       t = t[1..] if t.start_with?("!")
-      t = t[1..] if t.start_with?("?")
+      t = t[1..] while t.start_with?("?")
       t.start_with?("[]") ? t : nil
     end
 
@@ -4294,9 +4298,17 @@ module Egg
         inner = @types[want].inner
         return true if inner == got
         # A plain value fits a !?T, as in Zig.
-        return true if inner.start_with?("?") && @types[inner].inner == got
+        return true if opt_wraps?(inner, got)
       end
-      return true if want.start_with?("?") && @types[want].inner == got
+      opt_wraps?(want, got)
+    end
+
+    # Is want an optional of got, maybe nested (i64 fits ?i64 and ??i64)?
+    def opt_wraps?(want, got)
+      while want.start_with?("?")
+        want = @types[want].inner
+        return true if want == got
+      end
       false
     end
 

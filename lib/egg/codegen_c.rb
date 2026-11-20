@@ -4209,7 +4209,7 @@ module Egg
     def coerce(code, from, to)
       return code if to.nil? || from == to
       return text_as(code, from, to) if %w[str []u8].include?(to) && text_type?(from)
-      return "((#{c_type(to)}){ .value = #{code}, .has = true })" if to.start_with?("?")
+      return "((#{c_type(to)}){ .value = #{coerce(code, from, @types[to].inner)}, .has = true })" if to.start_with?("?")
       return code unless to.start_with?("!")
       if from == "anyerror"
         "((#{c_type(to)}){ .err = #{code} })"
