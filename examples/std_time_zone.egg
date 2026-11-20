@@ -1,0 +1,301 @@
+// std/time/zone: TZif data, POSIX TZ rules, fixed offsets, and local
+// times when clocks change.
+// expect: 1874-12-07T13:44:00-04:56 LMT false
+// expect: 1999-12-31T19:00:00-05:00 EST false
+// expect: 2023-06-30T20:00:00-04:00 EDT true
+// expect: 2024-06-30T20:00:00-04:00 EDT true
+// expect: 2029-12-31T19:00:00-05:00 EST false
+// expect: 2020-09-13T08:26:40-04:00 EDT true
+// expect: 2023-06-30T20:00:00-04:00 EDT true
+// expect: 2024-06-30T19:00:00-05:00 EST false
+// expect: 2024-6-30 20:0 sunday
+// expect: 2024-03-10T01:30:00-05:00 EST false
+// expect: 2024-03-10T03:30:00-04:00 EDT true
+// expect: 2024-03-10T03:30:00-04:00 EDT true
+// expect: 2024-11-03T00:30:00-04:00 EDT true
+// expect: 2024-11-03T01:30:00-04:00 EDT true
+// expect: 2024-11-03T02:30:00-05:00 EST false
+// expect: 2023-07-04T12:00:00-04:00 EDT true
+// expect: none
+// expect: 2024-01-01T11:00:00+11:00 +11 true
+// expect: 2024-07-01T10:30:00+10:30 +1030 false
+// expect: 2024-01-01T00:00:00Z GMT true
+// expect: 2024-07-01T01:00:00+01:00 IST false
+// expect: 2024-03-31T00:59:59Z GMT true
+// expect: 2024-03-31T02:00:00+01:00 IST false
+// expect: 1970-01-01T08:00:00+08:00 CST false
+// expect: 2023-12-31T20:00:00-04:00 EDT true
+// expect: 1970-01-01T05:30:00+05:30 IST false
+// expect: 2023-12-31T22:30:00Z AAA false
+// expect: 2024-01-01T00:30:00+01:00 BBB true
+// expect: 2024-07-01T00:00:00Z AAA false
+// expect: 2025-04-10T03:30:00+01:00 BBB true
+// expect: 2025-04-10T03:30:00+01:00 BBB true
+// expect: 2025-04-10T05:30:00+01:00 BBB true
+// expect: 9000
+// expect: 3600
+// expect: 4500
+// expect: 7200
+// expect: 2500
+// expect: 2500
+// expect: 0
+// expect: 7200
+// expect: 1970-01-01T00:00:00Z UTC false
+// expect: BadZone
+// expect: BadZone
+// expect: BadZone
+// expect: BadZone
+// expect: BadZone
+// expect: BadZone
+// expect: BadZone
+// expect: BadZone
+// expect: UnknownZone
+// expect: UnknownZone
+// expect: UnknownZone
+// expect: UTC 0
+// expect: true
+// expect: 2024-01-01T01:00:00+01:00 BBB true
+// expect: 2024-01-01T12:00:00+01:00 BBB true
+// expect: 1970-01-01T00:16:37Z AAA false
+// expect: 1970-01-01T01:16:38+01:00 BBB false
+// expect: BadZone
+// expect: BadZone
+// expect: UTC
+uses alloc, args, fs, io
+
+const time = @import("std/time")
+const zone = @import("std/time/zone")
+const codec = @import("std/codec")
+
+// A TZif file made for this test, checked with Python's zoneinfo: New
+// York's LMT until 1883, EST, EDT and EST again in 2023, then the rule
+// "EST5EDT,M3.2.0,M11.1.0".
+const NY = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAwAAAAz/////XgPwkAAAAABkDXhwAAAAAGVHL2ACAQL//7qeAAD//8fAAQT//7mwAAhMTVQARURUAEVTVAAKRVNUNUVEVCxNMy4yLjAsTTExLjEuMAo="
+
+// The same 2023 changes in a version 1 file, with 32-bit times and no rule;
+// before the first change type 0 holds (RFC 8536), which here is EDT.
+const V1 = "VFppZgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAgAAAAhkDXhwZUcvYAAB///HwAEA//+5sAAERURUAEVTVAA="
+
+// Offsets 0, 1800, 0 and 3600 in two hours of 1970-01-01 (RFC 8536 allows
+// it): 02:30 falls in the gap of the change at 02:00 UTC from 0, the
+// offset just before it, so it is 9000 s (Python's zoneinfo agrees).
+const TWICE = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAwAAAAwAAAAAAAAOEAAAAAAAABdwAAAAAAAAHCABAAIAAAAAAAAAAAcIAQQAAA4QAQhBQUEAQkJCAENDQwAKCg=="
+
+// Offsets 0, 3600, -3600 and 7200 from 1000, 2000 and 3000 s, and the same
+// with an offset no change uses: 00:41:40 (2500 s) is before every change
+// as the local times they count from go, so 2500 s in both, as in Python.
+const SWING = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAABAAAAAwAAAAAAAAD6AAAAAAAAAfQAAAAAAAAC7gBAgMAAAAAAAAAAA4QAAP///HwAAYAABwgAAlaMABaMQBaMgBaMwAKCg=="
+const SWING_UNUSED = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAABQAAAA8AAAAAAAAD6AAAAAAAAAfQAAAAAAAAC7gBAgMAAAAAAAAAAA4QAAP///HwAAYAABwgAAkAAE4gAAxaMABaMQBaMgBaMwBaNAAKCg=="
+
+// Changes at the ends of an i64 of seconds, which a TZif file may hold:
+// 1970-01-01 00:00 local is before the first (0 s) and after the second
+// (7200 s), with nothing overflowing on the way.
+const AT_END = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAgAAAAZ//////////wEAAAAAAAAAAA4QAANaMABaMQAKCg=="
+const AT_START = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAgAAAAaAAAAAAAAAAAH///HwAAD//+PgAANaMABaMQAKCg=="
+
+// A change at 1000 s as a file with leap records counts them, after two
+// leap seconds at 100 and 200 s: 998 s without them.
+const LEAPS = "VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAABAAAAAgAAAAgAAAAAAAAD6AEAAAAAAAAAAA4QAARBQUEAQkJCAAAAAAAAAABkAAAAAQAAAAAAAADIAAAAAgpCQkItMQo="
+
+fn show(io: Io, a: Allocator, z: zone.Zone, secs: i64) void {
+    const ns = secs * time.SECOND
+    var out: Buf(u8) = .empty
+    defer a.free(out)
+    time.append_rfc3339(a, &out, ns, z.offset(ns))
+    io.print(out, " ", z.abbr(ns), " ", z.dst(ns))
+}
+
+fn at(year: i64, month: i64, day: i64, hour: i64, minute: i64) time.DateTime {
+    return time.DateTime{ .year = year, .month = month, .day = day, .hour = hour, .minute = minute, .second = 0, .nano = 0 }
+}
+
+fn instant(io: Io, a: Allocator, z: zone.Zone, t: time.DateTime) void {
+    if (z.instant(t)) |ns| {
+        show(io, a, z, ns / time.SECOND)
+    } else {
+        io.print("none")
+    }
+}
+
+fn seconds(io: Io, z: zone.Zone, t: time.DateTime) void {
+    if (z.instant(t)) |ns| {
+        io.print(ns / time.SECOND)
+    } else {
+        io.print("none")
+    }
+}
+
+fn posix(io: Io, a: Allocator, s: []u8) void {
+    const z = zone.posix(a, s) catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+    a.free(z)
+    io.print("ok")
+}
+
+fn tzif(io: Io, a: Allocator, data: []u8) void {
+    const z = zone.parse_tzif(a, data) catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+    a.free(z)
+    io.print("ok")
+}
+
+fn fixed(io: Io, a: Allocator, offset: i64) void {
+    const z = zone.fixed(a, "far", offset) catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+    a.free(z)
+    io.print("ok")
+}
+
+fn load(io: Io, files: Fs, a: Allocator, name: []u8) void {
+    const z = zone.load(files, a, name) catch |e| {
+        io.print(@errorName(e))
+        return
+    }
+    a.free(z)
+    io.print("ok")
+}
+
+fn main(io: Io, files: Fs, env: Args, a: Allocator) !void {
+    var data: Buf(u8) = .empty
+    defer a.free(data)
+    _ = codec.base64_decode(a, &data, NY)
+    const ny = try zone.parse_tzif(a, data)
+    defer a.free(ny)
+    show(io, a, ny, -3000000000)
+    show(io, a, ny, 946684800)
+    show(io, a, ny, 1688169600)
+    show(io, a, ny, 1719792000)
+    show(io, a, ny, 1893456000)
+    var old: Buf(u8) = .empty
+    defer a.free(old)
+    _ = codec.base64_decode(a, &old, V1)
+    const v1 = try zone.parse_tzif(a, old)
+    defer a.free(v1)
+    show(io, a, v1, 1600000000)
+    show(io, a, v1, 1688169600)
+    show(io, a, v1, 1719792000)
+    const t = ny.at(1719792000 * time.SECOND)
+    io.print(t.year, "-", t.month, "-", t.day, " ", t.hour, ":", t.minute, " ", t.weekday())
+    // 2024-03-10 skips 02:00 to 03:00; 2024-11-03 has 01:00 to 02:00 twice.
+    instant(io, a, ny, at(2024, 3, 10, 1, 30))
+    instant(io, a, ny, at(2024, 3, 10, 2, 30))
+    instant(io, a, ny, at(2024, 3, 10, 3, 30))
+    instant(io, a, ny, at(2024, 11, 3, 0, 30))
+    instant(io, a, ny, at(2024, 11, 3, 1, 30))
+    instant(io, a, ny, at(2024, 11, 3, 2, 30))
+    instant(io, a, ny, at(2023, 7, 4, 12, 0))
+    instant(io, a, ny, at(2262, 4, 11, 20, 0))
+    // Rules alone: half an hour of daylight saving time in the south, and
+    // Ireland's, whose winter time is the daylight saving one.
+    const howe = try zone.posix(a, "<+1030>-10:30<+11>-11,M10.1.0,M4.1.0")
+    defer a.free(howe)
+    show(io, a, howe, 1704067200)
+    show(io, a, howe, 1719792000)
+    const dublin = try zone.posix(a, "IST-1GMT0,M10.5.0,M3.5.0/1")
+    defer a.free(dublin)
+    show(io, a, dublin, 1704067200)
+    show(io, a, dublin, 1719792000)
+    show(io, a, dublin, 1711846799)
+    show(io, a, dublin, 1711846800)
+    const shanghai = try zone.posix(a, "CST-8")
+    defer a.free(shanghai)
+    show(io, a, shanghai, 0)
+    const all_year = try zone.posix(a, "EST5EDT,0/0,J365/25")
+    defer a.free(all_year)
+    show(io, a, all_year, 1704067200)
+    const india = try zone.fixed(a, "IST", 19800)
+    defer a.free(india)
+    show(io, a, india, 0)
+    // A change moved into the year before: at 23:00 on December 31st.
+    const early = try zone.posix(a, "AAA0BBB,J1/-1,J180")
+    defer a.free(early)
+    show(io, a, early, 1704061800)
+    show(io, a, early, 1704065400)
+    show(io, a, early, 1719792000)
+    // Three hours of daylight saving time, 02:00 to 05:00 UTC on April
+    // 10th: shorter than the days around it, still found.
+    const brief = try zone.posix(a, "AAA0BBB,J100/2,J100/6")
+    defer a.free(brief)
+    instant(io, a, brief, at(2025, 4, 10, 3, 30))
+    instant(io, a, brief, at(2025, 4, 10, 2, 30))
+    instant(io, a, brief, at(2025, 4, 10, 5, 30))
+    var twice_data: Buf(u8) = .empty
+    defer a.free(twice_data)
+    _ = codec.base64_decode(a, &twice_data, TWICE)
+    const twice = try zone.parse_tzif(a, twice_data)
+    defer a.free(twice)
+    seconds(io, twice, at(1970, 1, 1, 2, 30))
+    seconds(io, twice, at(1970, 1, 1, 1, 30))
+    seconds(io, twice, at(1970, 1, 1, 1, 45))
+    seconds(io, twice, at(1970, 1, 1, 3, 0))
+    for ([2]str{ SWING, SWING_UNUSED }) |b64| {
+        var swing_data: Buf(u8) = .empty
+        defer a.free(swing_data)
+        _ = codec.base64_decode(a, &swing_data, b64)
+        const swing = try zone.parse_tzif(a, swing_data)
+        defer a.free(swing)
+        seconds(io, swing, time.DateTime{ .year = 1970, .month = 1, .day = 1, .hour = 0, .minute = 41, .second = 40, .nano = 0 })
+    }
+    for ([2]str{ AT_END, AT_START }) |b64| {
+        var ends_data: Buf(u8) = .empty
+        defer a.free(ends_data)
+        _ = codec.base64_decode(a, &ends_data, b64)
+        const ends = try zone.parse_tzif(a, ends_data)
+        defer a.free(ends)
+        seconds(io, ends, time.utc(0))
+    }
+    const utc = zone.utc()
+    defer a.free(utc)
+    show(io, a, utc, 0)
+    // What is not a zone.
+    posix(io, a, "ES5")
+    posix(io, a, "EST")
+    posix(io, a, "EST5EDT,M13.1.0,M11.1.0")
+    posix(io, a, "EST5EDT,M3.2.0")
+    tzif(io, a, data[0..100])
+    tzif(io, a, "TZif")
+    // Version byte '1' is not a version.
+    var v: Buf(u8) = a.concat(data, "")
+    defer a.free(v)
+    v[4] = '1'
+    tzif(io, a, v)
+    fixed(io, a, 26 * 3600)
+    load(io, files, a, "../../etc/passwd")
+    load(io, files, a, "/etc/passwd")
+    load(io, files, a, "No/Such_Zone")
+    const named_utc = try zone.load(files, a, "UTC")
+    defer a.free(named_utc)
+    io.print(named_utc.abbr(0), " ", named_utc.offset(0))
+    // Whatever the machine's zone is, it is one, within what RFC 8536
+    // allows (TZ may be any POSIX rule).
+    const here = zone.local(files, env, a)
+    defer a.free(here)
+    const off = here.offset(1700000000 * time.SECOND)
+    io.print(off >= -89999 and off <= 93599)
+    // Both changes of 2023 moved into 2024, so on January 1st 2024 the
+    // start of 2022's daylight saving time, in January 2023, holds.
+    const late = try zone.posix(a, "AAA0BBB,J365/167,J364/167")
+    defer a.free(late)
+    show(io, a, late, 1704067200)
+    instant(io, a, late, at(2024, 1, 1, 12, 0))
+    var leaps_data: Buf(u8) = .empty
+    defer a.free(leaps_data)
+    _ = codec.base64_decode(a, &leaps_data, LEAPS)
+    const leaps = try zone.parse_tzif(a, leaps_data)
+    defer a.free(leaps)
+    show(io, a, leaps, 997)
+    show(io, a, leaps, 998)
+    // A version 2 file needs its footer, even an empty one.
+    tzif(io, a, data[0..@len(data) - 24])
+    tzif(io, a, data[0..@len(data) - 1])
+    // A device is not read: /dev/zero never ends.
+    const dev = zone.file_zone(files, a, "/dev/zero")
+    defer a.free(dev)
+    io.print(dev.abbr(0))
+}

@@ -7,7 +7,7 @@
 // time.append_rfc3339(a, &out, 0, 0) appends "1970-01-01T00:00:00Z";
 // time.append_http_date(a, &out, 0) appends "Thu, 01 Jan 1970 00:00:00 GMT";
 // time.parse_rfc3339("1970-01-01T08:00:00+08:00") is 0.
-// Time zones are the package egg-timezone (clutch add timezone).
+// Time zones are std/time/zone.
 uses alloc
 
 // Durations, in nanoseconds.
@@ -205,7 +205,9 @@ fn append_padded(a: Allocator, inout out: Buf(u8), n: i64, width: i64) void {
 // offset seconds east of UTC: "2026-11-16T09:30:00Z" for offset 0,
 // "2026-11-16T17:30:00+08:00" for offset 8 * 3600. Fractions of a second
 // are written only when there are any, without zeros at the end
-// ("09:30:00.25Z"); seconds of the offset are dropped.
+// ("09:30:00.25Z"); seconds of the offset are dropped. RFC 3339 has
+// offsets up to ±23:59: a wider one (a zone may have up to +25:59:59) is
+// written all the same, as "+24:00", which parse_rfc3339 rejects.
 fn append_rfc3339(a: Allocator, inout out: Buf(u8), ns: i64, offset: i64) void {
     const off_min = offset / 60
     const t = utc_s(floor_div(ns, SECOND) + off_min * 60)
