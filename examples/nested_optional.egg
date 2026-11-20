@@ -1,0 +1,168 @@
+// ??T and ?*T: an optional of an optional, or of a pointer, has two
+// levels. null is the outer one; a plain value is wrapped in both. They
+// come up when a generic ?V is given V = ?T or V = *T, as in a map whose
+// values may be null: get tells a missing key from a null value.
+// expect: 3 -1 -2
+// expect: true false
+// expect: 5
+// expect: -1
+// expect: -2
+// expect: found null
+// expect: missing
+// expect: 7 -1
+// expect: 2
+// expect: a
+// expect: true false
+// expect: 7 true 5
+// expect: 5 -1
+// expect: 5
+// expect: opt ptr other
+// expect: 5 6
+// expect: 5 4 0
+// expect: 6 7
+uses io, alloc
+allow unsafe
+
+const map = @import("std/map")
+
+const Node = struct { value: i64 }
+const MaybeInt = ?i64
+const Color = enum { red, green }
+
+fn first(comptime V: type, xs: []V) ?V {
+    if (@len(xs) == 0) {
+        return null
+    }
+    return xs[0]
+}
+
+// A ??[]u8 borrows like a ?[]u8: from the parameter s.
+fn head(s: []u8, ok: bool) ??[]u8 {
+    if (!ok) {
+        return null
+    }
+    if (@len(s) == 0) {
+        const none: ?[]u8 = null
+        return none
+    }
+    return s[0..1]
+}
+
+fn deref_or(p: ?*i64) i64 {
+    const q = p orelse return -1
+    return q.*
+}
+
+// ??*i64 is bigger than 16 bytes, so it goes by address.
+fn deref2(p: ??*i64) i64 {
+    const q = (p orelse null) orelse return -1
+    return q.*
+}
+
+// A type written in place compares like a named one.
+fn kind(comptime V: type) str {
+    if (V == ?i64) {
+        return "opt"
+    }
+    if (V == *i64) {
+        return "ptr"
+    }
+    return "other"
+}
+
+// &p.* reads p before reset sets it to null.
+fn reset(inout p: *i64) i64 {
+    p = null
+    return 0
+}
+
+fn add(q: ?*i64, z: i64) i64 {
+    const r = q orelse return -1
+    return r.* + z
+}
+
+fn show(io: Io, x: ??i64) void {
+    io.print((x orelse -2) orelse -1)
+}
+
+fn describe(io: Io, p: ?*Node) void {
+    const q = p orelse {
+        io.print("missing")
+        return
+    }
+    if (q == null) {
+        io.print("found null")
+    } else {
+        io.print(q.*.value)
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    var m = map.HashMap(i64, ?i64).init()
+    defer a.free(m)
+    m.put(a, 1, 3)
+    m.put(a, 2, null)
+    io.print((m.get(1) orelse -2) orelse -1, " ", (m.get(2) orelse -2) orelse -1, " ", (m.get(3) orelse -2) orelse -1)
+    const g = m.get(2)
+    io.print(g != null, " ", m.get(3) != null)
+
+    const xs = [_]?i64{ 5, null }
+    show(io, first(?i64, xs[0..]))
+    show(io, first(MaybeInt, xs[1..]))
+    show(io, null)
+
+    var pm = map.HashMap(i64, *Node).init()
+    defer a.free(pm)
+    pm.put(a, 1, null)
+    describe(io, pm.get(1))
+    describe(io, pm.get(2))
+
+    var deep: ??i64 = 7
+    if (deep) |inner| {
+        io.print(inner orelse 0, " ", (first(MaybeInt, xs[2..]) orelse -1) orelse 0)
+    }
+    deep = null
+    var levels = 0
+    const one: ?i64 = null
+    const two: ??i64 = one
+    if (two != null) {
+        levels = levels + 1
+    }
+    if (deep == null) {
+        levels = levels + 1
+    }
+    io.print(levels)
+
+    if (head("abc", true)) |inner| {
+        if (inner) |c| {
+            io.print(c)
+        }
+    }
+    io.print(head("", true) != null, " ", head("abc", false) != null)
+
+    // A literal, an enum member and an address take the innermost type.
+    const small: ??i8 = 7
+    const color: ??Color = .green
+    var n = 5
+    const pp: ??*i64 = &n
+    io.print((small orelse 0) orelse 1, " ", ((color orelse .red) orelse .red) == .green, " ", ((pp orelse null) orelse null).*)
+    io.print(deref_or(&n), " ", deref_or(null))
+    io.print(deref2(&n))
+    io.print(kind(MaybeInt), " ", kind(*i64), " ", kind(i64))
+    var p = a.create(@as(i64, 5))
+    const first_add = add(&p.*, reset(&p))
+    p = a.create(@as(i64, 6))
+    io.print(first_add, " ", add(&p.*, reset(&p)))
+
+    // A fill value is wrapped into the element type, as in a declaration.
+    const filled: [2]??i8 = @splat(5)
+    var opts: Buf(?i8) = a.alloc(2, 4)
+    defer a.free(opts)
+    a.push(&opts, null)
+    io.print((filled[1] orelse 0) orelse 0, " ", opts[0] orelse 0, " ", opts[2] orelse 0)
+    // @splat fills the array beneath the optional levels.
+    const arr: ?[3]i64 = @splat(6)
+    const arr2: ??[3]i64 = @splat(7)
+    io.print((arr orelse [3]i64{ 0, 0, 0 })[2], " ", ((arr2 orelse null) orelse [3]i64{ 0, 0, 0 })[1])
+    n = 6
+}

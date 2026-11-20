@@ -92,7 +92,7 @@ postfix     = primary , { "." , IDENT , [ args ]            (* field, method cal
                         | struct_lit } ;                    (* after a capitalised type: Point, m.Point, Pair(i64) *)
 struct_lit  = "{" , { NL } , { "." , IDENT , "=" , expr , [ "," ] , { NL } } , "}" ;
 primary     = INT | FLOAT | STRING | CHAR | "true" | "false" | "null"
-            | "*" , type | fn_type                  (* a type as a value: @ptrCast( *u8, p) *)
+            | "*" , type | "?" , type | fn_type     (* a type as a value: @ptrCast( *u8, p) *)
             | IDENT , [ args ]                      (* variable, call, type name *)
             | BUILTIN , args                        (* @len(...) ... *)
             | "@This" , "(" , ")"

@@ -477,6 +477,12 @@ module Egg
       info&.kind == :ptr ? info.inner : nil
     end
 
+    # t without its optional levels: i64 for ??i64.
+    def opt_base(t)
+      t = @types[t].inner while !t.nil? && @types[t]&.kind == :opt
+      t
+    end
+
     # Methods are keyed apart from functions, which may be named "m.f".
     def method_key(owner, name)
       "#{owner}::#{name}"
@@ -1073,12 +1079,16 @@ module Egg
       when OptType
         inner = resolve_type(t.inner, line, col)
         return "error" if inner == "error"
-        unless (storable?(inner) || inner.start_with?("[]")) && !inner.start_with?("!") && !inner.start_with?("?")
+        # ??T and ?*T are two levels: null, or a value that is itself
+        # null or not, as when a ?V is instantiated with V = ?T or *T.
+        unless (storable?(inner) || !slice_in(inner).nil?) && !inner.start_with?("!")
           err("E108", "?#{inner} is not a valid optional", line, col)
           return "error"
         end
-        unless pointee(inner).nil?
-          err("E108", "?#{inner} is not needed: a pointer can already be null", line, col)
+        # An owned ?T is unwrapped where it is made, so it is never
+        # wrapped again.
+        if owned_err?(inner)
+          err("E133", "?#{inner} cannot be made: a #{inner} must be unwrapped right away with orelse", line, col)
           return "error"
         end
         opt_type(inner)
@@ -2167,8 +2177,7 @@ module Egg
     # is reported once: the declaration resolves it again.)
     def pointer_type_expr?(type, line, col)
       return false if type.nil?
-      t = resolve_type(type, line, col)
-      t = @types[t].inner if @types[t]&.kind == :opt
+      t = opt_base(resolve_type(type, line, col))
       @types[t]&.kind == :ptr
     end
 
@@ -2660,12 +2669,12 @@ module Egg
 
     # The number type a literal should take where `expected` is wanted
     # (T, or the T of !T or ?T), or nil.
-    # The type a value has where expected wants it: T for !T, ?T and !?T.
+    # The type a value has where expected wants it: T for !T, ?T, ??T
+    # and !?T.
     def value_target(expected)
       t = expected
       t = @types[t].inner if !t.nil? && @types[t]&.kind == :err
-      t = @types[t].inner if !t.nil? && @types[t]&.kind == :opt
-      t
+      opt_base(t)
     end
 
     def num_target(expected)
@@ -2987,7 +2996,7 @@ module Egg
       err("E148", "a thread's function returns nothing, found #{ft.inner}: nobody could use the result yet", args[0].line, args[0].col) unless ft.inner == "void"
       params = fn_params(ft)
       params.each do |pt, mode|
-        lent = mode == "inout" || (mode.nil? && (owned?(pt) || pt.start_with?("[]")))
+        lent = mode == "inout" || (mode.nil? && (owned?(pt) || !slice_in(pt).nil?))
         next unless lent
         err("E148", "a thread cannot borrow a #{pt}: it may outlive the owner; take it as `sink`, or pass a copy", args[0].line, args[0].col)
       end
@@ -3144,7 +3153,8 @@ module Egg
           return value_type_error(at, "a Buf element", a.line, a.col) unless storable?(at)
           return owned_place_error(at, "a Buf element", a.line, a.col) if owned_err?(at)
           check_empty_fill(a, "a.#{name}") unless name == "push"
-          ret = buf_type([at], a.line, a.col) if name == "alloc"
+          # Buf(?i8) from a.alloc(n, 4) where one is expected.
+          ret = buf_type([elem.nil? ? at : elem], a.line, a.col) if name == "alloc"
         elsif pt == "buffer"
           at = check_expr(a)
           if at != "error" && !owned?(at) && generic_instance? && storable?(at)
@@ -3284,13 +3294,19 @@ module Egg
           t = check_lvalue(a.expr, "pass as inout")
           mark_root_used(a.expr)
           a.ty = t
-          expect_type(pt, t, a)
+          # The callee writes a pt into the place: it must be one, not a
+          # value that would be wrapped (an i64 for an inout ?i64).
+          if t != pt && t != "error" && fits?(pt, t)
+            err("E103", "parameter #{i + 1} of '#{name}' is an inout #{pt}: pass a #{pt} variable, found #{t}", a.line, a.col)
+          else
+            expect_type(pt, t, a)
+          end
           path = inout_path(a.expr)
           inout_roots << [path, a] unless path.nil?
         elsif slice_expr?(a)
           at = check_slice_arg(a, pt)
           expect_type(pt, at, a)
-        elsif a.is_a?(AddrOf) && !pointee(pt).nil?
+        elsif a.is_a?(AddrOf) && !pointee(opt_base(pt)).nil?
           at = check_expr(a, pt)
           expect_type(pt, at, a)
         elsif a.is_a?(AddrOf)
@@ -3395,7 +3411,7 @@ module Egg
     def slice_in(t)
       return nil if t.nil?
       t = t[1..] if t.start_with?("!")
-      t = t[1..] if t.start_with?("?")
+      t = t[1..] while t.start_with?("?")
       t.start_with?("[]") ? t : nil
     end
 
@@ -3977,13 +3993,17 @@ module Egg
         end
         return t
       end
+      # ?T, *T, []T written in place (V == ?i64) resolve like a name.
       name = case e
+             in TypeExpr[type:] then type
              in Var[name:] then name
              in Field[obj: Var[name: m], name:] then "#{m}.#{name}"
              else return nil
              end
-      return @tenv[name] if @tenv.key?(name)
-      return nil if lookup(name) # a variable
+      if name.is_a?(String)
+        return @tenv[name] if @tenv.key?(name)
+        return nil if lookup(name) # a variable
+      end
       before = @diagnostics.length
       t = resolve_type(name, e.line, e.col)
       if @diagnostics.length > before || t == "error"
@@ -4328,7 +4348,9 @@ module Egg
         err("E103", "@errorName needs an anyerror (error.X, or e in catch |e|), found #{t}", a.line, a.col) unless t == "anyerror" || t == "error"
         "str"
       when "splat"
-        info = expected.nil? ? nil : @types[expected]
+        # The array beneath any ! and ? levels; the value is wrapped after.
+        target = value_target(expected)
+        info = target.nil? ? nil : @types[target]
         if info.nil? || info.kind != :array
           err("E115", "cannot infer the array type for @splat; give the variable a type such as [8]i64", line, col) unless expected == "error"
           check_expr(a)
@@ -4337,7 +4359,7 @@ module Egg
         vt = check_expr(a, info.elem)
         expect_type(info.elem, vt, a)
         check_empty_fill(a, "@splat") if vt == info.elem
-        expected
+        target
       when "replace", "take"
         check_swap(name, args, line, col)
       when "secureZero"
@@ -4464,9 +4486,17 @@ module Egg
         inner = @types[want].inner
         return true if inner == got
         # A plain value fits a !?T, as in Zig.
-        return true if inner.start_with?("?") && @types[inner].inner == got
+        return true if opt_wraps?(inner, got)
       end
-      return true if want.start_with?("?") && @types[want].inner == got
+      opt_wraps?(want, got)
+    end
+
+    # Is want an optional of got, maybe nested (i64 fits ?i64 and ??i64)?
+    def opt_wraps?(want, got)
+      while want.start_with?("?")
+        want = @types[want].inner
+        return true if want == got
+      end
       false
     end
 

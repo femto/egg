@@ -1,0 +1,11 @@
+// An owned ?T is unwrapped where it is made, so it is never wrapped in
+// another optional.
+uses alloc
+
+fn make(a: Allocator) ??Buf(u8) {
+    return a.int_str(3)
+}
+
+fn main() void {
+}
+// error: E133 @5

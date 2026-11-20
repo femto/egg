@@ -369,7 +369,7 @@ module Egg
 
     def slice_type?(t)
       t = t[1..] if t.start_with?("!")
-      t = t[1..] if t.start_with?("?")
+      t = t[1..] while t.start_with?("?")
       t.start_with?("[]")
     end
 

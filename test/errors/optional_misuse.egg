@@ -1,10 +1,7 @@
 // Misusing optionals and orelse.
 uses alloc, io
 
-fn bad_ptr(p: ?*i64) void {
-}
-
-fn nested(x: ??i64) void {
+fn bad_err(x: ?!i64) void {
 }
 
 fn not_opt(io: Io) void {
@@ -47,15 +44,24 @@ fn push_struct(a: Allocator) void {
     a.free(h)
 }
 
+fn clear(inout x: ?i64) void {
+    x = null
+}
+
+fn wrap_inout() void {
+    var v: i64 = 3
+    clear(&v)
+}
+
 fn main() void {
 }
 // error: E108 @4
-// error: E108 @7
-// error: E118 @12
-// error: E103 @16
-// error: E118 @20
-// error: E133 @26
-// error: E110 @26
-// error: E113 @32
-// error: E103 @37
-// error: E103 @46
+// error: E118 @9
+// error: E103 @13
+// error: E118 @17
+// error: E133 @23
+// error: E110 @23
+// error: E113 @29
+// error: E103 @34
+// error: E103 @43
+// error: E103 @53

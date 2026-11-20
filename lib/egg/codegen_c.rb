@@ -4352,7 +4352,7 @@ module Egg
     def coerce(code, from, to)
       return code if to.nil? || from == to
       return text_as(code, from, to) if %w[str []u8].include?(to) && text_type?(from)
-      return "((#{c_type(to)}){ .value = #{code}, .has = true })" if to.start_with?("?")
+      return "((#{c_type(to)}){ .value = #{coerce(code, from, @types[to].inner)}, .has = true })" if to.start_with?("?")
       return code unless to.start_with?("!")
       if from == "anyerror"
         "((#{c_type(to)}){ .err = #{code} })"
@@ -4664,7 +4664,22 @@ module Egg
         later = args[(i + 1)..]
         codes << case a
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
-                 in AddrOf[expr: place] then "&#{lvalue(place)}"
+                 in AddrOf[expr: place]
+                   # A pointer argument may go to a ?*T parameter.
+                   addr = "&#{lvalue(place)}"
+                   if mode == "inout"
+                     addr
+                   else
+                     # A pointer argument: &p.* reads p now, before a later
+                     # argument can change p.
+                     addr = hoist(addr, a.ty) if later.any? { |l| writes_first?(l) }
+                     if a.ty == pt
+                       addr
+                     else
+                       code = coerce(addr, a.ty, pt)
+                       by_ptr?(pt, mode) ? "&#{hoist(code, pt)}" : code
+                     end
+                   end
                  else
                    if by_ptr?(pt, mode) && a.ty == pt && !a.is_a?(SliceExpr)
                      big_arg(a, later, inouts)
@@ -5228,7 +5243,7 @@ module Egg
                line("#{b}.len = #{codes[0]};")
                line("#{b}.ptr = (#{c_type(elem)} *)#{helper('egg_buf_resize')}(NULL, #{b}.len, sizeof(#{c_type(elem)}));")
                line("#{b}.cap = #{b}.len;")
-               v = hoist(codes[1], elem)
+               v = hoist(coerce(codes[1], args[1].ty, elem), elem)
                i = tmp
                line("for (int64_t #{i} = 0; #{i} < #{b}.len; #{i}++) #{b}.ptr[#{i}] = #{v};")
                b
@@ -5438,7 +5453,7 @@ module Egg
         "((void)0)"
       when "splat"
         info = @types[e.ty]
-        v = hoist(expr(a), info.elem)
+        v = hoist(coerce(expr(a), a.ty, info.elem), info.elem)
         out = tmp
         i = tmp
         line("#{c_type(e.ty)} #{out};")
