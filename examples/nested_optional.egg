@@ -11,6 +11,8 @@
 // expect: missing
 // expect: 7 -1
 // expect: 2
+// expect: a
+// expect: true false
 uses io, alloc
 allow unsafe
 
@@ -24,6 +26,18 @@ fn first(comptime V: type, xs: []V) ?V {
         return null
     }
     return xs[0]
+}
+
+// A ??[]u8 borrows like a ?[]u8: from the parameter s.
+fn head(s: []u8, ok: bool) ??[]u8 {
+    if (!ok) {
+        return null
+    }
+    if (@len(s) == 0) {
+        const none: ?[]u8 = null
+        return none
+    }
+    return s[0..1]
 }
 
 fn show(io: Io, x: ??i64) void {
@@ -77,4 +91,11 @@ fn main(io: Io, a: Allocator) void {
         levels = levels + 1
     }
     io.print(levels)
+
+    if (head("abc", true)) |inner| {
+        if (inner) |c| {
+            io.print(c)
+        }
+    }
+    io.print(head("", true) != null, " ", head("abc", false) != null)
 }

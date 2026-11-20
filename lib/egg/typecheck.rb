@@ -1066,7 +1066,7 @@ module Egg
         return "error" if inner == "error"
         # ??T and ?*T are two levels: null, or a value that is itself
         # null or not, as when a ?V is instantiated with V = ?T or *T.
-        unless (storable?(inner) || inner.start_with?("[]")) && !inner.start_with?("!")
+        unless (storable?(inner) || !slice_in(inner).nil?) && !inner.start_with?("!")
           err("E108", "?#{inner} is not a valid optional", line, col)
           return "error"
         end
