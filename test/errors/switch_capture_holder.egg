@@ -1,0 +1,37 @@
+// error: E149 @13
+// error: E149 @25
+uses io, alloc, thread
+
+const Msg = union(enum) { text: Buf(u8), none }
+
+// A capture borrows the payload while it is used: what lends it cannot be
+// closed or freed before then.
+fn shared(io: Io, sink s: Shared(Msg)) void {
+    switch (s.get()) {
+        .text => |t| {
+            io.print(t)
+            s.close()
+            io.print(t)                  // t is still used: s cannot close above
+        }
+        .none => {
+            s.close()
+        }
+    }
+}
+
+fn local(io: Io, a: Allocator, sink m: Msg) void {
+    switch (m) {
+        .text => |t| {
+            a.free(m)
+            io.print(t)
+        }
+        .none => {
+            a.free(m)
+        }
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    shared(io, threads.share(Msg{ .text = a.concat("a", "b") }))
+    local(io, a, Msg{ .text = a.concat("a", "b") })
+}

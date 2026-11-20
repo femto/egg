@@ -1,8 +1,9 @@
-// error: E155 @19
 // error: E155 @20
 // error: E155 @21
 // error: E155 @22
-// error: E155 @26
+// error: E155 @23
+// error: E155 @27
+// error: E155 @30
 allow unsafe
 uses alloc, net, thread
 
@@ -25,6 +26,8 @@ fn pointer(s: Shared(!*i64)) void {}
 const Node = struct {
     next: Shared(Node)
 }
+
+fn nested(s: Shared(!?Atomic)) void {}
 
 fn main(threads: Threads) void {
     const s = threads.share(1)

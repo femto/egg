@@ -672,9 +672,16 @@ module Egg
                     c.is_a?(Array) ? "'#{text}', which #{c[1].delete_prefix("it ")}" : "'#{text}', which only borrows an element of '#{c}'; loop over an index and take the element out with @replace(&#{c}[i], v) or @take(&#{c}[i])"
                   else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
                   end
+            # What the capture views stays put while it is used: the
+            # subject's variable, or the holder of s.get().
+            lent = holder.nil? ? path : path_of(holder)
             pre = lambda do
               @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
               declare(cap, :borrowed, arm.line, arm.col, t)
+              unless lent.nil?
+                @slices[cap] = [[lent], @rest.length, false, nil, :borrow]
+                @frames.last.slices << cap
+              end
             end
           end
         elsif !path.nil? && !arm.names.nil? && arm.names.all? { |n| (m = member.(n)) == "void" || !owned?(m) }

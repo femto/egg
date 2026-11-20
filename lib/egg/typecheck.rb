@@ -1336,6 +1336,7 @@ module Egg
       info = @types[t]
       case info&.kind
       when :array, :buf then any_resource(info.elem, seen)
+      when :err, :opt then info.inner == "void" ? nil : any_resource(info.inner, seen)
       when :struct, :union
         return t if info.resource
         info.fields.each do |_, ft, _|
