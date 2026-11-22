@@ -18,20 +18,20 @@ uses alloc, io
 const P = struct { x: i64 }
 const E = struct {}
 const B = struct { b: Buf(u8), n: i64 }
-const N = struct { kids: Soa(N), n: i64 }
+const N = struct { kids: MultiArrayList(N), n: i64 }
 const U = union(enum) { a: i64, b }
 
 fn main(io: Io, a: Allocator) void {
     const xs = [2]i64{ 1, 2 }
-    const s0: Soa(P) = .empty
-    const s1: Soa(i64) = .empty
-    const s2: Soa(E) = .empty
-    const s3: Soa(B) = .empty
-    const s4: Soa(U) = .empty
-    const s5: Soa(P, P) = .empty
-    const s6: Soa = .empty
+    const s0: MultiArrayList(P) = .empty
+    const s1: MultiArrayList(i64) = .empty
+    const s2: MultiArrayList(E) = .empty
+    const s3: MultiArrayList(B) = .empty
+    const s4: MultiArrayList(U) = .empty
+    const s5: MultiArrayList(P, P) = .empty
+    const s6: MultiArrayList = .empty
     io.print(make(a).len())
-    var s: Soa(P) = .empty
+    var s: MultiArrayList(P) = .empty
     s.push(a, P{ .x = 1 })
     io.print(@len(s.items(x)))
     io.print(@len(s.items(.y)))
@@ -44,8 +44,8 @@ fn main(io: Io, a: Allocator) void {
     s0.set(0, P{ .x = 2 })
 }
 
-fn make(a: Allocator) Soa(P) {
-    var s: Soa(P) = .empty
+fn make(a: Allocator) MultiArrayList(P) {
+    var s: MultiArrayList(P) = .empty
     s.append(a, P{ .x = 1 })
     return s
 }
@@ -54,6 +54,6 @@ fn step(inout xs: []i64, vs: []i64) void {
     xs[0] = vs[0]
 }
 
-fn twice(inout s: Soa(P)) void {
+fn twice(inout s: MultiArrayList(P)) void {
     step(&s.items(.x), s.items(.x))
 }

@@ -947,11 +947,11 @@ module Egg
           err("E139", "'#{place_text(obj)}.get()' only lends the shared #{e.ty}; it cannot be moved. Copy it with #{place_text(obj)}.copy(a)", line, col)
         end
         walk(obj, true)
-      in MethodCall[obj:, info: { cap_method: "Soa.items" | "Soa.len" => m }]
+      in MethodCall[obj:, info: { cap_method: "MultiArrayList.items" | "MultiArrayList.len" => m }]
         # s.items(.x) reads only the column x, and s.len() only the
         # length, which no column's slice can change.
         path = place_path(obj)
-        part = m == "Soa.len" ? "(len)" : e.info[:soa_field]
+        part = m == "MultiArrayList.len" ? "(len)" : e.info[:soa_field]
         check_read_path("#{path}.#{part}", place_root(obj), e.line, e.col) unless path.nil?
         @read_whole = obj
         walk(obj, true)
@@ -960,7 +960,7 @@ module Egg
           if info&.[](:self_inout)
             check_slices(place_path(obj), obj.line, obj.col, "changed", place_root(obj))
             # s.set(i, v) writes elements in place: it resizes nothing.
-            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless info[:cap_method] == "Soa.set"
+            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless info[:cap_method] == "MultiArrayList.set"
             walk_place(obj)
           else
             # self is borrowed unless the method takes `sink self`, or it

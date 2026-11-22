@@ -1,4 +1,4 @@
-// Soa(T): the elements of a struct kept as one column per field, so a loop
+// MultiArrayList(T): the elements of a struct kept as one column per field, so a loop
 // over one field reads only that field's memory. s.items(.x) lends a
 // column as a slice; two different columns may be written at once.
 // expect: 4950
@@ -27,8 +27,8 @@ fn total(xs: []i64) i64 {
     return n
 }
 
-// Without `from`, a slice result views the Soa it comes from.
-fn positions(s: Soa(Particle)) []i64 {
+// Without `from`, a slice result views the MultiArrayList it comes from.
+fn positions(s: MultiArrayList(Particle)) []i64 {
     return s.items(.x)
 }
 
@@ -45,12 +45,12 @@ fn swap_first(inout xs: []i64, inout ys: []i64) void {
     ys[0] = t
 }
 
-fn add(inout s: Soa(P), a: Allocator, n: i64) void {
+fn add(inout s: MultiArrayList(P), a: Allocator, n: i64) void {
     s.append(a, P{ .n = n, .half = @as(f64, n) / 2.0, .tag = 7 })
 }
 
 fn main(io: Io, a: Allocator, threads: Threads) void {
-    var s: Soa(Particle) = .empty
+    var s: MultiArrayList(Particle) = .empty
     defer a.free(s)
     var i: i64 = 0
     while (i < 100) {
@@ -77,15 +77,15 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     const last = s.pop() orelse Particle{ .x = -1, .vx = 0, .alive = false }
     io.print(last.x, " ", s.len())
 
-    var t: Soa(Particle) = .empty
+    var t: MultiArrayList(Particle) = .empty
     defer a.free(t)
     t.append(a, Particle{ .x = 1, .vx = 2, .alive = true })
     step(&t.items(.x), t.items(.vx))
     swap_first(&t.items(.x), &t.items(.vx))
     io.print(t.get(0).x, " ", t.get(0).vx)
 
-    // A Soa is owned like a Buf: moved, returned, shared and copied.
-    var u: Soa(P) = .empty
+    // A MultiArrayList is owned like a Buf: moved, returned, shared and copied.
+    var u: MultiArrayList(P) = .empty
     add(&u, a, 3)
     add(&u, a, 5)
     const shared = threads.share(u)

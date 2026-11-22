@@ -489,7 +489,7 @@ module Egg
             return -a;
         }
       C
-      # The end of a Soa column of n elements of size bytes starting at
+      # The end of a MultiArrayList column of n elements of size bytes starting at
       # byte at, rounded up to the next column's 16-byte boundary.
       "egg_soa_col" => <<~C,
         static size_t egg_soa_col(size_t at, int64_t n, size_t size) {
@@ -3259,7 +3259,7 @@ module Egg
       @int_helpers = {} # name -> C text, generated in use order
       @drops = {}       # owned type -> its egg_drop_ function's name
       @dups = {}        # owned type -> its egg_dup_ function's name
-      @soa_fns = {}     # [Soa type, kind] -> its egg_soa_ function's name
+      @soa_fns = {}     # [MultiArrayList type, kind] -> its egg_soa_ function's name
       @out = +""
       @indent = 0
       @locals = []
@@ -3463,18 +3463,18 @@ module Egg
       out << "\n"
     end
 
-    # Buf(T).empty: no elements, nothing on the heap. Soa(T).empty too.
+    # Buf(T).empty: no elements, nothing on the heap. MultiArrayList(T).empty too.
     def empty_buf(t)
       return "((#{c_type(t)}){ 0 })" if @types[t].kind == :soa
       "((#{c_type(t)}){ .ptr = NULL, .len = 0, .cap = 0 })"
     end
 
-    # [field, type] of each column of a Soa(T): the fields of T.
+    # [field, type] of each column of a MultiArrayList(T): the fields of T.
     def soa_columns(t)
       @types[@types[t].elem].fields.map { |f, ft, _| [f, ft] }
     end
 
-    # The C function doing `kind` for the Soa type t, emitted once.
+    # The C function doing `kind` for the MultiArrayList type t, emitted once.
     def soa_fn(kind, t)
       key = [t, kind]
       return @soa_fns[key] if @soa_fns.key?(key)
@@ -3490,7 +3490,7 @@ module Egg
       @soa_fns[key]
     end
 
-    # A Soa(T)'s columns live in one block, each at a 16-byte boundary (as
+    # A MultiArrayList(T)'s columns live in one block, each at a 16-byte boundary (as
     # aligned as malloc's result), in the order of T's fields.
     def emit_soa_fns(out)
       return if @soa_fns.empty?
@@ -3543,7 +3543,7 @@ module Egg
       out << "\n"
     end
 
-    # s.append(a, v), s.get(i), s.items(.x), ...: a Soa(T)'s methods. The
+    # s.append(a, v), s.get(i), s.items(.x), ...: a MultiArrayList(T)'s methods. The
     # receiver is found first, then the arguments are computed.
     def soa_call(m, obj, e, args, ret)
       name = m.split(".").last
@@ -4545,7 +4545,7 @@ module Egg
         call(var_ref(name), info[:args], info[:params], [], e.ty)
       in Call[info:]
         call(info[:c_name], info[:args], info[:params], [], e.ty)
-      in MethodCall[obj:, info: { cap_method: String => m }] if m.start_with?("Soa.")
+      in MethodCall[obj:, info: { cap_method: String => m }] if m.start_with?("MultiArrayList.")
         soa_call(m, obj, e, e.args, e.ty)
       in MethodCall[obj:, info: { cap_method: String => m }]
         cap_call(m, obj, e.args, e.ty)

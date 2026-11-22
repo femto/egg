@@ -154,7 +154,7 @@ fn main(io: Io) void {
 | `Clock` | the time capability | received by `main`, passed down; section 17 |
 | `Random` | the rand capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
-| `Soa(T)` | an owned list of the struct T, one column per field | moved, not copied; section 21 |
+| `MultiArrayList(T)` | an owned list of the struct T, one column per field | moved, not copied; section 21 |
 
 Every type that has runtime values, except slices and buffers, is a **value type**:
 assignment, passing and returning copy the value (`void` and `type` have
@@ -3351,12 +3351,12 @@ fn main(io: Io, a: Allocator) void {
 }
 ```
 
-**Struct of arrays: Soa(T).** `Soa(T)`, for a struct `T`, holds a list
+**Struct of arrays: MultiArrayList(T).** `MultiArrayList(T)`, for a struct `T`, holds a list
 of `T` the way a pool of plain records is often laid out for speed: one
 column per field, all in one allocation, so a loop over one field reads
-only that field's memory (Zig's `MultiArrayList`). `T`'s fields must own
-nothing, and `T` needs at least one (E156). A `Soa(T)` is owned like a
-`Buf`: `Soa(T).empty` (or `.empty`) owns nothing, it is moved, borrowed and
+only that field's memory (as Zig's `MultiArrayList`, whose name it takes). `T`'s fields must own
+nothing, and `T` needs at least one (E156). A `MultiArrayList(T)` is owned like a
+`Buf`: `MultiArrayList(T).empty` (or `.empty`) owns nothing, it is moved, borrowed and
 freed by `a.free(s)` like a buffer, and it may be a field, an element or
 a `Shared` value. Its methods:
 
@@ -3393,7 +3393,7 @@ fn step(inout xs: []i64, vs: []i64) void {
 }
 
 fn main(io: Io, a: Allocator) void {
-    var ps: Soa(Particle) = .empty
+    var ps: MultiArrayList(Particle) = .empty
     defer a.free(ps)
     var i: i64 = 0
     while (i < 3) {
@@ -3417,7 +3417,7 @@ uses alloc, io
 const Particle = struct { x: i64, vx: i64 }
 
 fn main(io: Io, a: Allocator) void {
-    var ps: Soa(Particle) = .empty
+    var ps: MultiArrayList(Particle) = .empty
     defer a.free(ps)
     ps.append(a, Particle{ .x = 1, .vx = 2 })
     const xs = ps.items(.x)

@@ -13,7 +13,7 @@ fn step(inout xs: []i64, vs: []i64) void {
 }
 
 fn main(io: Io, a: Allocator) void {
-    var s: Soa(P) = .empty
+    var s: MultiArrayList(P) = .empty
     defer a.free(s)
     s.append(a, P{ .x = 1, .vx = 2 })
     inout xs = &s.items(.x)
@@ -33,9 +33,9 @@ fn main(io: Io, a: Allocator) void {
         s.append(a, P{ .x = x, .vx = 2 })
     }
     step(&s.items(.x), s.items(.vx))    // two columns: fine
-    var u: Soa(P) = .empty
+    var u: MultiArrayList(P) = .empty
     u.append(a, P{ .x = 1, .vx = 2 })
-    var t: Soa(P) = .empty
+    var t: MultiArrayList(P) = .empty
     t.append(a, P{ .x = 1, .vx = 2 })   // never freed
     const moved = u
     a.free(moved)
