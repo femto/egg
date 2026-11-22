@@ -1,0 +1,96 @@
+// Soa(T): the elements of a struct kept as one column per field, so a loop
+// over one field reads only that field's memory. s.items(.x) lends a
+// column as a slice; two different columns may be written at once.
+// expect: 4950
+// expect: 100
+// expect: 33 30 false
+// expect: 99 10
+// expect: 9 9
+// expect: 2 3
+// expect: 3 2.5 7
+uses alloc, io, thread
+
+const Particle = struct {
+    x: i64
+    vx: i64
+    alive: bool
+}
+
+const P = struct { n: i64, half: f64, tag: u8 }
+
+// A column passed on as a read-only slice.
+fn total(xs: []i64) i64 {
+    var n: i64 = 0
+    for (xs) |x| {
+        n = n + x
+    }
+    return n
+}
+
+// Without `from`, a slice result views the Soa it comes from.
+fn positions(s: Soa(Particle)) []i64 {
+    return s.items(.x)
+}
+
+// One column written, another read: two places of s.
+fn step(inout xs: []i64, vs: []i64) void {
+    for (vs) |v, i| {
+        xs[i] = xs[i] + v
+    }
+}
+
+fn swap_first(inout xs: []i64, inout ys: []i64) void {
+    const t = xs[0]
+    xs[0] = ys[0]
+    ys[0] = t
+}
+
+fn add(inout s: Soa(P), a: Allocator, n: i64) void {
+    s.append(a, P{ .n = n, .half = @as(f64, n) / 2.0, .tag = 7 })
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    var s: Soa(Particle) = .empty
+    defer a.free(s)
+    var i: i64 = 0
+    while (i < 100) {
+        s.append(a, Particle{ .x = 0, .vx = i, .alive = i % 2 == 0 })
+        i = i + 1
+    }
+    inout xs = &s.items(.x)
+    const vs = s.items(.vx)
+    for (vs) |v, j| {
+        xs[j] = xs[j] + v
+    }
+    io.print(total(positions(s)))
+    io.print(s.len())
+
+    // Whole elements go in and out as values of T.
+    s.set(3, Particle{ .x = 33, .vx = 30, .alive = false })
+    const p = s.get(3)
+    io.print(p.x, " ", p.vx, " ", p.alive)
+    s.swap_remove(1)                    // the last element fills the gap
+    while (s.len() > 10) {
+        _ = s.pop()
+    }
+    io.print(s.get(1).x, " ", s.len())
+    const last = s.pop() orelse Particle{ .x = -1, .vx = 0, .alive = false }
+    io.print(last.x, " ", s.len())
+
+    var t: Soa(Particle) = .empty
+    defer a.free(t)
+    t.append(a, Particle{ .x = 1, .vx = 2, .alive = true })
+    step(&t.items(.x), t.items(.vx))
+    swap_first(&t.items(.x), &t.items(.vx))
+    io.print(t.get(0).x, " ", t.get(0).vx)
+
+    // A Soa is owned like a Buf: moved, returned, shared and copied.
+    var u: Soa(P) = .empty
+    add(&u, a, 3)
+    add(&u, a, 5)
+    const shared = threads.share(u)
+    const c = shared.copy(a)
+    io.print(c.len() + 1, " ", c.get(1).half, " ", c.get(0).tag)
+    a.free(c)
+    shared.close()
+}

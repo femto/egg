@@ -154,6 +154,7 @@ fn main(io: Io) void {
 | `Clock` | the time capability | received by `main`, passed down; section 17 |
 | `Random` | the rand capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
+| `Soa(T)` | an owned list of the struct T, one column per field | moved, not copied; section 21 |
 
 Every type that has runtime values, except slices and buffers, is a **value type**:
 assignment, passing and returning copy the value (`void` and `type` have
@@ -3347,6 +3348,81 @@ fn main(io: Io, a: Allocator) void {
     }
     io.print(ids[0..@len(ids) - 1])
     io.print(t.eval(root))
+}
+```
+
+**Struct of arrays: Soa(T).** `Soa(T)`, for a struct `T`, holds a list
+of `T` the way a pool of plain records is often laid out for speed: one
+column per field, all in one allocation, so a loop over one field reads
+only that field's memory (Zig's `MultiArrayList`). `T`'s fields must own
+nothing, and `T` needs at least one (E156). A `Soa(T)` is owned like a
+`Buf`: `Soa(T).empty` (or `.empty`) owns nothing, it is moved, borrowed and
+freed by `a.free(s)` like a buffer, and it may be a field, an element or
+a `Shared` value. Its methods:
+
+| Method | Does |
+|--------|------|
+| `s.append(a, v)` | adds the `T` v at the end (capacity doubles, as for `a.push`) |
+| `s.len()` | how many elements, as `i64` |
+| `s.get(i)` | element i, copied out as a `T` (`index out of bounds` unless `0 <= i < s.len()`) |
+| `s.set(i, v)` | element i replaced by v, field by field |
+| `s.pop()` | the last element as a `?T`, removed; `null` when empty |
+| `s.swap_remove(i)` | removes element i, moving the last element into its place |
+| `s.items(.f)` | the column of field f, a `[]F` viewing s |
+
+`append`, `set`, `pop` and `swap_remove` change s, which must be a `var`
+or an `inout` parameter (E105); the others borrow it. Each column is a
+place of its own, as each field of a struct is: `s.items(.x)` borrows
+`s.x`, not all of `s`, so the rules for local slices (section 12) let
+`inout xs = &s.items(.x)` write one column while another is read or
+written, and `&s.items(.x)` may be passed to an `inout` slice parameter
+beside `s.items(.vx)` in the same call (E117 only for the same column).
+`get`, `set` and everything that changes s's length touch every column;
+`len` touches none, so it may be read while a column is written.
+
+```egg
+// expect: 10 30 50
+uses alloc, io
+
+const Particle = struct { x: i64, vx: i64 }
+
+fn step(inout xs: []i64, vs: []i64) void {
+    for (vs) |v, i| {
+        xs[i] = xs[i] + v
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    var ps: Soa(Particle) = .empty
+    defer a.free(ps)
+    var i: i64 = 0
+    while (i < 3) {
+        ps.append(a, Particle{ .x = 10 * i, .vx = i + 1 })
+        i = i + 1
+    }
+    inout xs = &ps.items(.x)             // one column written ...
+    const vs = ps.items(.vx)             // ... while another is read
+    for (vs) |v, j| {
+        xs[j] = xs[j] + 9 * v
+    }
+    step(&ps.items(.x), ps.items(.vx))
+    io.print(ps.get(0).x, " ", ps.get(1).x, " ", ps.get(2).x)
+}
+```
+
+```egg
+// error: E149
+uses alloc, io
+
+const Particle = struct { x: i64, vx: i64 }
+
+fn main(io: Io, a: Allocator) void {
+    var ps: Soa(Particle) = .empty
+    defer a.free(ps)
+    ps.append(a, Particle{ .x = 1, .vx = 2 })
+    const xs = ps.items(.x)
+    ps.append(a, Particle{ .x = 3, .vx = 4 })   // may move the column xs views
+    io.print(xs[0])
 }
 ```
 

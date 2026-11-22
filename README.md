@@ -516,6 +516,12 @@ From v2:
   too: struct fields are followed one by one (free and replace `v.data`),
   elements are swapped out with `@replace`/`@take`, and `a.free` frees
   everything a value holds
+- Struct of arrays `Soa(T)` (Zig's `MultiArrayList`): a list of a plain
+  struct kept one column per field in one allocation, owned like a `Buf`;
+  `s.append(a, v)`, `s.get(i)`, `s.set(i, v)`, `s.pop()`,
+  `s.swap_remove(i)`, `s.len()`, and `s.items(.x)`, a field's column as a
+  slice. Each column is a place of its own, so `inout xs = &s.items(.x)`
+  writes one column while `s.items(.vx)` is read
 - Owned structs for resources: `const Db = owned struct { ... }` is
   checked like a buffer (a copy is a move, it must be ended on every
   path), and only its own file can build one or end one (`@forget(v)`), so

@@ -1,0 +1,43 @@
+// error: E149 @20
+// error: E149 @24
+// error: E149 @27
+// error: E137 @33
+// error: E135 @38
+// error: E136 @42
+uses alloc, io
+
+const P = struct { x: i64, vx: i64 }
+
+fn step(inout xs: []i64, vs: []i64) void {
+    xs[0] = vs[0]
+}
+
+fn main(io: Io, a: Allocator) void {
+    var s: Soa(P) = .empty
+    defer a.free(s)
+    s.append(a, P{ .x = 1, .vx = 2 })
+    inout xs = &s.items(.x)
+    inout ys = &s.items(.x)             // the same column twice
+    xs[0] = 1
+    ys[0] = 2
+    const vs = s.items(.vx)
+    s.append(a, P{ .x = 1, .vx = 2 })   // may move the column vs views
+    io.print(vs[0])
+    inout ws = &s.items(.vx)
+    io.print(s.get(0).x)                // reads the column ws writes
+    ws[0] = 3
+    inout zs = &s.items(.x)
+    io.print(s.len())                   // the length is not a column
+    zs[0] = 3
+    for (s.items(.x)) |x| {
+        s.append(a, P{ .x = x, .vx = 2 })
+    }
+    step(&s.items(.x), s.items(.vx))    // two columns: fine
+    var u: Soa(P) = .empty
+    u.append(a, P{ .x = 1, .vx = 2 })
+    var t: Soa(P) = .empty
+    t.append(a, P{ .x = 1, .vx = 2 })   // never freed
+    const moved = u
+    a.free(moved)
+    io.print(u.len())
+}

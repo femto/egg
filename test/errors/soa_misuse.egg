@@ -1,0 +1,59 @@
+// error: E156 @21
+// error: E156 @27
+// error: E156 @28
+// error: E156 @29
+// error: E156 @30
+// error: E104 @31
+// error: E108 @32
+// error: E133 @33
+// error: E122 @35
+// error: E104 @36
+// error: E122 @37
+// error: E116 @39
+// error: E105 @40
+// error: E105 @44
+// error: E117 @58
+uses alloc, io
+
+const P = struct { x: i64 }
+const E = struct {}
+const B = struct { b: Buf(u8), n: i64 }
+const N = struct { kids: Soa(N), n: i64 }
+const U = union(enum) { a: i64, b }
+
+fn main(io: Io, a: Allocator) void {
+    const xs = [2]i64{ 1, 2 }
+    const s0: Soa(P) = .empty
+    const s1: Soa(i64) = .empty
+    const s2: Soa(E) = .empty
+    const s3: Soa(B) = .empty
+    const s4: Soa(U) = .empty
+    const s5: Soa(P, P) = .empty
+    const s6: Soa = .empty
+    io.print(make(a).len())
+    var s: Soa(P) = .empty
+    s.push(a, P{ .x = 1 })
+    io.print(@len(s.items(x)))
+    io.print(@len(s.items(.y)))
+    var b = [2]i64{ 1, 2 }
+    inout c = &b.items(.x)
+    s0.append(a, P{ .x = 1 })
+    io.print(xs[0], @len(s1), @len(s2), @len(s3), @len(s4), @len(s5), @len(s6), b[0], c[0])
+    a.free(s)
+    a.free(s0)
+    s0.set(0, P{ .x = 2 })
+}
+
+fn make(a: Allocator) Soa(P) {
+    var s: Soa(P) = .empty
+    s.append(a, P{ .x = 1 })
+    return s
+}
+
+fn step(inout xs: []i64, vs: []i64) void {
+    xs[0] = vs[0]
+}
+
+fn twice(inout s: Soa(P)) void {
+    step(&s.items(.x), s.items(.x))
+}
