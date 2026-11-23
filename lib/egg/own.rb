@@ -1215,7 +1215,7 @@ module Egg
     # The Shared(T) whose s.get() e is, or a field or element of: what
     # lends it. nil for anything else.
     def shared_holder(e)
-      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr) || @checker.column?(e)
       @checker.shared_get?(e) ? e.obj : nil
     end
 

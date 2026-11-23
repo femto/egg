@@ -1,18 +1,19 @@
-// error: E156 @21
-// error: E156 @27
+// error: E156 @22
 // error: E156 @28
 // error: E156 @29
 // error: E156 @30
-// error: E104 @31
-// error: E108 @32
-// error: E133 @33
-// error: E122 @35
-// error: E104 @36
-// error: E122 @37
-// error: E116 @39
-// error: E105 @40
-// error: E105 @44
-// error: E117 @58
+// error: E156 @31
+// error: E104 @32
+// error: E108 @33
+// error: E133 @34
+// error: E122 @36
+// error: E104 @37
+// error: E122 @38
+// error: E116 @40
+// error: E105 @41
+// error: E105 @45
+// error: E117 @59
+// error: E117 @63
 uses alloc, io
 
 const P = struct { x: i64 }
@@ -56,4 +57,8 @@ fn step(inout xs: []i64, vs: []i64) void {
 
 fn twice(inout s: MultiArrayList(P)) void {
     step(&s.items(.x), s.items(.x))
+}
+
+fn twice_in(inout ls: Buf(MultiArrayList(P))) void {
+    step(&ls[0].items(.x), ls[0].items(.x))
 }

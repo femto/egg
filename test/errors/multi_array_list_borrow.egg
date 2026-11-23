@@ -1,10 +1,12 @@
-// error: E149 @20
-// error: E149 @24
-// error: E149 @27
-// error: E137 @33
-// error: E135 @38
-// error: E136 @42
-uses alloc, io
+// error: E149 @22
+// error: E149 @26
+// error: E149 @29
+// error: E137 @35
+// error: E135 @40
+// error: E136 @44
+// error: E137 @51
+// error: E137 @52
+uses alloc, io, thread
 
 const P = struct { x: i64, vx: i64 }
 
@@ -12,7 +14,7 @@ fn step(inout xs: []i64, vs: []i64) void {
     xs[0] = vs[0]
 }
 
-fn main(io: Io, a: Allocator) void {
+fn main(io: Io, a: Allocator, threads: Threads) void {
     var s: MultiArrayList(P) = .empty
     defer a.free(s)
     s.append(a, P{ .x = 1, .vx = 2 })
@@ -40,4 +42,14 @@ fn main(io: Io, a: Allocator) void {
     const moved = u
     a.free(moved)
     io.print(u.len())
+    var w: MultiArrayList(P) = .empty
+    w.append(a, P{ .x = 1, .vx = 2 })
+    w.append(a, P{ .x = 3, .vx = 4 })
+    var h = threads.share(w)
+    for (h.get().items(.x)) |x| {       // the loop holds h
+        io.print(x)
+        h.close()
+        h = threads.share(MultiArrayList(P).empty)
+    }
+    h.close()
 }

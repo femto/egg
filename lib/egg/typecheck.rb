@@ -3795,8 +3795,24 @@ module Egg
     # The variable holding the Shared(T) whose s.get() e is, or a field,
     # element or slice of; nil for anything else.
     def shared_root(e)
-      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr) || column?(e)
       shared_get?(e) ? root_name(e.obj) : nil
+    end
+
+    # s.items(.x): a column of a MultiArrayList, lent by s.
+    def column?(e)
+      e.is_a?(MethodCall) && e.info.is_a?(Hash) && !e.info[:soa_field].nil?
+    end
+    public :column?
+
+    # The index expressions of a place: i and j in xs[i].f[j].
+    def index_exprs(e)
+      out = []
+      while e.is_a?(Field) || e.is_a?(Index)
+        out << e.index if e.is_a?(Index)
+        e = e.obj
+      end
+      out
     end
 
     def root_name(e)
@@ -3865,9 +3881,10 @@ module Egg
         # s.get() lends what s holds.
         holds?(obj, path)
       in MethodCall[obj:, info: { soa_field: String => f }]
-        # s.items(.x) lends only the column x.
-        op = place_path(obj)
-        op.nil? ? holds?(obj, path) : overlap?("#{op}.#{f}", path)
+        # s.items(.x) lends only the column x (of an element: the
+        # container's column, as inout_path names it).
+        op = inout_path(obj)
+        op.nil? ? holds?(obj, path) : overlap?("#{op}.#{f}", path) || index_exprs(obj).any? { |x| holds?(x, path) }
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]
@@ -3907,9 +3924,12 @@ module Egg
       p = place_path(e)
       return out << p unless p.nil?
       case e
-      in MethodCall[obj:, info: { cap_method: "MultiArrayList.items" | "MultiArrayList.len" => m }] if !place_path(obj).nil?
-        # A column, or the length: s.x, s.(len), not all of s.
-        out << "#{place_path(obj)}.#{m == "MultiArrayList.len" ? "(len)" : e.info[:soa_field]}"
+      in MethodCall[obj:, info: { cap_method: "MultiArrayList.items" | "MultiArrayList.len" => m }] if !inout_path(obj).nil?
+        # A column, or the length: s.x, s.(len), not all of s; of an
+        # element, the container's (xs.x for xs[i].items(.x)), as inout
+        # arguments name it. The indices are read as well.
+        out << "#{inout_path(obj)}.#{m == "MultiArrayList.len" ? "(len)" : e.info[:soa_field]}"
+        index_exprs(obj).each { |x| collect_paths(x, out) }
       in Unary[operand:] then collect_paths(operand, out)
       in Binary[lhs:, rhs:] then [lhs, rhs].each { |x| collect_paths(x, out) }
       in Call[args:] then args.each { |x| collect_paths(x, out) }
