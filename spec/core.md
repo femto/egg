@@ -2924,7 +2924,10 @@ assigning over it is E139. Elements are swapped instead:
 
 `a.alloc`, `a.resize` and `@splat` copy their fill value, so for owned
 elements it must be made of `.empty` buffers (E140): `a.alloc(n,
-Buf(u8).empty)`, `List{ .data = .empty, .len = 0 }`. Shrinking a buffer of
+Buf(u8).empty)`, `List{ .data = .empty, .len = 0 }`. An array literal
+moves each element in, as a struct literal moves its fields:
+`[_]Buf(u8){ first, second }` takes both over, and
+`[2]Buf(i64){ .empty, .empty }` owns nothing yet. Shrinking a buffer of
 buffers with `a.resize` frees the elements cut off. While `for (xs) |x|`
 iterates over owned elements, `x` only borrows each one (moving it is
 E139), and the body may not swap elements of `xs` (E137).

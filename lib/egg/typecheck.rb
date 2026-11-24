@@ -4333,7 +4333,9 @@ module Egg
       return check_all_error(items) if elem == "error"
       return check_all_error(items) if value_type_error_if(elem, line, col)
       return check_all_error(items) if resource_elem_error(elem, "an array element", line, col)
-      if owned_or_err?(elem)
+      # An owned element is moved in, as into a struct literal; an owned
+      # !T or ?T must be unwrapped first, as in an array type.
+      if owned_err?(elem)
         owned_place_error(elem, "an array element", line, col)
         return check_all_error(items)
       end
