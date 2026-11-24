@@ -3261,6 +3261,7 @@ module Egg
       @dups = {}        # owned type -> its egg_dup_ function's name
       @soa_fns = {}     # [MultiArrayList type, kind] -> its egg_soa_ function's name
       @fixed_indices = false # lvalue computes indices at once (column_receiver)
+      @tagged = {}      # types declared up front as tagged structs (emit_types)
       @out = +""
       @indent = 0
       @locals = []
@@ -3802,15 +3803,27 @@ module Egg
     # field can name a struct that is defined later (or itself).
     def emit_types
       # A MultiArrayList too: its columns are pointers, so an element may
-      # hold its own list (N { kids: MultiArrayList(N) }).
+      # hold its own list (N { kids: MultiArrayList(N) }). Its columns'
+      # types are declared up front as well, so a column may hold such an
+      # element by value ([1]N in E, with N holding MultiArrayList(E)).
+      @tagged = {}
       @checker.type_order.each do |c|
         info = @types[c]
-        @out << "typedef struct #{info.c_name} #{info.c_name};\n" if %i[struct union soa].include?(info.kind)
+        @tagged[c] = true if %i[struct union soa].include?(info.kind)
+        next unless info.kind == :soa
+        soa_columns(c).each { |_, ft| @tagged[ft] = true if %i[array err opt buf].include?(@types[ft]&.kind) }
       end
-      @out << "\n" if @checker.type_order.any? { |c| %i[struct union soa].include?(@types[c].kind) }
+      @checker.type_order.each { |c| @out << "typedef struct #{@types[c].c_name} #{@types[c].c_name};\n" if @tagged[c] }
+      @out << "\n" unless @tagged.empty?
       done = {}
       @checker.type_order.each { |c| emit_type(c, done) unless @types[c].kind == :slice }
       @checker.type_order.each { |c| emit_type(c, done) if @types[c].kind == :slice }
+    end
+
+    # A typedef'd struct: tagged when declared up front (emit_types).
+    def aggregate(canon, fields)
+      name = @types[canon].c_name
+      @out << (@tagged[canon] ? "struct #{name} { #{fields} };\n" : "typedef struct { #{fields} } #{name};\n")
     end
 
     def emit_type(canon, done)
@@ -3865,17 +3878,17 @@ module Egg
         @out << "};\n\n"
       when :array
         emit_type(info.elem, done)
-        @out << "typedef struct { #{c_type(info.elem)} a[#{info.len}]; } #{info.c_name};\n"
+        aggregate(canon, "#{c_type(info.elem)} a[#{info.len}];")
       when :err
         emit_type(info.inner, done)
         if info.inner == "void"
-          @out << "typedef struct { int32_t err; } #{info.c_name};\n"
+          aggregate(canon, "int32_t err;")
         else
-          @out << "typedef struct { #{c_type(info.inner)} value; int32_t err; } #{info.c_name};\n"
+          aggregate(canon, "#{c_type(info.inner)} value; int32_t err;")
         end
       when :opt
         emit_type(info.inner, done)
-        @out << "typedef struct { #{c_type(info.inner)} value; bool has; } #{info.c_name};\n"
+        aggregate(canon, "#{c_type(info.inner)} value; bool has;")
       when :slice
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
@@ -3883,13 +3896,13 @@ module Egg
         # Pointers to the columns' types: a tagged one is declared up front
         # and may still be in the making (the element holding this list).
         cols = soa_columns(canon)
-        cols.each { |_, ft| emit_type(ft, done) unless %i[struct union soa].include?(@types[ft]&.kind) }
+        cols.each { |_, ft| emit_type(ft, done) unless @tagged[ft] }
         fields = cols.map { |f, ft| "#{c_type(ft)} *f_#{f}; " }.join
         @out << "struct #{info.c_name} { #{fields}int64_t len; int64_t cap; };\n"
       when :buf
         emit_type(info.elem, done)
         # cap: elements allocated, so a.push grows by doubling.
-        @out << "typedef struct { #{c_type(info.elem)} *ptr; int64_t len; int64_t cap; } #{info.c_name};\n"
+        aggregate(canon, "#{c_type(info.elem)} *ptr; int64_t len; int64_t cap;")
       when :ptr
         # A struct or union target is declared up front; others are needed.
         emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
