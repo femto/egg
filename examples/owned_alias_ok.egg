@@ -2,6 +2,7 @@
 // switch capture borrows an owned payload from another column.
 // expect: hello 21
 // expect: 4
+// expect: hello 2 0
 uses alloc, io
 
 const U = union(enum) { text: Buf(u8), none }
@@ -35,4 +36,25 @@ fn main(io: Io, a: Allocator) void {
         v[i] = x + 1
     }
     io.print(xs[2])
+    borrows(io, a)
+}
+
+const Person = struct { id: i64, name: Buf(u8), nick: Buf(u8) }
+
+// Through a borrow of an element: a plain write, or another column's take.
+fn borrows(io: Io, a: Allocator) void {
+    var s: MultiArrayList(Person) = .empty
+    defer a.free(s)
+    s.append(a, Person{ .id = 1, .name = a.concat("hello", ""), .nick = a.concat("hi", "") })
+    for (s.items(.id)) |k, i| {
+        inout kc = &s.items(.id)
+        inout it = &kc[i]
+        it = k + 1
+    }
+    for (s.items(.name)) |name, i| {
+        inout nc = &s.items(.nick)
+        inout other = &nc[i]
+        a.free(@take(&other))
+        io.print(name, " ", s.items(.id)[0], " ", @len(s.items(.nick)[0]))
+    }
 }

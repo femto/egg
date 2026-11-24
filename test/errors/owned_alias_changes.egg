@@ -1,9 +1,11 @@
-// error: E149 @21
-// error: E149 @34
-// error: E137 @47
-// error: E137 @52
-// error: E137 @63
-// error: E137 @68
+// error: E149 @23
+// error: E149 @36
+// error: E137 @49
+// error: E137 @54
+// error: E137 @65
+// error: E137 @70
+// error: E149 @84
+// error: E137 @98
 // A switch capture that borrows the payload of an element keeps the
 // container (or column) it came from, and a for loop over owned elements
 // keeps them through a local slice of the same container too.
@@ -71,7 +73,37 @@ fn loop_buf(io: Io, a: Allocator) void {
     a.free(bs)
 }
 
+// Through a borrow of an element (u, item), what it names is held too.
+fn switch_borrow(io: Io, a: Allocator) void {
+    var s: MultiArrayList(Row) = .empty
+    s.append(a, Row{ .u = U{ .text = a.concat("hello", "") }, .k = 1 })
+    inout c = &s.items(.u)
+    const u = &c[0]
+    switch (u) {
+        .text => |t| {
+            a.free(@replace(&c[0], U.none))
+            io.print(t)
+        }
+        .none => {}
+    }
+    a.free(s)
+}
+
+fn loop_borrow(io: Io, a: Allocator) void {
+    var s: MultiArrayList(User) = .empty
+    s.append(a, User{ .id = 1, .name = a.concat("hello", "") })
+    for (s.items(.name)) |name, i| {
+        inout c = &s.items(.name)
+        inout item = &c[i]
+        a.free(@take(&item))
+        io.print(name)
+    }
+    a.free(s)
+}
+
 fn main(io: Io, a: Allocator) void {
+    switch_borrow(io, a)
+    loop_borrow(io, a)
     switch_column(io, a)
     switch_buf(io, a)
     loop_column(io, a)

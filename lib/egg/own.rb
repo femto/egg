@@ -691,8 +691,9 @@ module Egg
                   end
             # What the capture views stays put while it is used: the
             # subject's variable, the container of an element (bs for
-            # bs[0], s.u for s.items(.u)[0]), or the holder of s.get().
-            lent = holder.nil? ? path || place_path(subject) : path_of(holder)
+            # bs[0], s.u for s.items(.u)[0]), what a borrow names (s.u for
+            # u in const u = &c[0]), or the holder of s.get().
+            lent = holder.nil? ? place_path(subject) || path : path_of(holder)
             pre = lambda do
               @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
               declare(cap, :borrowed, arm.line, arm.col, t)
@@ -828,6 +829,9 @@ module Egg
       return unless whole
       c = path_of(place)
       check_iterated(c, line, col, what) unless c.nil?
+      # A borrow (inout item = &c[i]) changes what it names.
+      src = place.is_a?(Var) ? place_path(place) : nil
+      check_iterated(src, line, col, what) unless src.nil? || src == c
     end
 
     # Does this return leave with an error (true), without one (false),
