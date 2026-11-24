@@ -115,6 +115,7 @@ module Egg
       @defer_ctx = nil
       @iterated = {} # path -> line of the for loop iterating it
       @borrowed = {} # loop variable borrowing an owned element -> its container, as written
+      @pending = []  # owned operands moved into a literal or call not made yet: [operand, what]
       @res = {}      # v.# path of an owned struct -> its type
       @summary[sig] ||= {}
       @param_index = {}
@@ -616,11 +617,14 @@ module Egg
         end
         merge(ends, line, col, "this select")
       in Break[line:, col:]
+        check_pending(line, col, "this break leaves", true)
         loop_exit(line, col, "break")
       in Continue[line:, col:]
+        check_pending(line, col, "this continue leaves", true)
         loop_exit(line, col, "continue")
       in Return[value:, line:, col:]
         walk(value) unless value.nil?
+        check_pending(line, col, "this return runs")
         return_paths(value).each do |error|
           leaving { simulate { leave(0, error, line, col, "at this return") } }
         end
@@ -980,8 +984,13 @@ module Egg
             walk(obj, !info.nil? && !ends && (!cap.nil? || (!info[:params].nil? && !info[:self_sink])))
           end
         end
+        # A sink self is moved first and held by the call until it runs,
+        # like a sink argument.
+        mark = @pending.length
+        hold(obj, "call to '#{info[:sig]&.name || e.name}'") if info&.[](:self_sink) && !obj.nil?
         # m.f(K, x): a generic call into a module; info[:args] has no types.
         walk_args(info&.[](:args) || args, info)
+        @pending.slice!(mark..)
       in Builtin[name: "forget", args:, line:, col:]
         path = path_of(args[0])
         path.nil? ? walk(args[0]) : forget(path, line, col)
@@ -1033,12 +1042,25 @@ module Egg
         walk(obj, true)
         walk(lo)
         walk(hi) unless hi.nil?
-      in StructLit[fields:] then fields.each { |f| walk(f[1]) }
-      in ArrayLit[items:] then items.each { |i| walk(i) }
+      in StructLit[fields:]
+        mark = @pending.length
+        fields.each do |f|
+          walk(f[1])
+          hold(f[1], "#{e.ty} literal")
+        end
+        @pending.slice!(mark..)
+      in ArrayLit[items:]
+        mark = @pending.length
+        items.each do |i|
+          walk(i)
+          hold(i, "#{e.ty} literal")
+        end
+        @pending.slice!(mark..)
       in AddrOf[expr: place] then walk_place(place)
       in Deref[expr: ptr] then walk(ptr)
       in Try[expr: inner, line:, col:]
         walk(inner)
+        check_pending(line, col, "this try returns an error")
         leaving { simulate { leave(0, true, line, col, "if this try returns an error") } } unless @st.nil?
       in Catch[expr: inner, fallback:, line:, col:]
         walk(inner)
@@ -1092,6 +1114,8 @@ module Egg
       callee = info&.[](:sig)
       # A method's own parameters start after self.
       shift = callee.nil? || callee.params.length == args.length ? 0 : 1
+      what = "call to '#{callee&.name || (cap.nil? ? "it" : cap.split(".").last)}'"
+      mark = @pending.length
       args.each_with_index do |a, i|
         if a.is_a?(AddrOf)
           check_slices(place_path(a.expr), a.line, a.col, "changed", place_root(a.expr))
@@ -1100,10 +1124,31 @@ module Egg
           walk_place(a.expr)
         elsif params.nil? && !cap.nil?
           walk(a, !TAKING_CAP_METHODS.include?(cap))
+          hold(a, what) if TAKING_CAP_METHODS.include?(cap)
         else
           walk(a, !params.nil? && params[i][1].nil?)
+          hold(a, what) if !params.nil? && params[i][1] == "sink"
         end
       end
+      @pending.slice!(mark..)
+    end
+
+    # An owned value moved into a literal or a call is held only by what
+    # is being made until it is made: a later try, or a catch or orelse
+    # that leaves, would lose it (check_pending).
+    def hold(op, what)
+      @pending << [op, what, @loops.length] if owned?(op.ty) && !@checker.empty_value?(op)
+    end
+
+    # loop: a break or continue, which leaves only the operands made
+    # outside the loop it ends (not one in a catch block's own loop).
+    def check_pending(line, col, how, loop = false)
+      held = loop ? @pending.select { |_, _, depth| depth >= @loops.length } : @pending
+      return if held.empty? || @st.nil?
+      op, what, = held.first
+      text = place_text(op)
+      moved = text == "this value" ? "an owned #{op.ty}" : "'#{text}'"
+      err("E135", "if #{how}, #{moved}, already moved into the #{what} being made, is never freed; compute what may leave into a local first, before the #{what}", line, col)
     end
 
     # A place written or passed as inout: it is borrowed.

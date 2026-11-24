@@ -1,0 +1,27 @@
+// error: E144 @9
+// error: E136 @15
+// error: E136 @19
+// error: E139 @23
+// error: E135 @25
+uses alloc, io
+
+fn take(a: Allocator, b: Buf(i64)) void {
+    const xs = [_]Buf(i64){ b }
+    a.free(xs)
+}
+
+fn main(io: Io, a: Allocator) void {
+    const b = a.alloc(3, 7)
+    const cs = [_]Buf(i64){ b, b }
+    a.free(cs)
+    const d = a.alloc(1, 0)
+    const ds = [_]Buf(i64){ d }
+    io.print(@len(d))
+    a.free(ds)
+    const es = [2]Buf(i64){ .empty, .empty }
+    defer a.free(es)
+    const fs = [_]Buf(i64){ es[0] }
+    a.free(fs)
+    const gs = [_]Buf(i64){ a.alloc(1, 0) }
+    io.print(@len(gs))
+}

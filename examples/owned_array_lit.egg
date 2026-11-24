@@ -1,0 +1,22 @@
+// An array literal of owned values moves each element in, as a struct
+// literal moves its fields; .empty elements own nothing.
+// expect: 1 7 9 2 2
+uses alloc, io
+
+const P = struct { x: i64 }
+const Msg = union(enum) { text: Buf(u8), ping }
+
+fn main(io: Io, a: Allocator) void {
+    var bs = [2]Buf(i64){ .empty, .empty }
+    defer a.free(bs)
+    a.push(&bs[0], 1)
+    const b = a.alloc(3, 7)
+    const cs = [_]Buf(i64){ b, a.alloc(1, 9) }      // b moves in
+    defer a.free(cs)
+    var ms = [2]MultiArrayList(P){ .empty, .empty }
+    defer a.free(ms)
+    ms[1].append(a, P{ .x = 2 })
+    const us = [_]Msg{ .ping, Msg{ .text = a.concat("hi", "") } }
+    defer a.free(us)
+    io.print(bs[0][0], " ", cs[0][2], " ", cs[1][0], " ", ms[1].get(0).x, " ", @len(us))
+}
