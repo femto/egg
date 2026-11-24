@@ -1,0 +1,16 @@
+// An element may hold a list of its own type: a tree whose children are
+// a MultiArrayList of nodes. a.free frees the whole tree.
+// expect: 2 1 3
+uses alloc, io
+
+const N = struct { kids: MultiArrayList(N), n: i64 }
+
+fn main(io: Io, a: Allocator) void {
+    var root: MultiArrayList(N) = .empty
+    defer a.free(root)
+    root.append(a, N{ .kids = .empty, .n = 1 })
+    var kids: MultiArrayList(N) = .empty
+    kids.append(a, N{ .kids = .empty, .n = 2 })
+    root.append(a, N{ .kids = kids, .n = 3 })
+    io.print(root.len(), " ", root.items(.kids)[1].len(), " ", root.items(.n)[1])
+}

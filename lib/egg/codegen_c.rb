@@ -3801,11 +3801,13 @@ module Egg
     # Structs and unions are tagged and declared up front, so a pointer
     # field can name a struct that is defined later (or itself).
     def emit_types
+      # A MultiArrayList too: its columns are pointers, so an element may
+      # hold its own list (N { kids: MultiArrayList(N) }).
       @checker.type_order.each do |c|
         info = @types[c]
-        @out << "typedef struct #{info.c_name} #{info.c_name};\n" if %i[struct union].include?(info.kind)
+        @out << "typedef struct #{info.c_name} #{info.c_name};\n" if %i[struct union soa].include?(info.kind)
       end
-      @out << "\n" if @checker.type_order.any? { |c| %i[struct union].include?(@types[c].kind) }
+      @out << "\n" if @checker.type_order.any? { |c| %i[struct union soa].include?(@types[c].kind) }
       done = {}
       @checker.type_order.each { |c| emit_type(c, done) unless @types[c].kind == :slice }
       @checker.type_order.each { |c| emit_type(c, done) if @types[c].kind == :slice }
@@ -3878,11 +3880,12 @@ module Egg
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
       when :soa
+        # Pointers to the columns' types: a tagged one is declared up front
+        # and may still be in the making (the element holding this list).
         cols = soa_columns(canon)
-        cols.each { |_, ft| emit_type(ft, done) }
-        emit_type(info.elem, done)
+        cols.each { |_, ft| emit_type(ft, done) unless %i[struct union soa].include?(@types[ft]&.kind) }
         fields = cols.map { |f, ft| "#{c_type(ft)} *f_#{f}; " }.join
-        @out << "typedef struct { #{fields}int64_t len; int64_t cap; } #{info.c_name};\n"
+        @out << "struct #{info.c_name} { #{fields}int64_t len; int64_t cap; };\n"
       when :buf
         emit_type(info.elem, done)
         # cap: elements allocated, so a.push grows by doubling.
@@ -5763,7 +5766,7 @@ module Egg
     # that grows the list, or the Buf the list is in, leaves no stale view.
     def column_receiver(col)
       r = col.obj
-      return hoist(expr(r), r.ty) unless place?(r)
+      return hoist(expr(r), r.ty) unless place?(r) || element_place?(r)
       saved = @fixed_indices
       @fixed_indices = true
       place = lvalue(r)

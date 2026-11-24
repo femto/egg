@@ -7,6 +7,8 @@
 // expect: 10
 // expect: 1
 // expect: 1
+// expect: 1
+// expect: 1 201
 uses alloc, io
 
 const U = struct { id: i64, b: Buf(u8) }
@@ -16,6 +18,26 @@ fn next(inout n: i64) i64 {
     const old = n
     n = n + 1
     return old
+}
+
+fn grow_p(a: Allocator, inout s: MultiArrayList(P)) i64 {
+    var k: i64 = 0
+    while (k < 100) {
+        s.append(a, P{ .x = k + 10 })
+        k = k + 1
+    }
+    return 0
+}
+
+// A list that is an element of a Buf, grown by the column's index.
+fn element_list(io: Io, a: Allocator) void {
+    var lists: Buf(MultiArrayList(P)) = .empty
+    defer a.free(lists)
+    a.push(&lists, MultiArrayList(P).empty)
+    lists[0].append(a, P{ .x = 1 })
+    io.print(lists[0].items(.x)[grow_p(a, &lists[0])])
+    const r = &lists[0].items(.x)[grow_p(a, &lists[0])]
+    io.print(r, " ", lists[0].len())
 }
 
 // Left to right: the list's place, then the column's index.
@@ -63,4 +85,5 @@ fn main(io: Io, a: Allocator) void {
     io.print(s.len())
     slice_after_growth(io, a)
     left_to_right(io, a)
+    element_list(io, a)
 }
