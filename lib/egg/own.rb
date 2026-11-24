@@ -191,6 +191,7 @@ module Egg
       in Field[obj:, name:] then "#{place_text(obj)}.#{name}"
       in Index[obj:] then "#{place_text(obj)}[i]"
       in Deref[expr:] then "#{place_text(expr)}.*"
+      in MethodCall[obj:, info: { soa_field: String => f }] then "#{place_text(obj)}.items(.#{f})"
       else "this value"
       end
     end
@@ -571,7 +572,10 @@ module Egg
         fresh = !root.nil? && !@iterated.key?(root)
         @iterated[root] = line if fresh
         # for (trim(s)) |c|: what the result views stays put while it runs.
-        lent = %w[Call MethodCall Orelse Catch Try IfExpr].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
+        # So does a local slice's source: for (c) with c = &s.items(.name).
+        over = iter.is_a?(SliceExpr) ? iter.obj : iter
+        alias_iter = over.is_a?(Var) && @slices.key?(over.name)
+        lent = (alias_iter || %w[Call MethodCall Orelse Catch Try IfExpr].include?(iter.class.name.split("::").last)) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
         lent.each { |p| @iterated[p] = line }
         elem = iter.ty == "str" ? nil : @types[iter.ty]&.elem
         # An element that owns buffers is only borrowed by the loop variable.
@@ -686,13 +690,17 @@ module Egg
                   else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
                   end
             # What the capture views stays put while it is used: the
-            # subject's variable, or the holder of s.get().
-            lent = holder.nil? ? path : path_of(holder)
+            # subject's variable, the container of an element (bs for
+            # bs[0], s.u for s.items(.u)[0]), what a borrow names (s.u for
+            # u in const u = &c[0]), or the holder of s.get().
+            # A slice with several sources (if (f) l.items(.u) else
+            # r.items(.u)) lends them all.
+            lent = holder.nil? ? paths_of(subject) : [path_of(holder)].compact
             pre = lambda do
               @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
               declare(cap, :borrowed, arm.line, arm.col, t)
-              unless lent.nil?
-                @slices[cap] = [[lent], @rest.length, false, nil, :borrow]
+              unless lent.empty?
+                @slices[cap] = [lent, @rest.length, false, nil, :borrow]
                 @frames.last.slices << cap
               end
             end
@@ -790,20 +798,31 @@ module Egg
     # each part of it the callee may change against the for loops here.
     def check_inout_arg(place, callee, i, line, col)
       check_elem_change(place, line, col, "passed as inout", false)
-      p = path_of(place)
-      return if p.nil?
-      if callee.nil? || callee.func.nil?
-        check_iterated(p, line, col, "passed as inout")
-        return
+      # An owned element through a borrow of it (&item, &item.name) is
+      # also judged as what the borrow names.
+      [path_of(place), borrow_source(place)].compact.uniq.each do |p|
+        if callee.nil? || callee.func.nil?
+          check_iterated(p, line, col, "passed as inout")
+          next
+        end
+        (@summary.dig(callee, i) || []).each do |rest|
+          changed = "#{p}#{rest}"
+          note_change(changed)
+          key = @iterated.keys.find { |k| overlap?(k, changed) }
+          next if key.nil?
+          via = changed == p ? "" : " (through '#{p}')"
+          err("E137", "'#{callee.name}' may move, reassign or resize '#{changed}'#{via}, but the for loop on line #{@iterated[key]} is iterating over #{key == changed ? 'it' : "'#{key}'"}; loop over an index with while, or make the change after the loop", line, col)
+        end
       end
-      (@summary.dig(callee, i) || []).each do |rest|
-        changed = "#{p}#{rest}"
-        note_change(changed)
-        key = @iterated.keys.find { |k| overlap?(k, changed) }
-        next if key.nil?
-        via = changed == p ? "" : " (through '#{p}')"
-        err("E137", "'#{callee.name}' may move, reassign or resize '#{changed}'#{via}, but the for loop on line #{@iterated[key]} is iterating over #{key == changed ? 'it' : "'#{key}'"}; loop over an index with while, or make the change after the loop", line, col)
-      end
+    end
+
+    # What an owned place rooted at a local borrow names (s.name.x for
+    # item.x with inout item = &c[i]), or nil: a plain one may change.
+    def borrow_source(place)
+      return nil unless owned?(place.ty)
+      r = place_root(place)
+      return nil if r.nil? || !@slices.key?(r) || @slices[r][4] != :borrow
+      place_path(place)
     end
 
     # A place changed in place (&x, @replace): if it is (in) an element of
@@ -814,7 +833,8 @@ module Egg
       p = place
       while p.is_a?(Field) || p.is_a?(Index)
         if p.is_a?(Index) && owned?(p.ty)
-          c = path_of(p.obj)
+          # Through a local slice (inout c = &s.items(.name)), its source.
+          c = path_of(p.obj) || place_path(p.obj)
           check_iterated(c, line, col, "#{what} (its elements own buffers)") unless c.nil?
         end
         p = p.obj
@@ -822,6 +842,9 @@ module Egg
       return unless whole
       c = path_of(place)
       check_iterated(c, line, col, what) unless c.nil?
+      # A borrow (inout item = &c[i]) changes what it names.
+      src = borrow_source(place)
+      check_iterated(src, line, col, what) unless src.nil? || src == c
     end
 
     # Does this return leave with an error (true), without one (false),
@@ -973,8 +996,10 @@ module Egg
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
             check_slices(place_path(obj), obj.line, obj.col, "changed", place_root(obj))
-            # s.set(i, v) writes elements in place: it resizes nothing.
-            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless info[:cap_method] == "MultiArrayList.set"
+            # s.set(i, v) and s.replace(i, v) write elements in place: they
+            # resize nothing, and plain elements a loop may hold copies of.
+            in_place = %w[MultiArrayList.set MultiArrayList.replace].include?(info[:cap_method]) && !owned?(@types[obj.ty].elem)
+            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless in_place
             walk_place(obj)
           else
             # self is borrowed unless the method takes `sink self`, or it
@@ -1286,6 +1311,12 @@ module Egg
       return unless p.is_a?(Index)
       t = place_text(e)
       how = @types[e.ty].kind == :buf ? "take it with @take(&#{t}) or swap it with @replace(&#{t}, v)" : "swap it out with @replace(&#{t}, v)"
+      # A column is swapped through a writable borrow of it.
+      if @checker.column?(p.obj)
+        # Keep the fields after the element: c[i].name for s.items(.p)[0].name.
+        c = "c[i]#{t.delete_prefix(place_text(p))}"
+        how = "lend the column as writable (inout c = &#{place_text(p.obj)}) and #{@types[e.ty].kind == :buf ? "take it with @take(&#{c}) or " : ""}swap it with @replace(&#{c}, v)"
+      end
       err("E139", "cannot move '#{t}' out of an element of '#{place_text(p.obj)}'; #{how}", line, col)
     end
   end

@@ -1,0 +1,29 @@
+// error: E144 @11
+// error: E136 @19
+// error: E139 @20
+// error: E137 @24
+// error: E135 @27
+uses alloc, io
+
+const User = struct { id: i64, name: Buf(u8) }
+
+fn add(a: Allocator, inout us: MultiArrayList(User), u: User) void {
+    us.append(a, u)
+}
+
+fn main(io: Io, a: Allocator) void {
+    var us: MultiArrayList(User) = .empty
+    defer a.free(us)
+    const name = a.concat("x", "")
+    us.append(a, User{ .id = 1, .name = name })
+    io.print(name)
+    const n = us.items(.name)[0]
+    a.free(n)
+    for (us.items(.name)) |x| {
+        io.print(x)
+        const old = us.replace(0, User{ .id = 2, .name = .empty })
+        a.free(old)
+    }
+    const kept = us.pop() orelse return
+    io.print(kept.id)
+}

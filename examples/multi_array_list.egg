@@ -71,7 +71,7 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     s.set(3, Particle{ .x = 33, .vx = 30, .alive = false })
     const p = s.get(3)
     io.print(p.x, " ", p.vx, " ", p.alive)
-    s.swap_remove(1)                    // the last element fills the gap
+    _ = s.swap_remove(1)                // the last element fills the gap
     while (s.len() > 10) {
         _ = s.pop()
     }

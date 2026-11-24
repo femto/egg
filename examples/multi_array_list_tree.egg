@@ -1,0 +1,34 @@
+// An element may hold a list of its own type: a tree whose children are
+// a MultiArrayList of nodes. a.free frees the whole tree.
+// expect: 2 1 3
+// expect: 1 1 2 4 6
+uses alloc, io
+
+const N = struct { kids: MultiArrayList(N), n: i64 }
+
+// Through another element type, whose columns hold M by value.
+const M = struct { l: MultiArrayList(E), n: i64 }
+const E = struct { arr: [1]M, k: i64, tag: ?i64 }
+
+fn nested(io: Io, a: Allocator) void {
+    var root = M{ .l = .empty, .n = 1 }
+    defer a.free(root)
+    var inner = M{ .l = .empty, .n = 2 }
+    inner.l.append(a, E{ .arr = @splat(M{ .l = .empty, .n = 3 }), .k = 4, .tag = null })
+    var arr: [1]M = @splat(M{ .l = .empty, .n = 0 })
+    a.free(@replace(&arr[0], inner))
+    root.l.append(a, E{ .arr = arr, .k = 5, .tag = 6 })
+    const deep = &root.l.items(.arr)[0]
+    io.print(root.n, " ", root.l.len(), " ", deep[0].n, " ", deep[0].l.items(.k)[0], " ", root.l.items(.tag)[0] orelse 0)
+}
+
+fn main(io: Io, a: Allocator) void {
+    var root: MultiArrayList(N) = .empty
+    defer a.free(root)
+    root.append(a, N{ .kids = .empty, .n = 1 })
+    var kids: MultiArrayList(N) = .empty
+    kids.append(a, N{ .kids = .empty, .n = 2 })
+    root.append(a, N{ .kids = kids, .n = 3 })
+    io.print(root.len(), " ", root.items(.kids)[1].len(), " ", root.items(.n)[1])
+    nested(io, a)
+}

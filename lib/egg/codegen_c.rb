@@ -3260,6 +3260,8 @@ module Egg
       @drops = {}       # owned type -> its egg_drop_ function's name
       @dups = {}        # owned type -> its egg_dup_ function's name
       @soa_fns = {}     # [MultiArrayList type, kind] -> its egg_soa_ function's name
+      @fixed_indices = false # lvalue computes indices at once (column_receiver)
+      @tagged = {}      # types declared up front as tagged structs (emit_types)
       @out = +""
       @indent = 0
       @locals = []
@@ -3371,6 +3373,7 @@ module Egg
       info = @types[t]
       case info.kind
       when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
+      when :soa then soa_columns(t).each { |_, ft| drop(ft) if @checker.owned?(ft) }
       when :union then info.fields.each { |_, ft, _| drop(ft) if ft != "void" && @checker.owned?(ft) }
       when :struct
         if info.deinit.nil?
@@ -3392,6 +3395,7 @@ module Egg
       soa_fn(:grow, t) if info.kind == :soa
       case info.kind
       when :buf, :array then dup(info.elem) if @checker.owned?(info.elem)
+      when :soa then soa_columns(t).each { |_, ft| dup(ft) if @checker.owned?(ft) }
       when :union then info.fields.each { |_, ft, _| dup(ft) if ft != "void" && @checker.owned?(ft) }
       when :struct then info.fields.each { |_, ft, _| dup(ft) if @checker.owned?(ft) }
       end
@@ -3413,7 +3417,13 @@ module Egg
                  "    #{c_type(t)} r = { .ptr = NULL, .len = v.len, .cap = v.len };\n    if (v.len == 0) return r;\n" \
                    "    r.ptr = egg_buf_resize(NULL, v.len, sizeof(*v.ptr));\n#{copy}    return r;\n"
                when :soa
-                 copy = soa_columns(t).map { |f, _| "    memcpy(r.f_#{f}, v.f_#{f}, (size_t)v.len * sizeof(*v.f_#{f}));\n" }.join
+                 copy = soa_columns(t).map do |f, ft|
+                   if @checker.owned?(ft)
+                     "    for (int64_t i = 0; i < v.len; i++) r.f_#{f}[i] = #{dup(ft)}(v.f_#{f}[i]);\n"
+                   else
+                     "    memcpy(r.f_#{f}, v.f_#{f}, (size_t)v.len * sizeof(*v.f_#{f}));\n"
+                   end
+                 end.join
                  "    #{c_type(t)} r = { 0 };\n    if (v.len == 0) return r;\n    #{soa_fn(:grow, t)}(&r, v.len);\n#{copy}    r.len = v.len;\n    return r;\n"
                when :array
                  "    #{c_type(t)} r = v;\n    for (int64_t i = 0; i < #{info.len}; i++) r.a[i] = #{dup(info.elem)}(v.a[i]);\n    return r;\n"
@@ -3440,8 +3450,12 @@ module Egg
                  elem = @checker.owned?(info.elem) ? "    for (int64_t i = 0; i < v.len; i++) #{drop(info.elem)}(v.ptr[i]);\n" : ""
                  "#{elem}    free(v.ptr);\n"
                when :soa
-                 # One block holds every column; the first starts it.
-                 "    free(v.f_#{soa_columns(t)[0][0]});\n"
+                 # Each element's owned fields, last declared first, as a
+                 # struct's; then the one block that holds every column,
+                 # which the first starts.
+                 owned = soa_columns(t).select { |_, ft| @checker.owned?(ft) }.reverse
+                 elems = owned.empty? ? "" : "    for (int64_t i = 0; i < v.len; i++) {\n#{owned.map { |f, ft| "        #{drop(ft)}(v.f_#{f}[i]);\n" }.join}    }\n"
+                 "#{elems}    free(v.f_#{soa_columns(t)[0][0]});\n"
                when :array
                  "    for (int64_t i = 0; i < #{info.len}; i++) #{drop(info.elem)}(v.a[i]);\n"
                when :union
@@ -3484,8 +3498,8 @@ module Egg
       when :push
         soa_fn(:grow, t)
         helper("egg_mul")
-      when :get, :set, :swap_remove then helper("egg_index")
-      when :pop then soa_fn(:get, t)
+      when :get, :set then helper("egg_index")
+      when :pop, :replace, :swap_remove then soa_fn(:get, t)
       end
       @soa_fns[key]
     end
@@ -3529,11 +3543,16 @@ module Egg
                       text = "    #{opt} r = { .has = false };\n    if (s->len == 0) return r;\n" \
                              "    r.value = #{soa_fn(:get, t)}(*s, s->len - 1);\n    r.has = true;\n    s->len--;\n    return r;\n"
                       ["#{opt} #{name}(#{s} *s)", text]
+                    when :replace
+                      # The old element out (get checks i), v in.
+                      text = "    #{el} r = #{soa_fn(:get, t)}(*s, i);\n"
+                      cols.each { |f, _| text += "    s->f_#{f}[i] = v.f_#{f};\n" }
+                      ["#{el} #{name}(#{s} *s, int64_t i, #{el} v)", "#{text}    return r;\n"]
                     when :swap_remove
-                      # The last element moves into the gap.
-                      text = "    #{helper('egg_index')}(i, s->len);\n    s->len--;\n"
+                      # Element i out (get checks i), the last one into its place.
+                      text = "    #{el} r = #{soa_fn(:get, t)}(*s, i);\n    s->len--;\n"
                       cols.each { |f, _| text += "    s->f_#{f}[i] = s->f_#{f}[s->len];\n" }
-                      ["void #{name}(#{s} *s, int64_t i)", text]
+                      ["#{el} #{name}(#{s} *s, int64_t i)", "#{text}    return r;\n"]
                     end
         [sig, body]
       end
@@ -3566,8 +3585,11 @@ module Egg
         when "set"
           i = hoist(expr(args[0]), "i64")
           "#{soa_fn(:set, t)}(#{p}, #{i}, #{coerce(expr(args[1]), args[1].ty, @types[t].elem)})"
+        when "replace"
+          i = hoist(expr(args[0]), "i64")
+          hoist("#{soa_fn(:replace, t)}(#{p}, #{i}, #{coerce(expr(args[1]), args[1].ty, @types[t].elem)})", ret)
         when "pop" then hoist("#{soa_fn(:pop, t)}(#{p})", ret)
-        else "#{soa_fn(:swap_remove, t)}(#{p}, #{expr(args[0])})"
+        else hoist("#{soa_fn(:swap_remove, t)}(#{p}, #{expr(args[0])})", ret)
         end
       end
     end
@@ -3780,14 +3802,28 @@ module Egg
     # Structs and unions are tagged and declared up front, so a pointer
     # field can name a struct that is defined later (or itself).
     def emit_types
+      # A MultiArrayList too: its columns are pointers, so an element may
+      # hold its own list (N { kids: MultiArrayList(N) }). Its columns'
+      # types are declared up front as well, so a column may hold such an
+      # element by value ([1]N in E, with N holding MultiArrayList(E)).
+      @tagged = {}
       @checker.type_order.each do |c|
         info = @types[c]
-        @out << "typedef struct #{info.c_name} #{info.c_name};\n" if %i[struct union].include?(info.kind)
+        @tagged[c] = true if %i[struct union soa].include?(info.kind)
+        next unless info.kind == :soa
+        soa_columns(c).each { |_, ft| @tagged[ft] = true if %i[array err opt buf].include?(@types[ft]&.kind) }
       end
-      @out << "\n" if @checker.type_order.any? { |c| %i[struct union].include?(@types[c].kind) }
+      @checker.type_order.each { |c| @out << "typedef struct #{@types[c].c_name} #{@types[c].c_name};\n" if @tagged[c] }
+      @out << "\n" unless @tagged.empty?
       done = {}
       @checker.type_order.each { |c| emit_type(c, done) unless @types[c].kind == :slice }
       @checker.type_order.each { |c| emit_type(c, done) if @types[c].kind == :slice }
+    end
+
+    # A typedef'd struct: tagged when declared up front (emit_types).
+    def aggregate(canon, fields)
+      name = @types[canon].c_name
+      @out << (@tagged[canon] ? "struct #{name} { #{fields} };\n" : "typedef struct { #{fields} } #{name};\n")
     end
 
     def emit_type(canon, done)
@@ -3842,30 +3878,31 @@ module Egg
         @out << "};\n\n"
       when :array
         emit_type(info.elem, done)
-        @out << "typedef struct { #{c_type(info.elem)} a[#{info.len}]; } #{info.c_name};\n"
+        aggregate(canon, "#{c_type(info.elem)} a[#{info.len}];")
       when :err
         emit_type(info.inner, done)
         if info.inner == "void"
-          @out << "typedef struct { int32_t err; } #{info.c_name};\n"
+          aggregate(canon, "int32_t err;")
         else
-          @out << "typedef struct { #{c_type(info.inner)} value; int32_t err; } #{info.c_name};\n"
+          aggregate(canon, "#{c_type(info.inner)} value; int32_t err;")
         end
       when :opt
         emit_type(info.inner, done)
-        @out << "typedef struct { #{c_type(info.inner)} value; bool has; } #{info.c_name};\n"
+        aggregate(canon, "#{c_type(info.inner)} value; bool has;")
       when :slice
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
       when :soa
+        # Pointers to the columns' types: a tagged one is declared up front
+        # and may still be in the making (the element holding this list).
         cols = soa_columns(canon)
-        cols.each { |_, ft| emit_type(ft, done) }
-        emit_type(info.elem, done)
+        cols.each { |_, ft| emit_type(ft, done) unless @tagged[ft] }
         fields = cols.map { |f, ft| "#{c_type(ft)} *f_#{f}; " }.join
-        @out << "typedef struct { #{fields}int64_t len; int64_t cap; } #{info.c_name};\n"
+        @out << "struct #{info.c_name} { #{fields}int64_t len; int64_t cap; };\n"
       when :buf
         emit_type(info.elem, done)
         # cap: elements allocated, so a.push grows by doubling.
-        @out << "typedef struct { #{c_type(info.elem)} *ptr; int64_t len; int64_t cap; } #{info.c_name};\n"
+        aggregate(canon, "#{c_type(info.elem)} *ptr; int64_t len; int64_t cap;")
       when :ptr
         # A struct or union target is declared up front; others are needed.
         emit_type(info.inner, done) unless %i[struct union].include?(@types[info.inner]&.kind)
@@ -5601,6 +5638,12 @@ module Egg
 
     def index_expr(obj, index, len)
       t = obj.ty
+      if @checker.column?(obj)
+        recv = column_receiver(obj)
+        i = hoist(expr(index), "i64")
+        base = column_view(obj, recv)
+        return "#{base}.ptr[#{helper('egg_index')}(#{i}, #{base}.len)]"
+      end
       base = place?(obj) ? lvalue(obj) : expr(obj)
       i = expr(index)
       if t == "str"
@@ -5616,7 +5659,15 @@ module Egg
     def slice_expr(e)
       obj = e.obj
       t = obj.ty
-      base = if place?(obj)
+      # A column's view is taken once the bounds are computed, as for an
+      # index (index_expr).
+      col = @checker.column?(obj)
+      recv = column_receiver(obj) if col
+      lo = hoist(expr(e.lo), "i64") if col
+      hi = hoist(expr(e.hi), "i64") if col && !e.hi.nil?
+      base = if col
+               column_view(obj, recv)
+             elsif place?(obj)
                lvalue(obj)
              elsif element_place?(obj)
                # An element of a buffer or slice (b[i], b[i].f): sliced where
@@ -5628,10 +5679,10 @@ module Egg
              else
                hoist(expr(obj), t)
              end
-      lo = hoist(expr(e.lo), "i64")
+      lo = hoist(expr(e.lo), "i64") unless col
       info = @types[t]
       len = if t == "str" || %i[slice buf].include?(info.kind) then "#{base}.len" else "INT64_C(#{info.len})" end
-      hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64")
+      hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64") if hi.nil?
       line("#{helper('egg_slice_check')}(#{lo}, #{hi}, #{len});")
       # An empty buffer's ptr is NULL, and NULL + 0 is undefined in C; lo
       # > 0 means the length is too, so ptr is then not NULL.
@@ -5700,18 +5751,49 @@ module Egg
         "(*(#{p} != NULL ? #{p} : (#{c_type(ptr.ty)})#{helper('egg_null_deref')}()))"
       in Field[obj:, name:] then "#{lvalue(obj)}.f_#{name}"
       in Index[obj:, index:, info:]
-        if @types[obj.ty]&.kind == :buf
+        if @checker.column?(obj)
+          recv = column_receiver(obj)
+          i = hoist(expr(index), "i64")
+          b = column_view(obj, recv)
+          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{i}, #{b}.len)]"
+        elsif @types[obj.ty]&.kind == :buf
           b = lvalue(obj)
-          "#{b}.ptr[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
+          "#{b}.ptr[#{helper('egg_index')}(#{place_index(index)}, #{b}.len)]"
         elsif @types[obj.ty]&.kind == :slice
           # Only an inout slice is written: it views a mutable place.
           b = lvalue(obj)
-          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
+          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{place_index(index)}, #{b}.len)]"
         else
-          "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
+          "#{lvalue(obj)}.a[#{helper('egg_index')}(#{place_index(index)}, INT64_C(#{info[:len]}))]"
         end
+      # s.items(.f): the column's view, computed once; its elements are
+      # written through it as through an inout slice's.
+      in MethodCall[info: { soa_field: String }] then hoist(expr(e), e.ty)
       else raise "codegen: not a place: #{e.class}"
       end
+    end
+
+    # A column s.items(.f)[i] is evaluated left to right: s's place first
+    # (column_receiver: the indices in it are computed now), then i, then
+    # the column's view is taken from that place (column_view), so an i
+    # that grows the list, or the Buf the list is in, leaves no stale view.
+    def column_receiver(col)
+      r = col.obj
+      return hoist(expr(r), r.ty) unless place?(r) || element_place?(r)
+      saved = @fixed_indices
+      @fixed_indices = true
+      place = lvalue(r)
+      @fixed_indices = saved
+      place
+    end
+
+    def column_view(col, recv)
+      hoist("((#{c_type(col.ty)}){ .ptr = #{recv}.f_#{col.info[:soa_field]}, .len = #{recv}.len })", col.ty)
+    end
+
+    # An index of a place: computed now when column_receiver fixes them.
+    def place_index(index)
+      @fixed_indices ? hoist(expr(index), "i64") : expr(index)
     end
 
     def var_ref(name)

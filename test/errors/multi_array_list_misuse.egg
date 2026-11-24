@@ -1,7 +1,6 @@
-// error: E156 @22
 // error: E156 @28
 // error: E156 @29
-// error: E156 @30
+// error: E141 @30
 // error: E156 @31
 // error: E104 @32
 // error: E108 @33
@@ -18,8 +17,9 @@ uses alloc, io
 
 const P = struct { x: i64 }
 const E = struct {}
-const B = struct { b: Buf(u8), n: i64 }
-const N = struct { kids: MultiArrayList(N), n: i64 }
+const Db = owned struct { n: i64 }
+const B = struct { b: Db, n: i64 }   // a.free could not end a Db
+const N = struct { kids: MultiArrayList(N), n: i64 }   // fine: owned fields
 const U = union(enum) { a: i64, b }
 
 fn main(io: Io, a: Allocator) void {

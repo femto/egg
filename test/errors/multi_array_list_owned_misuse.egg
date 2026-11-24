@@ -1,0 +1,51 @@
+// error: E139 @17
+// error: E139 @18
+// error: E113 @19
+// error: E141 @20
+// error: E117 @28
+// error: E117 @37
+// error: E117 @49
+uses alloc, io
+
+const User = struct { id: i64, name: Buf(u8) }
+const Db = owned struct { n: i64 }
+const Row = struct { db: Db }
+
+fn main(io: Io, a: Allocator) void {
+    var us: MultiArrayList(User) = .empty
+    defer a.free(us)
+    const u = us.get(0)
+    us.set(0, User{ .id = 1, .name = .empty })
+    _ = us.swap_remove(0)
+    const rs: MultiArrayList(Row) = .empty
+    io.print(u.id, rs.len())
+}
+
+const N = struct { kids: MultiArrayList(N), n: i64 }
+
+fn into_itself(a: Allocator) void {
+    var s: MultiArrayList(N) = .empty
+    s.append(a, N{ .kids = s, .n = 0 })
+    a.free(s)
+}
+
+// A plain field read is a copy; an owned one is lent by the list.
+fn reads(a: Allocator) void {
+    var s: MultiArrayList(User) = .empty
+    s.append(a, User{ .id = 1, .name = .empty })
+    s.append(a, User{ .id = s.items(.id)[0] + 1, .name = .empty })
+    s.append(a, User{ .id = 3, .name = s.items(.name)[0] })
+    a.free(s)
+}
+
+const Profile = struct { id: i64, name: Buf(u8) }
+const Line = struct { profile: Profile }
+
+// A plain field of an owned element is a copy too.
+fn nested(a: Allocator) void {
+    var s: MultiArrayList(Line) = .empty
+    s.append(a, Line{ .profile = Profile{ .id = 1, .name = .empty } })
+    s.append(a, Line{ .profile = Profile{ .id = s.items(.profile)[0].id + 1, .name = .empty } })
+    s.append(a, Line{ .profile = Profile{ .id = 3, .name = s.items(.profile)[0].name } })
+    a.free(s)
+}

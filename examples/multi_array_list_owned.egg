@@ -1,0 +1,66 @@
+// A MultiArrayList whose fields own memory: elements are moved in and
+// handed back (swap_remove, replace, pop), a column lends its elements,
+// and a.free frees every element's buffers.
+// expect: 13
+// expect: 200
+// expect: 0 400 4
+// expect: 100 -> nine
+// expect: 400 -> four
+// expect: 3 1
+// expect: nine
+// expect: 3 nine
+uses alloc, io, thread
+
+const User = struct {
+    id: i64
+    name: Buf(u8)
+    tags: Buf(i64)
+}
+
+fn total_len(s: MultiArrayList(User)) i64 {
+    var n: i64 = 0
+    for (s.items(.name)) |name| {
+        n = n + @len(name)
+    }
+    return n
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    var us: MultiArrayList(User) = .empty
+    defer a.free(us)
+    var i: i64 = 0
+    while (i < 5) {
+        var tags: Buf(i64) = .empty
+        a.push(&tags, i)
+        us.append(a, User{ .id = i, .name = a.int_str(i * 100), .tags = tags })
+        i = i + 1
+    }
+    io.print(total_len(us))                         // 0 100 200 300 400: 1+3*4
+    io.print(us.items(.name)[2])
+    // swap_remove hands the element back: its buffers are ours to free.
+    const gone = us.swap_remove(0)
+    io.print(gone.name, " ", us.items(.name)[0], " ", us.len())
+    a.free(gone)
+    // replace puts a new element in and hands the old one back.
+    const old = us.replace(1, User{ .id = 9, .name = a.concat("nine", ""), .tags = .empty })
+    io.print(old.name, " -> ", us.items(.name)[1])
+    a.free(old)
+    // A writable column of owned values: swap with @replace.
+    inout names = &us.items(.name)
+    const prev = @replace(&names[0], a.concat("four", ""))
+    io.print(prev, " -> ", names[0])
+    a.free(prev)
+    const last = us.pop() orelse return
+    io.print(last.id, " ", @len(last.tags))
+    a.free(last)
+    // A local borrow of a field in its column.
+    const r = &us.items(.name)[1]
+    io.print(r)
+    // Shared and copied, owned columns too.
+    const sh = threads.share(us)
+    const c = sh.copy(a)
+    io.print(c.len(), " ", c.items(.name)[1])
+    a.free(c)
+    sh.close()
+    us = .empty
+}
