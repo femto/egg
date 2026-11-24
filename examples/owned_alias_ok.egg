@@ -3,6 +3,7 @@
 // expect: hello 21
 // expect: 4
 // expect: hello 2 0
+// expect: 2 hello
 uses alloc, io
 
 const U = union(enum) { text: Buf(u8), none }
@@ -37,6 +38,7 @@ fn main(io: Io, a: Allocator) void {
     }
     io.print(xs[2])
     borrows(io, a)
+    plain_borrow(io, a)
 }
 
 const Person = struct { id: i64, name: Buf(u8), nick: Buf(u8) }
@@ -56,5 +58,28 @@ fn borrows(io: Io, a: Allocator) void {
         inout other = &nc[i]
         a.free(@take(&other))
         io.print(name, " ", s.items(.id)[0], " ", @len(s.items(.nick)[0]))
+    }
+}
+
+fn peek(inout b: Buf(u8)) i64 {
+    return @len(b)
+}
+
+// A plain element replaced through a borrow, and an owned one lent to a
+// function that changes nothing.
+fn plain_borrow(io: Io, a: Allocator) void {
+    var s: MultiArrayList(Person) = .empty
+    defer a.free(s)
+    s.append(a, Person{ .id = 1, .name = a.concat("hello", ""), .nick = .empty })
+    for (s.items(.id)) |k, i| {
+        inout c = &s.items(.id)
+        inout it = &c[i]
+        _ = @replace(&it, k + 1)
+    }
+    for (s.items(.name)) |name, i| {
+        inout c = &s.items(.name)
+        inout item = &c[i]
+        _ = peek(&item)
+        io.print(s.items(.id)[0], " ", name)
     }
 }

@@ -1,11 +1,14 @@
-// error: E149 @23
-// error: E149 @36
-// error: E137 @49
-// error: E137 @54
-// error: E137 @65
-// error: E137 @70
-// error: E149 @84
-// error: E137 @98
+// error: E149 @26
+// error: E149 @39
+// error: E137 @52
+// error: E137 @57
+// error: E137 @68
+// error: E137 @73
+// error: E149 @87
+// error: E137 @101
+// error: E149 @124
+// error: E137 @139
+// error: E137 @151
 // A switch capture that borrows the payload of an element keeps the
 // container (or column) it came from, and a for loop over owned elements
 // keeps them through a local slice of the same container too.
@@ -101,7 +104,60 @@ fn loop_borrow(io: Io, a: Allocator) void {
     a.free(s)
 }
 
+const Profile = struct { id: i64, name: Buf(u8) }
+const Line = struct { profile: Profile }
+
+fn drop(a: Allocator, inout b: Buf(u8)) void {
+    a.free(@take(&b))
+}
+
+// Every source of a slice with several, a borrow passed as inout, and a
+// field of a borrow.
+fn two(io: Io, a: Allocator, flag: bool) void {
+    var left: MultiArrayList(Row) = .empty
+    var right: MultiArrayList(Row) = .empty
+    left.append(a, Row{ .u = U{ .text = a.concat("l", "") }, .k = 1 })
+    right.append(a, Row{ .u = U{ .text = a.concat("r", "") }, .k = 1 })
+    const c = if (flag) left.items(.u) else right.items(.u)
+    switch (c[0]) {
+        .text => |t| {
+            a.free(right.replace(0, Row{ .u = .none, .k = 2 }))
+            io.print(t)
+        }
+        .none => {}
+    }
+    a.free(left)
+    a.free(right)
+}
+
+fn helper(io: Io, a: Allocator) void {
+    var s: MultiArrayList(User) = .empty
+    s.append(a, User{ .id = 1, .name = a.concat("hello", "") })
+    for (s.items(.name)) |name, i| {
+        inout c = &s.items(.name)
+        inout item = &c[i]
+        drop(a, &item)
+        io.print(name)
+    }
+    a.free(s)
+}
+
+fn field(io: Io, a: Allocator) void {
+    var s: MultiArrayList(Line) = .empty
+    s.append(a, Line{ .profile = Profile{ .id = 1, .name = a.concat("hello", "") } })
+    for (s.items(.profile)) |p, i| {
+        inout c = &s.items(.profile)
+        inout item = &c[i]
+        a.free(@take(&item.name))
+        io.print(p.name)
+    }
+    a.free(s)
+}
+
 fn main(io: Io, a: Allocator) void {
+    two(io, a, true)
+    helper(io, a)
+    field(io, a)
     switch_borrow(io, a)
     loop_borrow(io, a)
     switch_column(io, a)

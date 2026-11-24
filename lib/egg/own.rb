@@ -693,12 +693,14 @@ module Egg
             # subject's variable, the container of an element (bs for
             # bs[0], s.u for s.items(.u)[0]), what a borrow names (s.u for
             # u in const u = &c[0]), or the holder of s.get().
-            lent = holder.nil? ? place_path(subject) || path : path_of(holder)
+            # A slice with several sources (if (f) l.items(.u) else
+            # r.items(.u)) lends them all.
+            lent = holder.nil? ? paths_of(subject) : [path_of(holder)].compact
             pre = lambda do
               @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
               declare(cap, :borrowed, arm.line, arm.col, t)
-              unless lent.nil?
-                @slices[cap] = [[lent], @rest.length, false, nil, :borrow]
+              unless lent.empty?
+                @slices[cap] = [lent, @rest.length, false, nil, :borrow]
                 @frames.last.slices << cap
               end
             end
@@ -796,20 +798,31 @@ module Egg
     # each part of it the callee may change against the for loops here.
     def check_inout_arg(place, callee, i, line, col)
       check_elem_change(place, line, col, "passed as inout", false)
-      p = path_of(place)
-      return if p.nil?
-      if callee.nil? || callee.func.nil?
-        check_iterated(p, line, col, "passed as inout")
-        return
+      # An owned element through a borrow of it (&item, &item.name) is
+      # also judged as what the borrow names.
+      [path_of(place), borrow_source(place)].compact.uniq.each do |p|
+        if callee.nil? || callee.func.nil?
+          check_iterated(p, line, col, "passed as inout")
+          next
+        end
+        (@summary.dig(callee, i) || []).each do |rest|
+          changed = "#{p}#{rest}"
+          note_change(changed)
+          key = @iterated.keys.find { |k| overlap?(k, changed) }
+          next if key.nil?
+          via = changed == p ? "" : " (through '#{p}')"
+          err("E137", "'#{callee.name}' may move, reassign or resize '#{changed}'#{via}, but the for loop on line #{@iterated[key]} is iterating over #{key == changed ? 'it' : "'#{key}'"}; loop over an index with while, or make the change after the loop", line, col)
+        end
       end
-      (@summary.dig(callee, i) || []).each do |rest|
-        changed = "#{p}#{rest}"
-        note_change(changed)
-        key = @iterated.keys.find { |k| overlap?(k, changed) }
-        next if key.nil?
-        via = changed == p ? "" : " (through '#{p}')"
-        err("E137", "'#{callee.name}' may move, reassign or resize '#{changed}'#{via}, but the for loop on line #{@iterated[key]} is iterating over #{key == changed ? 'it' : "'#{key}'"}; loop over an index with while, or make the change after the loop", line, col)
-      end
+    end
+
+    # What an owned place rooted at a local borrow names (s.name.x for
+    # item.x with inout item = &c[i]), or nil: a plain one may change.
+    def borrow_source(place)
+      return nil unless owned?(place.ty)
+      r = place_root(place)
+      return nil if r.nil? || !@slices.key?(r) || @slices[r][4] != :borrow
+      place_path(place)
     end
 
     # A place changed in place (&x, @replace): if it is (in) an element of
@@ -830,7 +843,7 @@ module Egg
       c = path_of(place)
       check_iterated(c, line, col, what) unless c.nil?
       # A borrow (inout item = &c[i]) changes what it names.
-      src = place.is_a?(Var) ? place_path(place) : nil
+      src = borrow_source(place)
       check_iterated(src, line, col, what) unless src.nil? || src == c
     end
 
