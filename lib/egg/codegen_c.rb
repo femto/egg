@@ -5621,6 +5621,13 @@ module Egg
 
     def index_expr(obj, index, len)
       t = obj.ty
+      if @checker.column?(obj)
+        # A column's view is taken once the index is computed, which may
+        # grow the list (s.items(.f)[grow(&s)]).
+        i = hoist(expr(index), "i64")
+        base = hoist(expr(obj), t)
+        return "#{base}.ptr[#{helper('egg_index')}(#{i}, #{base}.len)]"
+      end
       base = place?(obj) ? lvalue(obj) : expr(obj)
       i = expr(index)
       if t == "str"
@@ -5636,7 +5643,14 @@ module Egg
     def slice_expr(e)
       obj = e.obj
       t = obj.ty
-      base = if place?(obj)
+      # A column's view is taken once the bounds are computed, as for an
+      # index (index_expr).
+      col = @checker.column?(obj)
+      lo = hoist(expr(e.lo), "i64") if col
+      hi = hoist(expr(e.hi), "i64") if col && !e.hi.nil?
+      base = if col
+               hoist(expr(obj), t)
+             elsif place?(obj)
                lvalue(obj)
              elsif element_place?(obj)
                # An element of a buffer or slice (b[i], b[i].f): sliced where
@@ -5648,10 +5662,10 @@ module Egg
              else
                hoist(expr(obj), t)
              end
-      lo = hoist(expr(e.lo), "i64")
+      lo = hoist(expr(e.lo), "i64") unless col
       info = @types[t]
       len = if t == "str" || %i[slice buf].include?(info.kind) then "#{base}.len" else "INT64_C(#{info.len})" end
-      hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64")
+      hi = e.hi.nil? ? hoist(len, "i64") : hoist(expr(e.hi), "i64") if hi.nil?
       line("#{helper('egg_slice_check')}(#{lo}, #{hi}, #{len});")
       # An empty buffer's ptr is NULL, and NULL + 0 is undefined in C; lo
       # > 0 means the length is too, so ptr is then not NULL.
@@ -5724,9 +5738,12 @@ module Egg
           b = lvalue(obj)
           "#{b}.ptr[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
         elsif @types[obj.ty]&.kind == :slice
-          # Only an inout slice is written: it views a mutable place.
+          # Only an inout slice is written: it views a mutable place. A
+          # column's view is taken after the index is computed, which may
+          # grow the list (s.items(.f)[grow(&s)]), as a Buf's pointer is.
+          i = obj.is_a?(MethodCall) ? hoist(expr(index), "i64") : expr(index)
           b = lvalue(obj)
-          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
+          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{i}, #{b}.len)]"
         else
           "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
         end

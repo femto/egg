@@ -1,0 +1,39 @@
+// An index or slice bound of a column is computed before the column is
+// looked up, so one that grows the list sees the column as it is after.
+// expect: 1
+// expect: 2
+// expect: hi
+// expect: 301
+// expect: 10
+uses alloc, io
+
+const U = struct { id: i64, b: Buf(u8) }
+
+fn grow(a: Allocator, inout s: MultiArrayList(U)) i64 {
+    var k: i64 = 0
+    while (k < 100) {
+        s.append(a, U{ .id = k + 10, .b = .empty })
+        k = k + 1
+    }
+    return 0
+}
+
+fn slice_after_growth(io: Io, a: Allocator) void {
+    var s: MultiArrayList(U) = .empty
+    defer a.free(s)
+    s.append(a, U{ .id = 1, .b = .empty })
+    const v = s.items(.id)[grow(a, &s)..grow(a, &s) + 2]
+    io.print(v[1])
+}
+
+fn main(io: Io, a: Allocator) void {
+    var s: MultiArrayList(U) = .empty
+    defer a.free(s)
+    s.append(a, U{ .id = 1, .b = a.concat("hi", "") })
+    io.print(s.items(.id)[grow(a, &s)])
+    io.print(@len(s.items(.b)[grow(a, &s)]))
+    const r = &s.items(.b)[grow(a, &s)]
+    io.print(r)
+    io.print(s.len())
+    slice_after_growth(io, a)
+}

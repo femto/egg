@@ -1,8 +1,9 @@
-// error: E139 @15
 // error: E139 @16
-// error: E113 @17
-// error: E141 @18
-// error: E117 @26
+// error: E139 @17
+// error: E113 @18
+// error: E141 @19
+// error: E117 @27
+// error: E117 @36
 uses alloc, io
 
 const User = struct { id: i64, name: Buf(u8) }
@@ -24,5 +25,14 @@ const N = struct { kids: MultiArrayList(N), n: i64 }
 fn into_itself(a: Allocator) void {
     var s: MultiArrayList(N) = .empty
     s.append(a, N{ .kids = s, .n = 0 })
+    a.free(s)
+}
+
+// A plain field read is a copy; an owned one is lent by the list.
+fn reads(a: Allocator) void {
+    var s: MultiArrayList(User) = .empty
+    s.append(a, User{ .id = 1, .name = .empty })
+    s.append(a, User{ .id = s.items(.id)[0] + 1, .name = .empty })
+    s.append(a, User{ .id = 3, .name = s.items(.name)[0] })
     a.free(s)
 }

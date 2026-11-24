@@ -3891,9 +3891,10 @@ module Egg
       case e
       in SliceExpr[obj:, lo:, hi:] then mentions_path?(obj, path) || holds?(lo, path) || (!hi.nil? && holds?(hi, path))
       in Index[obj:, index:]
-        # An owned element is lent by its container: xs[0] holds xs.
+        # An owned element is lent by its container: xs[0] holds xs. A
+        # plain one is a copy, from any container (s.items(.id)[0] too).
         op = place_path(obj)
-        held = op.nil? ? holds?(obj, path) : owned?(e.ty) && overlap?(op, path)
+        held = owned?(e.ty) && (op.nil? ? holds?(obj, path) : overlap?(op, path))
         held || holds?(index, path)
       in Field[obj:] then holds?(obj, path)
       in Builtin[name: "len"] then false
