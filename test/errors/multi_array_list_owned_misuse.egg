@@ -1,9 +1,10 @@
-// error: E139 @16
 // error: E139 @17
-// error: E113 @18
-// error: E141 @19
-// error: E117 @27
-// error: E117 @36
+// error: E139 @18
+// error: E113 @19
+// error: E141 @20
+// error: E117 @28
+// error: E117 @37
+// error: E117 @49
 uses alloc, io
 
 const User = struct { id: i64, name: Buf(u8) }
@@ -34,5 +35,17 @@ fn reads(a: Allocator) void {
     s.append(a, User{ .id = 1, .name = .empty })
     s.append(a, User{ .id = s.items(.id)[0] + 1, .name = .empty })
     s.append(a, User{ .id = 3, .name = s.items(.name)[0] })
+    a.free(s)
+}
+
+const Profile = struct { id: i64, name: Buf(u8) }
+const Line = struct { profile: Profile }
+
+// A plain field of an owned element is a copy too.
+fn nested(a: Allocator) void {
+    var s: MultiArrayList(Line) = .empty
+    s.append(a, Line{ .profile = Profile{ .id = 1, .name = .empty } })
+    s.append(a, Line{ .profile = Profile{ .id = s.items(.profile)[0].id + 1, .name = .empty } })
+    s.append(a, Line{ .profile = Profile{ .id = 3, .name = s.items(.profile)[0].name } })
     a.free(s)
 }

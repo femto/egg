@@ -5,9 +5,35 @@
 // expect: hi
 // expect: 301
 // expect: 10
+// expect: 1
+// expect: 1
 uses alloc, io
 
 const U = struct { id: i64, b: Buf(u8) }
+const P = struct { x: i64 }
+
+fn next(inout n: i64) i64 {
+    const old = n
+    n = n + 1
+    return old
+}
+
+// Left to right: the list's place, then the column's index.
+fn left_to_right(io: Io, a: Allocator) void {
+    var lists: Buf(MultiArrayList(P)) = .empty
+    defer a.free(lists)
+    a.push(&lists, MultiArrayList(P).empty)
+    a.push(&lists, MultiArrayList(P).empty)
+    lists[0].append(a, P{ .x = 0 })
+    lists[0].append(a, P{ .x = 1 })
+    lists[1].append(a, P{ .x = 10 })
+    lists[1].append(a, P{ .x = 11 })
+    var n: i64 = 0
+    io.print(lists[next(&n)].items(.x)[next(&n)])
+    n = 0
+    const r = &lists[next(&n)].items(.x)[next(&n)]
+    io.print(r)
+}
 
 fn grow(a: Allocator, inout s: MultiArrayList(U)) i64 {
     var k: i64 = 0
@@ -36,4 +62,5 @@ fn main(io: Io, a: Allocator) void {
     io.print(r)
     io.print(s.len())
     slice_after_growth(io, a)
+    left_to_right(io, a)
 }

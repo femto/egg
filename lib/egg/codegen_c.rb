@@ -3260,6 +3260,7 @@ module Egg
       @drops = {}       # owned type -> its egg_drop_ function's name
       @dups = {}        # owned type -> its egg_dup_ function's name
       @soa_fns = {}     # [MultiArrayList type, kind] -> its egg_soa_ function's name
+      @fixed_indices = false # lvalue computes indices at once (column_receiver)
       @out = +""
       @indent = 0
       @locals = []
@@ -5622,10 +5623,9 @@ module Egg
     def index_expr(obj, index, len)
       t = obj.ty
       if @checker.column?(obj)
-        # A column's view is taken once the index is computed, which may
-        # grow the list (s.items(.f)[grow(&s)]).
+        recv = column_receiver(obj)
         i = hoist(expr(index), "i64")
-        base = hoist(expr(obj), t)
+        base = column_view(obj, recv)
         return "#{base}.ptr[#{helper('egg_index')}(#{i}, #{base}.len)]"
       end
       base = place?(obj) ? lvalue(obj) : expr(obj)
@@ -5646,10 +5646,11 @@ module Egg
       # A column's view is taken once the bounds are computed, as for an
       # index (index_expr).
       col = @checker.column?(obj)
+      recv = column_receiver(obj) if col
       lo = hoist(expr(e.lo), "i64") if col
       hi = hoist(expr(e.hi), "i64") if col && !e.hi.nil?
       base = if col
-               hoist(expr(obj), t)
+               column_view(obj, recv)
              elsif place?(obj)
                lvalue(obj)
              elsif element_place?(obj)
@@ -5734,24 +5735,49 @@ module Egg
         "(*(#{p} != NULL ? #{p} : (#{c_type(ptr.ty)})#{helper('egg_null_deref')}()))"
       in Field[obj:, name:] then "#{lvalue(obj)}.f_#{name}"
       in Index[obj:, index:, info:]
-        if @types[obj.ty]&.kind == :buf
-          b = lvalue(obj)
-          "#{b}.ptr[#{helper('egg_index')}(#{expr(index)}, #{b}.len)]"
-        elsif @types[obj.ty]&.kind == :slice
-          # Only an inout slice is written: it views a mutable place. A
-          # column's view is taken after the index is computed, which may
-          # grow the list (s.items(.f)[grow(&s)]), as a Buf's pointer is.
-          i = obj.is_a?(MethodCall) ? hoist(expr(index), "i64") : expr(index)
-          b = lvalue(obj)
+        if @checker.column?(obj)
+          recv = column_receiver(obj)
+          i = hoist(expr(index), "i64")
+          b = column_view(obj, recv)
           "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{i}, #{b}.len)]"
+        elsif @types[obj.ty]&.kind == :buf
+          b = lvalue(obj)
+          "#{b}.ptr[#{helper('egg_index')}(#{place_index(index)}, #{b}.len)]"
+        elsif @types[obj.ty]&.kind == :slice
+          # Only an inout slice is written: it views a mutable place.
+          b = lvalue(obj)
+          "((#{c_type(e.ty)} *)#{b}.ptr)[#{helper('egg_index')}(#{place_index(index)}, #{b}.len)]"
         else
-          "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
+          "#{lvalue(obj)}.a[#{helper('egg_index')}(#{place_index(index)}, INT64_C(#{info[:len]}))]"
         end
       # s.items(.f): the column's view, computed once; its elements are
       # written through it as through an inout slice's.
       in MethodCall[info: { soa_field: String }] then hoist(expr(e), e.ty)
       else raise "codegen: not a place: #{e.class}"
       end
+    end
+
+    # A column s.items(.f)[i] is evaluated left to right: s's place first
+    # (column_receiver: the indices in it are computed now), then i, then
+    # the column's view is taken from that place (column_view), so an i
+    # that grows the list, or the Buf the list is in, leaves no stale view.
+    def column_receiver(col)
+      r = col.obj
+      return hoist(expr(r), r.ty) unless place?(r)
+      saved = @fixed_indices
+      @fixed_indices = true
+      place = lvalue(r)
+      @fixed_indices = saved
+      place
+    end
+
+    def column_view(col, recv)
+      hoist("((#{c_type(col.ty)}){ .ptr = #{recv}.f_#{col.info[:soa_field]}, .len = #{recv}.len })", col.ty)
+    end
+
+    # An index of a place: computed now when column_receiver fixes them.
+    def place_index(index)
+      @fixed_indices ? hoist(expr(index), "i64") : expr(index)
     end
 
     def var_ref(name)

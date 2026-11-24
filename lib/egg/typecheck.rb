@@ -3832,6 +3832,17 @@ module Egg
     end
     public :column?
 
+    # Does computing e, whose value is only copied from, hold path? Not
+    # the places it reads, only what its indices and calls do.
+    def copy_holds?(e, path)
+      case e
+      in Field[obj:] then copy_holds?(obj, path)
+      in Index[obj:, index:] then copy_holds?(obj, path) || holds?(index, path)
+      in MethodCall[obj:, info: { soa_field: String }] then copy_holds?(obj, path)
+      else place_path(e).nil? && holds?(e, path)
+      end
+    end
+
     # The index expressions of a place: i and j in xs[i].f[j].
     def index_exprs(e)
       out = []
@@ -3894,9 +3905,10 @@ module Egg
         # An owned element is lent by its container: xs[0] holds xs. A
         # plain one is a copy, from any container (s.items(.id)[0] too).
         op = place_path(obj)
-        held = owned?(e.ty) && (op.nil? ? holds?(obj, path) : overlap?(op, path))
-        held || holds?(index, path)
-      in Field[obj:] then holds?(obj, path)
+        return copy_holds?(obj, path) || holds?(index, path) unless owned?(e.ty)
+        (op.nil? ? holds?(obj, path) : overlap?(op, path)) || holds?(index, path)
+      # So is a plain field (s.items(.profile)[0].id).
+      in Field[obj:] then owned?(e.ty) ? holds?(obj, path) : copy_holds?(obj, path)
       in Builtin[name: "len"] then false
       in Unary[operand:] then holds?(operand, path)
       in Binary[lhs:, rhs:] then holds?(lhs, path) || holds?(rhs, path)
