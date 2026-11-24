@@ -1,0 +1,79 @@
+// error: E149 @21
+// error: E149 @34
+// error: E137 @47
+// error: E137 @52
+// error: E137 @63
+// error: E137 @68
+// A switch capture that borrows the payload of an element keeps the
+// container (or column) it came from, and a for loop over owned elements
+// keeps them through a local slice of the same container too.
+uses alloc, io
+
+const U = union(enum) { text: Buf(u8), none }
+const Row = struct { u: U, k: i64 }
+const User = struct { id: i64, name: Buf(u8) }
+
+fn switch_column(io: Io, a: Allocator) void {
+    var s: MultiArrayList(Row) = .empty
+    s.append(a, Row{ .u = U{ .text = a.concat("hello", "") }, .k = 1 })
+    switch (s.items(.u)[0]) {
+        .text => |t| {
+            a.free(s.replace(0, Row{ .u = .none, .k = 2 }))
+            io.print(t)
+        }
+        .none => {},
+    }
+    a.free(s)
+}
+
+fn switch_buf(io: Io, a: Allocator) void {
+    var bs: Buf(U) = .empty
+    a.push(&bs, U{ .text = a.concat("hello", "") })
+    switch (bs[0]) {
+        .text => |t| {
+            a.free(@replace(&bs[0], U.none))
+            io.print(t)
+        }
+        .none => {},
+    }
+    a.free(bs)
+}
+
+fn loop_column(io: Io, a: Allocator) void {
+    var s: MultiArrayList(User) = .empty
+    s.append(a, User{ .id = 1, .name = a.concat("hello", "") })
+    for (s.items(.name)) |name, i| {
+        inout c = &s.items(.name)
+        a.free(@take(&c[i]))
+        io.print(name)
+    }
+    inout d = &s.items(.name)
+    for (d) |name, i| {
+        a.free(@take(&d[i]))
+        io.print(name)
+    }
+    a.free(s)
+}
+
+fn loop_buf(io: Io, a: Allocator) void {
+    var bs: Buf(Buf(u8)) = .empty
+    a.push(&bs, a.concat("hello", ""))
+    for (bs) |name, i| {
+        inout c = &bs[0..]
+        a.free(@take(&c[i]))
+        io.print(name)
+    }
+    inout d = &bs[0..]
+    for (d) |name, i| {
+        a.free(@take(&d[i]))
+        io.print(name)
+    }
+    a.free(bs)
+}
+
+fn main(io: Io, a: Allocator) void {
+    switch_column(io, a)
+    switch_buf(io, a)
+    loop_column(io, a)
+    loop_buf(io, a)
+}

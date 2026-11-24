@@ -1,0 +1,38 @@
+// Writes to plain elements stay allowed while a column is looped over or a
+// switch capture borrows an owned payload from another column.
+// expect: hello 21
+// expect: 4
+uses alloc, io
+
+const U = union(enum) { text: Buf(u8), none }
+const Row = struct { u: U, k: i64 }
+
+fn main(io: Io, a: Allocator) void {
+    var s: MultiArrayList(Row) = .empty
+    defer a.free(s)
+    s.append(a, Row{ .u = U{ .text = a.concat("hello", "") }, .k = 1 })
+    for (s.items(.k)) |k, i| {
+        inout c = &s.items(.k)
+        c[i] = k + 1
+    }
+    inout d = &s.items(.k)
+    for (d) |k, i| {
+        d[i] = k * 10
+    }
+    switch (s.items(.u)[0]) {
+        .text => |t| {
+            inout ks = &s.items(.k)
+            ks[0] = ks[0] + 1
+            io.print(t, " ", s.items(.k)[0])
+        }
+        .none => {
+            io.print("none")
+        }
+    }
+    var xs = [3]i64{ 1, 2, 3 }
+    inout v = &xs[0..]
+    for (v) |x, i| {
+        v[i] = x + 1
+    }
+    io.print(xs[2])
+}

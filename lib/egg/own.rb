@@ -572,7 +572,10 @@ module Egg
         fresh = !root.nil? && !@iterated.key?(root)
         @iterated[root] = line if fresh
         # for (trim(s)) |c|: what the result views stays put while it runs.
-        lent = %w[Call MethodCall Orelse Catch Try IfExpr].include?(iter.class.name.split("::").last) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
+        # So does a local slice's source: for (c) with c = &s.items(.name).
+        over = iter.is_a?(SliceExpr) ? iter.obj : iter
+        alias_iter = over.is_a?(Var) && @slices.key?(over.name)
+        lent = (alias_iter || %w[Call MethodCall Orelse Catch Try IfExpr].include?(iter.class.name.split("::").last)) && slice_type?(iter.ty) ? paths_of(iter).reject { |p| @iterated.key?(p) } : []
         lent.each { |p| @iterated[p] = line }
         elem = iter.ty == "str" ? nil : @types[iter.ty]&.elem
         # An element that owns buffers is only borrowed by the loop variable.
@@ -687,8 +690,9 @@ module Egg
                   else "'#{text}', which cannot be moved; swap it out with @replace(&#{text}, v) and switch on that"
                   end
             # What the capture views stays put while it is used: the
-            # subject's variable, or the holder of s.get().
-            lent = holder.nil? ? path : path_of(holder)
+            # subject's variable, the container of an element (bs for
+            # bs[0], s.u for s.items(.u)[0]), or the holder of s.get().
+            lent = holder.nil? ? path || place_path(subject) : path_of(holder)
             pre = lambda do
               @borrowed[cap] = [:payload, "it borrows the payload of #{why}"]
               declare(cap, :borrowed, arm.line, arm.col, t)
@@ -815,7 +819,8 @@ module Egg
       p = place
       while p.is_a?(Field) || p.is_a?(Index)
         if p.is_a?(Index) && owned?(p.ty)
-          c = path_of(p.obj)
+          # Through a local slice (inout c = &s.items(.name)), its source.
+          c = path_of(p.obj) || place_path(p.obj)
           check_iterated(c, line, col, "#{what} (its elements own buffers)") unless c.nil?
         end
         p = p.obj
@@ -1291,7 +1296,9 @@ module Egg
       how = @types[e.ty].kind == :buf ? "take it with @take(&#{t}) or swap it with @replace(&#{t}, v)" : "swap it out with @replace(&#{t}, v)"
       # A column is swapped through a writable borrow of it.
       if @checker.column?(p.obj)
-        how = "lend the column as writable (inout c = &#{place_text(p.obj)}) and #{@types[e.ty].kind == :buf ? "take it with @take(&c[i]) or " : ""}swap it with @replace(&c[i], v)"
+        # Keep the fields after the element: c[i].name for s.items(.p)[0].name.
+        c = "c[i]#{t.delete_prefix(place_text(p))}"
+        how = "lend the column as writable (inout c = &#{place_text(p.obj)}) and #{@types[e.ty].kind == :buf ? "take it with @take(&#{c}) or " : ""}swap it with @replace(&#{c}, v)"
       end
       err("E139", "cannot move '#{t}' out of an element of '#{place_text(p.obj)}'; #{how}", line, col)
     end
