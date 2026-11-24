@@ -984,8 +984,13 @@ module Egg
             walk(obj, !info.nil? && !ends && (!cap.nil? || (!info[:params].nil? && !info[:self_sink])))
           end
         end
+        # A sink self is moved first and held by the call until it runs,
+        # like a sink argument.
+        mark = @pending.length
+        hold(obj, "call to '#{info[:sig]&.name || e.name}'") if info&.[](:self_sink) && !obj.nil?
         # m.f(K, x): a generic call into a module; info[:args] has no types.
         walk_args(info&.[](:args) || args, info)
+        @pending.slice!(mark..)
       in Builtin[name: "forget", args:, line:, col:]
         path = path_of(args[0])
         path.nil? ? walk(args[0]) : forget(path, line, col)

@@ -1,8 +1,9 @@
-// error: E135 @33
-// error: E135 @35
-// error: E135 @41
-// error: E135 @46
-// error: E135 @51
+// error: E135 @34
+// error: E135 @36
+// error: E135 @42
+// error: E135 @47
+// error: E135 @52
+// error: E135 @85
 // An owned value moved into a literal or a call is held only by what is
 // being made: a later try, or a catch or orelse that leaves, would lose it.
 uses alloc, io
@@ -67,4 +68,19 @@ fn main(io: Io, a: Allocator) void {
     call(a) catch io.print("call")
     jumps(a) catch io.print("jumps")
     fine(a) catch io.print("fine")
+}
+
+const L = struct {
+    data: Buf(i64)
+
+    fn finish(sink self: L, a: Allocator, n: i64) i64 {
+        a.free(self.data)
+        return n
+    }
+}
+
+// A sink self is held by its call too.
+fn self_sink(a: Allocator) !i64 {
+    const l = L{ .data = a.alloc(2, 0) }
+    return l.finish(a, try num(true))
 }
