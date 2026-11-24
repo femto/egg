@@ -1528,6 +1528,7 @@ module Egg
       else false
       end
     end
+    public :empty_value?
 
     def check_empty_fill(a, what)
       return if a.ty.nil? || a.ty == "error" || empty_value?(a)

@@ -2869,7 +2869,12 @@ follows every path through each function and checks:
   block, at a return, break or continue, and where a `try` returns an
   error; and a variable that still owns one is not assigned another
   (E135). So nothing leaks. An `inout` buffer parameter belongs to the
-  caller, so it must own a buffer whenever the function returns;
+  caller, so it must own a buffer whenever the function returns. A buffer
+  moved into a struct or array literal, or into a `sink` argument, belongs
+  to what is being made until it is made, so a later `try` in the same
+  literal or call, or a `catch` or `orelse` there that leaves, would lose
+  it (E135): in `V{ .a = try make(a), .b = try make(a) }`, compute the
+  parts into locals first;
 - paths that join agree on what was moved (after an `if`, a `switch`, a
   `catch`, the right side of `and`/`or`), and an iteration of a loop
   leaves each buffer from outside it as it found it (E134);

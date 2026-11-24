@@ -1,0 +1,70 @@
+// error: E135 @33
+// error: E135 @35
+// error: E135 @41
+// error: E135 @46
+// error: E135 @51
+// An owned value moved into a literal or a call is held only by what is
+// being made: a later try, or a catch or orelse that leaves, would lose it.
+uses alloc, io
+
+const W = struct { a: Buf(i64), n: i64 }
+const V = struct { a: Buf(i64), b: Buf(i64) }
+
+fn make(a: Allocator, fail: bool) !Buf(i64) {
+    if (fail) {
+        return error.Nope
+    }
+    return a.alloc(2, 1)
+}
+
+fn num(fail: bool) !i64 {
+    if (fail) {
+        return error.Nope
+    }
+    return 1
+}
+
+fn eat(a: Allocator, sink x: Buf(i64), sink y: Buf(i64)) void {
+    a.free(x)
+    a.free(y)
+}
+
+fn lit(a: Allocator) !void {
+    const v = V{ .a = try make(a, false), .b = try make(a, true) }
+    a.free(v)
+    const xs = [_]Buf(i64){ try make(a, false), try make(a, true) }
+    a.free(xs)
+}
+
+fn call(a: Allocator) !void {
+    const x = a.alloc(1, 0)
+    eat(a, x, try make(a, true))
+}
+
+fn jumps(a: Allocator) !void {
+    const w = W{ .a = a.alloc(1, 0), .n = num(true) catch |e| {
+        return e
+    } }
+    a.free(w)
+    var i: i64 = 0
+    while (i < 3) {
+        const u = W{ .a = a.alloc(1, 0), .n = num(true) catch break }
+        a.free(u)
+        i = i + 1
+    }
+}
+
+// Fine: .empty owns nothing, and a try before any owned operand.
+fn fine(a: Allocator) !void {
+    const w = W{ .a = .empty, .n = try num(true) }
+    a.free(w)
+    const v = V{ .a = try make(a, true), .b = .empty }
+    a.free(v)
+}
+
+fn main(io: Io, a: Allocator) void {
+    lit(a) catch io.print("lit")
+    call(a) catch io.print("call")
+    jumps(a) catch io.print("jumps")
+    fine(a) catch io.print("fine")
+}
