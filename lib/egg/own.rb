@@ -915,7 +915,7 @@ module Egg
     def walk(e, borrow = false)
       return if @st.nil?
       if e.is_a?(Var) || e.is_a?(Field)
-        check_read(e) unless @read_whole.equal?(e)
+        check_read(e) unless @read_whole.equal?(e) || (@column_of || []).any? { |r| r.equal?(e) }
         @read_whole = e.obj if e.is_a?(Field) # v.f does not read all of v
       end
       case e
@@ -953,8 +953,18 @@ module Egg
         path = place_path(obj)
         part = m == "MultiArrayList.len" ? "(len)" : e.info[:soa_field]
         check_read_path("#{path}.#{part}", place_root(obj), e.line, e.col) unless path.nil?
-        @read_whole = obj
+        # Nor does it read all of the receiver, down to its variable
+        # (lists in lists[i].items(.x)); its indices are read as usual.
+        saved = @column_of
+        @column_of = []
+        r = obj
+        while r.is_a?(Index) || r.is_a?(Field)
+          @column_of << r
+          r = r.obj
+        end
+        @column_of << r
         walk(obj, true)
+        @column_of = saved
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)

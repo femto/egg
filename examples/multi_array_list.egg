@@ -8,6 +8,7 @@
 // expect: 9 9
 // expect: 2 3
 // expect: 3
+// expect: 6
 // expect: 3 2.5 7
 uses alloc, io, thread
 
@@ -91,6 +92,10 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     a.push(&lists, MultiArrayList(Particle).empty)
     lists[0].append(a, Particle{ .x = 1, .vx = 2, .alive = true })
     step(&lists[0].items(.x), lists[0].items(.vx))
+    io.print(lists[0].get(0).x)
+    inout lx = &lists[0].items(.x)
+    const lv = lists[0].items(.vx)
+    lx[0] = lx[0] + lv[0] + lists[0].len()
     io.print(lists[0].get(0).x)
 
     // A MultiArrayList is owned like a Buf: moved, returned, shared and copied.

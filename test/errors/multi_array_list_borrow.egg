@@ -1,11 +1,12 @@
-// error: E149 @22
-// error: E149 @26
-// error: E149 @29
-// error: E137 @35
-// error: E135 @40
-// error: E136 @44
-// error: E137 @51
+// error: E149 @23
+// error: E149 @27
+// error: E149 @30
+// error: E137 @36
+// error: E135 @41
+// error: E136 @45
 // error: E137 @52
+// error: E137 @53
+// error: E149 @62
 uses alloc, io, thread
 
 const P = struct { x: i64, vx: i64 }
@@ -52,4 +53,12 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
         h = threads.share(MultiArrayList(P).empty)
     }
     h.close()
+    var ls: Buf(MultiArrayList(P)) = .empty
+    defer a.free(ls)
+    a.push(&ls, MultiArrayList(P).empty)
+    ls[0].append(a, P{ .x = 1, .vx = 2 })
+    inout lx = &ls[0].items(.x)
+    io.print(ls[0].items(.vx)[0])       // another column: fine
+    io.print(ls[0].items(.x)[0])        // the column lx writes
+    lx[0] = 3
 }
