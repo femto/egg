@@ -3371,6 +3371,7 @@ module Egg
       info = @types[t]
       case info.kind
       when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
+      when :soa then soa_columns(t).each { |_, ft| drop(ft) if @checker.owned?(ft) }
       when :union then info.fields.each { |_, ft, _| drop(ft) if ft != "void" && @checker.owned?(ft) }
       when :struct
         if info.deinit.nil?
@@ -3392,6 +3393,7 @@ module Egg
       soa_fn(:grow, t) if info.kind == :soa
       case info.kind
       when :buf, :array then dup(info.elem) if @checker.owned?(info.elem)
+      when :soa then soa_columns(t).each { |_, ft| dup(ft) if @checker.owned?(ft) }
       when :union then info.fields.each { |_, ft, _| dup(ft) if ft != "void" && @checker.owned?(ft) }
       when :struct then info.fields.each { |_, ft, _| dup(ft) if @checker.owned?(ft) }
       end
@@ -3413,7 +3415,13 @@ module Egg
                  "    #{c_type(t)} r = { .ptr = NULL, .len = v.len, .cap = v.len };\n    if (v.len == 0) return r;\n" \
                    "    r.ptr = egg_buf_resize(NULL, v.len, sizeof(*v.ptr));\n#{copy}    return r;\n"
                when :soa
-                 copy = soa_columns(t).map { |f, _| "    memcpy(r.f_#{f}, v.f_#{f}, (size_t)v.len * sizeof(*v.f_#{f}));\n" }.join
+                 copy = soa_columns(t).map do |f, ft|
+                   if @checker.owned?(ft)
+                     "    for (int64_t i = 0; i < v.len; i++) r.f_#{f}[i] = #{dup(ft)}(v.f_#{f}[i]);\n"
+                   else
+                     "    memcpy(r.f_#{f}, v.f_#{f}, (size_t)v.len * sizeof(*v.f_#{f}));\n"
+                   end
+                 end.join
                  "    #{c_type(t)} r = { 0 };\n    if (v.len == 0) return r;\n    #{soa_fn(:grow, t)}(&r, v.len);\n#{copy}    r.len = v.len;\n    return r;\n"
                when :array
                  "    #{c_type(t)} r = v;\n    for (int64_t i = 0; i < #{info.len}; i++) r.a[i] = #{dup(info.elem)}(v.a[i]);\n    return r;\n"
@@ -3440,8 +3448,12 @@ module Egg
                  elem = @checker.owned?(info.elem) ? "    for (int64_t i = 0; i < v.len; i++) #{drop(info.elem)}(v.ptr[i]);\n" : ""
                  "#{elem}    free(v.ptr);\n"
                when :soa
-                 # One block holds every column; the first starts it.
-                 "    free(v.f_#{soa_columns(t)[0][0]});\n"
+                 # Each element's owned fields, last declared first, as a
+                 # struct's; then the one block that holds every column,
+                 # which the first starts.
+                 owned = soa_columns(t).select { |_, ft| @checker.owned?(ft) }.reverse
+                 elems = owned.empty? ? "" : "    for (int64_t i = 0; i < v.len; i++) {\n#{owned.map { |f, ft| "        #{drop(ft)}(v.f_#{f}[i]);\n" }.join}    }\n"
+                 "#{elems}    free(v.f_#{soa_columns(t)[0][0]});\n"
                when :array
                  "    for (int64_t i = 0; i < #{info.len}; i++) #{drop(info.elem)}(v.a[i]);\n"
                when :union
@@ -3484,8 +3496,8 @@ module Egg
       when :push
         soa_fn(:grow, t)
         helper("egg_mul")
-      when :get, :set, :swap_remove then helper("egg_index")
-      when :pop then soa_fn(:get, t)
+      when :get, :set then helper("egg_index")
+      when :pop, :replace, :swap_remove then soa_fn(:get, t)
       end
       @soa_fns[key]
     end
@@ -3529,11 +3541,16 @@ module Egg
                       text = "    #{opt} r = { .has = false };\n    if (s->len == 0) return r;\n" \
                              "    r.value = #{soa_fn(:get, t)}(*s, s->len - 1);\n    r.has = true;\n    s->len--;\n    return r;\n"
                       ["#{opt} #{name}(#{s} *s)", text]
+                    when :replace
+                      # The old element out (get checks i), v in.
+                      text = "    #{el} r = #{soa_fn(:get, t)}(*s, i);\n"
+                      cols.each { |f, _| text += "    s->f_#{f}[i] = v.f_#{f};\n" }
+                      ["#{el} #{name}(#{s} *s, int64_t i, #{el} v)", "#{text}    return r;\n"]
                     when :swap_remove
-                      # The last element moves into the gap.
-                      text = "    #{helper('egg_index')}(i, s->len);\n    s->len--;\n"
+                      # Element i out (get checks i), the last one into its place.
+                      text = "    #{el} r = #{soa_fn(:get, t)}(*s, i);\n    s->len--;\n"
                       cols.each { |f, _| text += "    s->f_#{f}[i] = s->f_#{f}[s->len];\n" }
-                      ["void #{name}(#{s} *s, int64_t i)", text]
+                      ["#{el} #{name}(#{s} *s, int64_t i)", "#{text}    return r;\n"]
                     end
         [sig, body]
       end
@@ -3566,8 +3583,11 @@ module Egg
         when "set"
           i = hoist(expr(args[0]), "i64")
           "#{soa_fn(:set, t)}(#{p}, #{i}, #{coerce(expr(args[1]), args[1].ty, @types[t].elem)})"
+        when "replace"
+          i = hoist(expr(args[0]), "i64")
+          hoist("#{soa_fn(:replace, t)}(#{p}, #{i}, #{coerce(expr(args[1]), args[1].ty, @types[t].elem)})", ret)
         when "pop" then hoist("#{soa_fn(:pop, t)}(#{p})", ret)
-        else "#{soa_fn(:swap_remove, t)}(#{p}, #{expr(args[0])})"
+        else hoist("#{soa_fn(:swap_remove, t)}(#{p}, #{expr(args[0])})", ret)
         end
       end
     end

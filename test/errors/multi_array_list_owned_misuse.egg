@@ -1,0 +1,19 @@
+// error: E139 @14
+// error: E139 @15
+// error: E113 @16
+// error: E141 @17
+uses alloc, io
+
+const User = struct { id: i64, name: Buf(u8) }
+const Db = owned struct { n: i64 }
+const Row = struct { db: Db }
+
+fn main(io: Io, a: Allocator) void {
+    var us: MultiArrayList(User) = .empty
+    defer a.free(us)
+    const u = us.get(0)
+    us.set(0, User{ .id = 1, .name = .empty })
+    _ = us.swap_remove(0)
+    const rs: MultiArrayList(Row) = .empty
+    io.print(u.id, rs.len())
+}

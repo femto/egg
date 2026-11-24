@@ -1338,10 +1338,9 @@ module Egg
         err("E156", "MultiArrayList(#{t}) needs a struct with fields, but #{t} has none", line, col)
         return true
       end
-      bad = fields.find { |_, ft, _| owned?(ft) }
-      return false if bad.nil?
-      err("E156", "MultiArrayList(#{t}) cannot hold field '#{bad[0]}' of type #{bad[1]}: it owns memory; the fields of a MultiArrayList element must be plain values", line, col)
-      true
+      # A field may own memory, as a Buf's element may (E141 for an owned
+      # struct a.free could not end).
+      fields.any? { |_, ft, _| resource_elem_error(ft, "a MultiArrayList field", line, col) }
     end
 
     def soa?(t)
@@ -1380,7 +1379,7 @@ module Egg
       info = @types[t]
       return nil if info.nil?
       case info.kind
-      when :array, :buf then resource_in(info.elem, seen)
+      when :array, :buf, :soa then resource_in(info.elem, seen)
       when :struct
         return(info.deinit.nil? ? t : nil) if info.resource
         (info.fields || []).each do |_, ft, _|
@@ -1411,7 +1410,7 @@ module Egg
       seen[t] = true
       info = @types[t]
       case info&.kind
-      when :array, :buf then any_resource(info.elem, seen)
+      when :array, :buf, :soa then any_resource(info.elem, seen)
       when :err, :opt then info.inner == "void" ? nil : any_resource(info.inner, seen)
       when :struct, :union
         return t if info.resource
@@ -1429,7 +1428,7 @@ module Egg
       seen[t] = true
       info = @types[t]
       case info&.kind
-      when :array, :buf then deinits(info.elem, out, seen)
+      when :array, :buf, :soa then deinits(info.elem, out, seen)
       when :struct
         if info.resource
           out << info.deinit unless info.deinit.nil?
@@ -1499,7 +1498,8 @@ module Egg
       in Var then true
       in Field[obj:] then owned_place?(obj)
       in Index[obj:] then owned_place?(obj)
-      in MethodCall then shared_get?(e)
+      # s.get() and s.items(.f) lend what s holds.
+      in MethodCall then shared_get?(e) || (column?(e) && owned_place?(e.obj))
       else false
       end
     end
@@ -1542,7 +1542,7 @@ module Egg
     def empty_hint(t)
       info = @types[t]
       case info.kind
-      when :buf then "#{t}.empty"
+      when :buf, :soa then "#{t}.empty"
       when :array then "@splat(#{empty_hint(info.elem)})"
       when :union
         bare = info.fields.find { |_, ft, _| ft == "void" }
@@ -3133,7 +3133,7 @@ module Egg
       end
     end
 
-    SOA_METHODS = %w[append len get set pop swap_remove items].freeze
+    SOA_METHODS = %w[append len get set replace pop swap_remove items].freeze
 
     # s.append(a, v), s.get(i), s.items(.x), ...: the methods of a MultiArrayList(T).
     def check_soa_method(e, obj, t, name, args, line, col)
@@ -3146,15 +3146,24 @@ module Egg
         check_borrowed(obj, t)
         return check_soa_items(e, obj, t, args, line, col)
       end
-      inout = %w[append set pop swap_remove].include?(name)
+      # An element that owns memory exists only as its columns: get would
+      # copy it out, set would drop the old one.
+      if owned?(elem) && %w[get set].include?(name)
+        how = name == "get" ? "borrow a field with s.items(.f)[i]" : "s.replace(i, v) puts v in and returns the old element to free or pass on"
+        err("E139", "'#{name}' cannot #{name == "get" ? "copy out" : "drop"} an element of #{t}: it owns memory; #{how}", line, col)
+        return check_all_error(args)
+      end
+      inout = %w[append set replace pop swap_remove].include?(name)
       if inout
         check_lvalue(obj, "modify")
         mark_root_used(obj)
       else
         check_borrowed(obj, t)
       end
-      params = { "append" => [["Allocator", nil], [elem, nil]], "get" => [["i64", nil]],
-                 "set" => [["i64", nil], [elem, nil]], "swap_remove" => [["i64", nil]] }.fetch(name, [])
+      # An owned element is moved in.
+      v = [elem, owned?(elem) ? "sink" : nil]
+      params = { "append" => [["Allocator", nil], v], "get" => [["i64", nil]], "set" => [["i64", nil], v],
+                 "replace" => [["i64", nil], v], "swap_remove" => [["i64", nil]] }.fetch(name, [])
       check_args(Sig.new(name, params, "void"), args, name, line, col)
       @current.direct["alloc"] ||= [line, col, "MultiArrayList.append"] if name == "append"
       e.info[:cap_method] = "MultiArrayList.#{name}"
@@ -3163,7 +3172,7 @@ module Egg
       e.info[:params] = params
       case name
       when "len" then "i64"
-      when "get" then elem
+      when "get", "replace", "swap_remove" then elem
       when "pop" then opt_type(elem)
       else "void"
       end

@@ -190,6 +190,7 @@ module Egg
       in Field[obj:, name:] then "#{place_text(obj)}.#{name}"
       in Index[obj:] then "#{place_text(obj)}[i]"
       in Deref[expr:] then "#{place_text(expr)}.*"
+      in MethodCall[obj:, info: { soa_field: String => f }] then "#{place_text(obj)}.items(.#{f})"
       else "this value"
       end
     end
@@ -969,8 +970,10 @@ module Egg
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
             check_slices(place_path(obj), obj.line, obj.col, "changed", place_root(obj))
-            # s.set(i, v) writes elements in place: it resizes nothing.
-            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless info[:cap_method] == "MultiArrayList.set"
+            # s.set(i, v) and s.replace(i, v) write elements in place: they
+            # resize nothing, and plain elements a loop may hold copies of.
+            in_place = %w[MultiArrayList.set MultiArrayList.replace].include?(info[:cap_method]) && !owned?(@types[obj.ty].elem)
+            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless in_place
             walk_place(obj)
           else
             # self is borrowed unless the method takes `sink self`, or it
@@ -1241,6 +1244,10 @@ module Egg
       return unless p.is_a?(Index)
       t = place_text(e)
       how = @types[e.ty].kind == :buf ? "take it with @take(&#{t}) or swap it with @replace(&#{t}, v)" : "swap it out with @replace(&#{t}, v)"
+      # A column is swapped through a writable borrow of it.
+      if @checker.column?(p.obj)
+        how = "lend the column as writable (inout c = &#{place_text(p.obj)}) and #{@types[e.ty].kind == :buf ? "take it with @take(&c[i]) or " : ""}swap it with @replace(&c[i], v)"
+      end
       err("E139", "cannot move '#{t}' out of an element of '#{place_text(p.obj)}'; #{how}", line, col)
     end
   end
