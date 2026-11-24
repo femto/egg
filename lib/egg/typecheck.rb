@@ -163,7 +163,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend Shared]).freeze
+    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend Shared MultiArrayList]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -319,10 +319,10 @@ module Egg
       end
       @program.funcs.each do |f|
         in_module(f.mod) do
-          # Buf(...) always means the built-in type, so no function may take the name.
-          builtin = base_name(f.name) == "Buf"
+          # Buf(...) and MultiArrayList(...) always mean the built-in types, so no function may take the names.
+          builtin = %w[Buf MultiArrayList].include?(base_name(f.name))
           if @decls.key?(f.name) || @consts.key?(f.name) || @sigs.key?(f.name) || @type_fns.key?(f.name) || @generic_fns.key?(f.name) || builtin
-            err("E106", "function '#{f.name}' is defined more than once#{builtin ? ' (Buf is built in)' : ''}", f.line, f.col)
+            err("E106", "function '#{f.name}' is defined more than once#{builtin ? " (#{base_name(f.name)} is built in)" : ''}", f.line, f.col)
             next
           end
           if !f.ext.nil?
@@ -899,6 +899,7 @@ module Egg
         begin
           case what
           when :shared then shared_value_error(elem, line, col)
+          when :soa then soa_elem_error(elem, line, col)
           when :owned_err then owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
           else resource_elem_error(elem, what, line, col)
           end
@@ -1028,6 +1029,10 @@ module Egg
           err("E108", "Buf needs its element type: Buf(T), such as Buf(u8)", line, col)
           return "error"
         end
+        if t == "MultiArrayList"
+          err("E108", "MultiArrayList needs its element type: MultiArrayList(T), with T a struct", line, col)
+          return "error"
+        end
         q = qualify(t)
         decl = @decls[q]
         return decl_type(decl) unless decl.nil?
@@ -1099,6 +1104,7 @@ module Egg
         return chan_type(t.name, args, line, col) if %w[Sender Receiver].include?(t.name)
         return try_send_type(args, line, col) if t.name == "TrySend"
         return shared_type(args, line, col) if t.name == "Shared"
+        return soa_type(args, line, col) if t.name == "MultiArrayList"
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
         inner = resolve_type(t.inner, line, col)
@@ -1239,7 +1245,7 @@ module Egg
       info = @types[t]
       case info&.kind
       when :ptr then t
-      when :array, :buf, :opt, :err
+      when :array, :buf, :soa, :opt, :err
         inner = info.elem || info.inner
         inner.nil? || inner == "void" ? nil : ptr_in(inner, seen)
       when :struct, :union
@@ -1300,6 +1306,49 @@ module Egg
       canon
     end
 
+    # MultiArrayList(T): the elements of the struct T kept as one column per field
+    # (a struct of arrays), in one allocation. Owned, like a buffer. Its
+    # fields must own nothing.
+    def soa_type(args, line, col)
+      if args.length != 1
+        err("E104", "MultiArrayList takes one type argument, its element struct, but #{args.length} were given", line, col)
+        return "error"
+      end
+      t = args[0]
+      info = @types[t]
+      unless info&.kind == :struct && !info.resource && !chan_end?(t) && !FILE_TYPES.key?(t) && !CAP_METHODS.key?(t)
+        err("E156", "MultiArrayList needs a struct of plain values, found #{t}", line, col)
+        return "error"
+      end
+      # A struct still being registered has no fields yet.
+      if @registering.positive?
+        @elem_checks << [t, :soa, line, col, @mod]
+      elsif soa_elem_error(t, line, col)
+        return "error"
+      end
+      canon = "MultiArrayList(#{t})"
+      register(canon, :soa, line, col).elem = t
+      canon
+    end
+
+    # E156 for a struct T no MultiArrayList(T) can hold.
+    def soa_elem_error(t, line, col)
+      fields = @types[t].fields || []
+      if fields.empty?
+        err("E156", "MultiArrayList(#{t}) needs a struct with fields, but #{t} has none", line, col)
+        return true
+      end
+      bad = fields.find { |_, ft, _| owned?(ft) }
+      return false if bad.nil?
+      err("E156", "MultiArrayList(#{t}) cannot hold field '#{bad[0]}' of type #{bad[1]}: it owns memory; the fields of a MultiArrayList element must be plain values", line, col)
+      true
+    end
+
+    def soa?(t)
+      @types[t]&.kind == :soa
+    end
+    public :soa?
+
     # An owned value: a buffer, or a struct or array holding one. It is
     # moved, not copied (own.rb). seen: the structs and unions on the way
     # here, so that one containing itself (E119, reported elsewhere) ends.
@@ -1307,7 +1356,7 @@ module Egg
       info = @types[t]
       return false if info.nil?
       case info.kind
-      when :buf then true
+      when :buf, :soa then true
       when :array then owned?(info.elem, seen)
       when :struct, :union
         return true if info.resource
@@ -1643,6 +1692,14 @@ module Egg
         stmt.value = view
         stmt.ty = ty
         declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true, false, (src = place_sources(view.obj, false)).is_a?(Array) ? src : nil))
+      in VarDecl[name:, type:, value: AddrOf[expr: MethodCall[name: "items"] => call], line:, col:, inout: true]
+        # inout xs = &s.items(.x): a writable column of a MultiArrayList.
+        declared = type.nil? ? nil : resolve_type(type, line, col)
+        ty = check_mut_column(call, "an inout local borrows a place: `inout #{name} = &x`, `&x.f`, `&x[i]`, `&x[lo..hi]` or `&s.items(.f)` of a MultiArrayList", "E116")
+        expect_type(declared, ty, call) unless declared.nil? || ty == "error"
+        stmt.value = call
+        stmt.ty = ty
+        declare(name, ty == "error" ? VarInfo.new(ty, true, true, true, line, col, false, false) : VarInfo.new(ty, false, false, false, line, col, false, true, false, (src = place_sources(call.obj, false)).is_a?(Array) ? src : nil))
       in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, inout: true]
         check_borrow(stmt, name, type, place, true, line, col)
       in VarDecl[name:, type:, value: AddrOf[expr: place], line:, col:, mutable: false] if !pointer_type_expr?(type, line, col)
@@ -2310,12 +2367,12 @@ module Egg
           enum_t = obj.info[:type]
           info = @types[enum_t]
           return union_tag_value(e, info, enum_t, name, line, col) if info&.kind == :union
-          if info&.kind == :buf
+          if %i[buf soa].include?(info&.kind)
             if name == "empty"
               e.info[:buf_empty] = true
               return enum_t
             end
-            err("E122", "#{enum_t} has no member '#{name}' (Buf(T).empty is an empty buffer)", line, col)
+            err("E122", "#{enum_t} has no member '#{name}' (#{info.kind == :buf ? 'Buf' : 'MultiArrayList'}(T).empty is an empty #{info.kind == :buf ? 'buffer' : 'MultiArrayList'})", line, col)
             return "error"
           end
           if info&.kind == :enum
@@ -2352,7 +2409,7 @@ module Egg
         if !info.nil? && info.kind == :union
           return union_tag_value(e, info, target, name, line, col)
         end
-        if !info.nil? && info.kind == :buf && name == "empty"
+        if !info.nil? && %i[buf soa].include?(info.kind) && name == "empty"
           e.info[:buf_empty] = true
           return target
         end
@@ -2756,10 +2813,10 @@ module Egg
       local = lookup(written)
       return check_indirect_call(e, local, args, written, line, col) unless local.nil?
       name = qualify(written)
-      if written == "Buf"
+      if written == "Buf" || written == "MultiArrayList"
         types = args.map { |a| type_arg(a) }
         return "error" if types.include?("error")
-        e.info[:type] = buf_type(types, line, col)
+        e.info[:type] = written == "Buf" ? buf_type(types, line, col) : soa_type(types, line, col)
         return e.info[:type] == "error" ? "error" : "type"
       end
       if @type_fns.key?(name)
@@ -2891,6 +2948,11 @@ module Egg
       return check_share(e, args, line, col) if t == "Threads" && name == "share"
       # The receiver is an operand too: an argument must not take it
       # (x.add(close(x))) before it is used.
+      if soa?(t)
+        r = check_soa_method(e, obj, t, name, args, line, col)
+        check_nested_writes([obj] + args)
+        return r
+      end
       if shared?(t) || chan_end?(t)
         r = shared?(t) ? check_shared_method(e, obj, t, name, args, line, col) : check_chan_method(e, t, name, args, line, col)
         check_nested_writes([obj] + args)
@@ -3069,6 +3131,85 @@ module Egg
       when "clone" then t
       else "void"
       end
+    end
+
+    SOA_METHODS = %w[append len get set pop swap_remove items].freeze
+
+    # s.append(a, v), s.get(i), s.items(.x), ...: the methods of a MultiArrayList(T).
+    def check_soa_method(e, obj, t, name, args, line, col)
+      elem = @types[t].elem
+      unless SOA_METHODS.include?(name)
+        err("E122", "MultiArrayList has no method '#{name}' (methods: #{SOA_METHODS.join(', ')})", line, col)
+        return check_all_error(args)
+      end
+      if name == "items"
+        check_borrowed(obj, t)
+        return check_soa_items(e, obj, t, args, line, col)
+      end
+      inout = %w[append set pop swap_remove].include?(name)
+      if inout
+        check_lvalue(obj, "modify")
+        mark_root_used(obj)
+      else
+        check_borrowed(obj, t)
+      end
+      params = { "append" => [["Allocator", nil], [elem, nil]], "get" => [["i64", nil]],
+                 "set" => [["i64", nil], [elem, nil]], "swap_remove" => [["i64", nil]] }.fetch(name, [])
+      check_args(Sig.new(name, params, "void"), args, name, line, col)
+      @current.direct["alloc"] ||= [line, col, "MultiArrayList.append"] if name == "append"
+      e.info[:cap_method] = "MultiArrayList.#{name}"
+      e.info[:self_inout] = inout
+      e.info[:args] = args
+      e.info[:params] = params
+      case name
+      when "len" then "i64"
+      when "get" then elem
+      when "pop" then opt_type(elem)
+      else "void"
+      end
+    end
+
+    # &s.items(.x): the column of field x, writable, so s must be.
+    def check_mut_column(call, msg = nil, code = "E103")
+      call.info = {}
+      t = check_lvalue(call.obj, "lend a writable column of")
+      mark_root_used(call.obj)
+      ty = if t == "error"
+             "error"
+           elsif soa?(t)
+             check_soa_items(call, call.obj, t, call.args, call.line, call.col)
+           else
+             err(code, msg || "only a MultiArrayList lends a writable column with &s.items(.f), found #{t}", call.line, call.col)
+             "error"
+           end
+      call.ty = ty
+    end
+
+    # s.items(.x): the column of field x, a []F viewing s. The column is a
+    # place of its own (s.x in own.rb), so two columns may be lent as
+    # writable slices at once.
+    def check_soa_items(e, obj, t, args, line, col)
+      elem = @types[t].elem
+      unless args.length == 1 && args[0].is_a?(EnumLit)
+        err("E104", "'items' takes the field whose column it lends: s.items(.x)", line, col)
+        return "error"
+      end
+      f = args[0].name
+      field = (@types[elem].fields || []).find { |n, _| n == f }
+      if field.nil?
+        err("E122", "#{elem} has no field '#{f}'", args[0].line, args[0].col)
+        return "error"
+      end
+      args[0].info = {}
+      args[0].ty = field[1]
+      e.info[:cap_method] = "MultiArrayList.items"
+      e.info[:soa_field] = f
+      e.info[:args] = []
+      e.info[:params] = []
+      e.info[:borrow_args] = [obj]
+      canon = "[]#{field[1]}"
+      register(canon, :slice, line, col).elem = field[1]
+      canon
     end
 
     CHAN_METHODS = { "Sender" => %w[send try_send clone close], "Receiver" => %w[recv recv_timeout sender clone close] }.freeze
@@ -3280,8 +3421,16 @@ module Egg
           end
           a.info = {}
           if pt.start_with?("[]")
+            if a.expr.is_a?(MethodCall) && a.expr.name == "items"
+              # &s.items(.x): a writable column of a MultiArrayList.
+              a.ty = check_mut_column(a.expr)
+              expect_type(pt, a.ty, a) unless a.ty == "error"
+              path = inout_path(a.expr)
+              inout_roots << [path, a] unless path.nil?
+              next
+            end
             unless a.expr.is_a?(SliceExpr)
-              err("E103", "parameter #{i + 1} of '#{name}' is an inout slice: pass &x[lo..hi] or &x[0..]", a.line, a.col)
+              err("E103", "parameter #{i + 1} of '#{name}' is an inout slice: pass &x[lo..hi], &x[0..] or &s.items(.f)", a.line, a.col)
               check_expr(a.expr)
               next
             end
@@ -3427,6 +3576,7 @@ module Egg
       return false if info.nil?
       case info.kind
       when :slice, :buf then info.elem == elem || can_supply?(info.elem, elem, seen)
+      when :soa then (@types[info.elem].fields || []).any? { |_, ft, _| ft == elem || can_supply?(ft, elem, seen) }
       when :array then can_supply?(info.elem, elem, seen)
       when :opt then can_supply?(info.inner, elem, seen)
       when :struct, :union then (info.fields || []).any? { |_, ft, _| ft != "void" && can_supply?(ft, elem, seen) }
@@ -3645,8 +3795,24 @@ module Egg
     # The variable holding the Shared(T) whose s.get() e is, or a field,
     # element or slice of; nil for anything else.
     def shared_root(e)
-      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr) || column?(e)
       shared_get?(e) ? root_name(e.obj) : nil
+    end
+
+    # s.items(.x): a column of a MultiArrayList, lent by s.
+    def column?(e)
+      e.is_a?(MethodCall) && e.info.is_a?(Hash) && !e.info[:soa_field].nil?
+    end
+    public :column?
+
+    # The index expressions of a place: i and j in xs[i].f[j].
+    def index_exprs(e)
+      out = []
+      while e.is_a?(Field) || e.is_a?(Index)
+        out << e.index if e.is_a?(Index)
+        e = e.obj
+      end
+      out
     end
 
     def root_name(e)
@@ -3675,6 +3841,10 @@ module Egg
       p = place_path(e)
       return p unless p.nil?
       case e
+      in MethodCall[obj:, info: { soa_field: String => f }]
+        # &s.items(.x): the column x, a place of its own.
+        p = inout_path(obj)
+        p.nil? ? nil : "#{p}.#{f}"
       in Field[obj:] then inout_path(obj)
       in Index[obj:] then inout_path(obj)
       in SliceExpr[obj:] then inout_path(obj)
@@ -3710,6 +3880,11 @@ module Egg
       in MethodCall[obj:] if shared_get?(e)
         # s.get() lends what s holds.
         holds?(obj, path)
+      in MethodCall[obj:, info: { soa_field: String => f }]
+        # s.items(.x) lends only the column x (of an element: the
+        # container's column, as inout_path names it).
+        op = inout_path(obj)
+        op.nil? ? holds?(obj, path) : overlap?("#{op}.#{f}", path) || index_exprs(obj).any? { |x| holds?(x, path) }
       in MethodCall[obj:, args:, info:]
         # A borrowed argument is given back when the call returns.
         own_obj = info.nil? || info[:params].nil? || info[:self_sink]
@@ -3749,6 +3924,12 @@ module Egg
       p = place_path(e)
       return out << p unless p.nil?
       case e
+      in MethodCall[obj:, info: { cap_method: "MultiArrayList.items" | "MultiArrayList.len" => m }] if !inout_path(obj).nil?
+        # A column, or the length: s.x, s.(len), not all of s; of an
+        # element, the container's (xs.x for xs[i].items(.x)), as inout
+        # arguments name it. The indices are read as well.
+        out << "#{inout_path(obj)}.#{m == "MultiArrayList.len" ? "(len)" : e.info[:soa_field]}"
+        index_exprs(obj).each { |x| collect_paths(x, out) }
       in Unary[operand:] then collect_paths(operand, out)
       in Binary[lhs:, rhs:] then [lhs, rhs].each { |x| collect_paths(x, out) }
       in Call[args:] then args.each { |x| collect_paths(x, out) }
@@ -3981,12 +4162,12 @@ module Egg
     # The type an expression names (K, str, i64, Point, m.Point), or nil
     # when it is not a type; reports nothing.
     def comptime_type(e)
-      # Buf(T) names a buffer type when T does (K == Buf(u8)).
-      if e.is_a?(Call) && e.name == "Buf" && e.args.length == 1
+      # Buf(T) names a buffer type when T does (K == Buf(u8)); MultiArrayList(T) too.
+      if e.is_a?(Call) && %w[Buf MultiArrayList].include?(e.name) && e.args.length == 1
         elem = comptime_type(e.args[0])
         return nil if elem.nil?
         before = @diagnostics.length
-        t = buf_type([elem], e.line, e.col)
+        t = e.name == "Buf" ? buf_type([elem], e.line, e.col) : soa_type([elem], e.line, e.col)
         if @diagnostics.length > before || t == "error"
           @diagnostics.slice!(before..)
           return nil

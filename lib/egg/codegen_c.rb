@@ -136,7 +136,7 @@ module Egg
     # Runtime helpers, emitted only when the program uses them
     # (pay only for what you use; also keeps -Wunused-function quiet).
     # Order matters: egg_panic must come first.
-    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_mul_wide egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check
+    HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_mul_wide egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check egg_soa_col
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_len_add egg_concat
                       egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
@@ -487,6 +487,14 @@ module Egg
         static int64_t egg_neg(int64_t a) {
             if (a == INT64_MIN) egg_panic("integer overflow");
             return -a;
+        }
+      C
+      # The end of a MultiArrayList column of n elements of size bytes starting at
+      # byte at, rounded up to the next column's 16-byte boundary.
+      "egg_soa_col" => <<~C,
+        static size_t egg_soa_col(size_t at, int64_t n, size_t size) {
+            if ((uint64_t)n > (SIZE_MAX - at - 15) / size) egg_panic("out of memory");
+            return (at + (size_t)n * size + 15) & ~(size_t)15;
         }
       C
       "egg_index" => <<~C,
@@ -3251,6 +3259,7 @@ module Egg
       @int_helpers = {} # name -> C text, generated in use order
       @drops = {}       # owned type -> its egg_drop_ function's name
       @dups = {}        # owned type -> its egg_dup_ function's name
+      @soa_fns = {}     # [MultiArrayList type, kind] -> its egg_soa_ function's name
       @out = +""
       @indent = 0
       @locals = []
@@ -3343,6 +3352,7 @@ module Egg
       out << "\n"
       @spawns.each { |text| out << text << "\n" }
       # After the prototypes: an owned struct's drop calls its deinit.
+      emit_soa_fns(out)
       emit_drops(out)
       emit_dups(out)
       out << body
@@ -3379,6 +3389,7 @@ module Egg
       @dups[t] = "egg_dup_#{@types[t].c_name}"
       info = @types[t]
       helper("egg_buf_resize") if info.kind == :buf
+      soa_fn(:grow, t) if info.kind == :soa
       case info.kind
       when :buf, :array then dup(info.elem) if @checker.owned?(info.elem)
       when :union then info.fields.each { |_, ft, _| dup(ft) if ft != "void" && @checker.owned?(ft) }
@@ -3401,6 +3412,9 @@ module Egg
                         end
                  "    #{c_type(t)} r = { .ptr = NULL, .len = v.len, .cap = v.len };\n    if (v.len == 0) return r;\n" \
                    "    r.ptr = egg_buf_resize(NULL, v.len, sizeof(*v.ptr));\n#{copy}    return r;\n"
+               when :soa
+                 copy = soa_columns(t).map { |f, _| "    memcpy(r.f_#{f}, v.f_#{f}, (size_t)v.len * sizeof(*v.f_#{f}));\n" }.join
+                 "    #{c_type(t)} r = { 0 };\n    if (v.len == 0) return r;\n    #{soa_fn(:grow, t)}(&r, v.len);\n#{copy}    r.len = v.len;\n    return r;\n"
                when :array
                  "    #{c_type(t)} r = v;\n    for (int64_t i = 0; i < #{info.len}; i++) r.a[i] = #{dup(info.elem)}(v.a[i]);\n    return r;\n"
                when :union
@@ -3425,6 +3439,9 @@ module Egg
                when :buf
                  elem = @checker.owned?(info.elem) ? "    for (int64_t i = 0; i < v.len; i++) #{drop(info.elem)}(v.ptr[i]);\n" : ""
                  "#{elem}    free(v.ptr);\n"
+               when :soa
+                 # One block holds every column; the first starts it.
+                 "    free(v.f_#{soa_columns(t)[0][0]});\n"
                when :array
                  "    for (int64_t i = 0; i < #{info.len}; i++) #{drop(info.elem)}(v.a[i]);\n"
                when :union
@@ -3446,9 +3463,113 @@ module Egg
       out << "\n"
     end
 
-    # Buf(T).empty: no elements, nothing on the heap.
+    # Buf(T).empty: no elements, nothing on the heap. MultiArrayList(T).empty too.
     def empty_buf(t)
+      return "((#{c_type(t)}){ 0 })" if @types[t].kind == :soa
       "((#{c_type(t)}){ .ptr = NULL, .len = 0, .cap = 0 })"
+    end
+
+    # [field, type] of each column of a MultiArrayList(T): the fields of T.
+    def soa_columns(t)
+      @types[@types[t].elem].fields.map { |f, ft, _| [f, ft] }
+    end
+
+    # The C function doing `kind` for the MultiArrayList type t, emitted once.
+    def soa_fn(kind, t)
+      key = [t, kind]
+      return @soa_fns[key] if @soa_fns.key?(key)
+      @soa_fns[key] = "egg_soa_#{kind}_#{@types[t].c_name}"
+      case kind
+      when :grow then helper("egg_soa_col")
+      when :push
+        soa_fn(:grow, t)
+        helper("egg_mul")
+      when :get, :set, :swap_remove then helper("egg_index")
+      when :pop then soa_fn(:get, t)
+      end
+      @soa_fns[key]
+    end
+
+    # A MultiArrayList(T)'s columns live in one block, each at a 16-byte boundary (as
+    # aligned as malloc's result), in the order of T's fields.
+    def emit_soa_fns(out)
+      return if @soa_fns.empty?
+      defs = @soa_fns.map do |(t, kind), name|
+        s = c_type(t)
+        el = c_type(@types[t].elem)
+        cols = soa_columns(t)
+        sig, body = case kind
+                    when :grow
+                      offs = ["0"]
+                      cols.each_with_index { |(f, _), i| offs << "#{helper('egg_soa_col')}(o#{i}, cap, sizeof(*s->f_#{f}))" }
+                      text = +""
+                      offs.each_with_index { |o, i| text << "    size_t o#{i} = #{o};\n" }
+                      text << "    char *p = (char *)malloc(o#{cols.length} | (size_t)(o#{cols.length} == 0));\n"
+                      text << "    if (p == NULL) egg_panic(\"out of memory\");\n"
+                      text << "    if (s->len > 0) {\n"
+                      cols.each_with_index { |(f, _), i| text << "        memcpy(p + o#{i}, s->f_#{f}, (size_t)s->len * sizeof(*s->f_#{f}));\n" }
+                      text << "    }\n    free(s->f_#{cols[0][0]});\n"
+                      cols.each_with_index { |(f, ft), i| text << "    s->f_#{f} = (#{c_type(ft)} *)(void *)(p + o#{i});\n" }
+                      text << "    s->cap = cap;\n"
+                      ["void #{name}(#{s} *s, int64_t cap)", text]
+                    when :push
+                      text = "    if (s->len == s->cap) #{soa_fn(:grow, t)}(s, s->cap < 2 ? 4 : #{helper('egg_mul')}(s->cap, 2));\n"
+                      cols.each { |f, _| text += "    s->f_#{f}[s->len] = v.f_#{f};\n" }
+                      ["void #{name}(#{s} *s, #{el} v)", "#{text}    s->len++;\n"]
+                    when :get
+                      text = "    #{el} v;\n    #{helper('egg_index')}(i, s.len);\n"
+                      cols.each { |f, _| text += "    v.f_#{f} = s.f_#{f}[i];\n" }
+                      ["#{el} #{name}(#{s} s, int64_t i)", "#{text}    return v;\n"]
+                    when :set
+                      text = "    #{helper('egg_index')}(i, s->len);\n"
+                      cols.each { |f, _| text += "    s->f_#{f}[i] = v.f_#{f};\n" }
+                      ["void #{name}(#{s} *s, int64_t i, #{el} v)", text]
+                    when :pop
+                      opt = c_type("?#{@types[t].elem}")
+                      text = "    #{opt} r = { .has = false };\n    if (s->len == 0) return r;\n" \
+                             "    r.value = #{soa_fn(:get, t)}(*s, s->len - 1);\n    r.has = true;\n    s->len--;\n    return r;\n"
+                      ["#{opt} #{name}(#{s} *s)", text]
+                    when :swap_remove
+                      # The last element moves into the gap.
+                      text = "    #{helper('egg_index')}(i, s->len);\n    s->len--;\n"
+                      cols.each { |f, _| text += "    s->f_#{f}[i] = s->f_#{f}[s->len];\n" }
+                      ["void #{name}(#{s} *s, int64_t i)", text]
+                    end
+        [sig, body]
+      end
+      # Prototypes first: pop calls get.
+      defs.each { |sig, _| out << "static #{sig};\n" }
+      defs.each { |sig, body| out << "static #{sig} {\n#{body}}\n" }
+      out << "\n"
+    end
+
+    # s.append(a, v), s.get(i), s.items(.x), ...: a MultiArrayList(T)'s methods. The
+    # receiver is found first, then the arguments are computed.
+    def soa_call(m, obj, e, args, ret)
+      name = m.split(".").last
+      t = obj.ty
+      case name
+      when "items", "len"
+        recv = hoist(expr(obj), t)
+        return "#{recv}.len" if name == "len"
+        "((#{c_type(ret)}){ .ptr = #{recv}.f_#{e.info[:soa_field]}, .len = #{recv}.len })"
+      when "get"
+        recv = hoist(expr(obj), t)
+        hoist("#{soa_fn(:get, t)}(#{recv}, #{expr(args[0])})", ret)
+      else
+        p = tmp
+        line("#{c_type(t)} *#{p} = &#{lvalue(obj)};")
+        case name
+        when "append"
+          line("(void)#{expr(args[0])};")
+          "#{soa_fn(:push, t)}(#{p}, #{coerce(expr(args[1]), args[1].ty, @types[t].elem)})"
+        when "set"
+          i = hoist(expr(args[0]), "i64")
+          "#{soa_fn(:set, t)}(#{p}, #{i}, #{coerce(expr(args[1]), args[1].ty, @types[t].elem)})"
+        when "pop" then hoist("#{soa_fn(:pop, t)}(#{p})", ret)
+        else "#{soa_fn(:swap_remove, t)}(#{p}, #{expr(args[0])})"
+        end
+      end
     end
 
     # Record a helper call; every checked helper also needs egg_panic.
@@ -3735,6 +3856,12 @@ module Egg
       when :slice
         emit_type(info.elem, done)
         @out << "typedef struct { const #{c_type(info.elem)} *ptr; int64_t len; } #{info.c_name};\n"
+      when :soa
+        cols = soa_columns(canon)
+        cols.each { |_, ft| emit_type(ft, done) }
+        emit_type(info.elem, done)
+        fields = cols.map { |f, ft| "#{c_type(ft)} *f_#{f}; " }.join
+        @out << "typedef struct { #{fields}int64_t len; int64_t cap; } #{info.c_name};\n"
       when :buf
         emit_type(info.elem, done)
         # cap: elements allocated, so a.push grows by doubling.
@@ -3847,6 +3974,7 @@ module Egg
         case info.kind
         when :slice then [16, 8]
         when :buf then [24, 8]
+        when :soa then [8 * @types[info.elem].fields.length + 16, 8]
         when :ptr, :fn then [8, 8]
         when :enum then [4, 4]
         when :array
@@ -4417,6 +4545,8 @@ module Egg
         call(var_ref(name), info[:args], info[:params], [], e.ty)
       in Call[info:]
         call(info[:c_name], info[:args], info[:params], [], e.ty)
+      in MethodCall[obj:, info: { cap_method: String => m }] if m.start_with?("MultiArrayList.")
+        soa_call(m, obj, e, e.args, e.ty)
       in MethodCall[obj:, info: { cap_method: String => m }]
         cap_call(m, obj, e.args, e.ty)
       in MethodCall[obj:, name:, info: { field_call: true } => info]
@@ -4664,6 +4794,7 @@ module Egg
         later = args[(i + 1)..]
         codes << case a
                  in AddrOf[expr: SliceExpr => s] then slice_expr(s)
+                 in AddrOf[expr: MethodCall => m] then expr(m)
                  in AddrOf[expr: place]
                    # A pointer argument may go to a ?*T parameter.
                    addr = "&#{lvalue(place)}"

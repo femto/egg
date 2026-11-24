@@ -1,0 +1,64 @@
+// error: E149 @23
+// error: E149 @27
+// error: E149 @30
+// error: E137 @36
+// error: E135 @41
+// error: E136 @45
+// error: E137 @52
+// error: E137 @53
+// error: E149 @62
+uses alloc, io, thread
+
+const P = struct { x: i64, vx: i64 }
+
+fn step(inout xs: []i64, vs: []i64) void {
+    xs[0] = vs[0]
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    var s: MultiArrayList(P) = .empty
+    defer a.free(s)
+    s.append(a, P{ .x = 1, .vx = 2 })
+    inout xs = &s.items(.x)
+    inout ys = &s.items(.x)             // the same column twice
+    xs[0] = 1
+    ys[0] = 2
+    const vs = s.items(.vx)
+    s.append(a, P{ .x = 1, .vx = 2 })   // may move the column vs views
+    io.print(vs[0])
+    inout ws = &s.items(.vx)
+    io.print(s.get(0).x)                // reads the column ws writes
+    ws[0] = 3
+    inout zs = &s.items(.x)
+    io.print(s.len())                   // the length is not a column
+    zs[0] = 3
+    for (s.items(.x)) |x| {
+        s.append(a, P{ .x = x, .vx = 2 })
+    }
+    step(&s.items(.x), s.items(.vx))    // two columns: fine
+    var u: MultiArrayList(P) = .empty
+    u.append(a, P{ .x = 1, .vx = 2 })
+    var t: MultiArrayList(P) = .empty
+    t.append(a, P{ .x = 1, .vx = 2 })   // never freed
+    const moved = u
+    a.free(moved)
+    io.print(u.len())
+    var w: MultiArrayList(P) = .empty
+    w.append(a, P{ .x = 1, .vx = 2 })
+    w.append(a, P{ .x = 3, .vx = 4 })
+    var h = threads.share(w)
+    for (h.get().items(.x)) |x| {       // the loop holds h
+        io.print(x)
+        h.close()
+        h = threads.share(MultiArrayList(P).empty)
+    }
+    h.close()
+    var ls: Buf(MultiArrayList(P)) = .empty
+    defer a.free(ls)
+    a.push(&ls, MultiArrayList(P).empty)
+    ls[0].append(a, P{ .x = 1, .vx = 2 })
+    inout lx = &ls[0].items(.x)
+    io.print(ls[0].items(.vx)[0])       // another column: fine
+    io.print(ls[0].items(.x)[0])        // the column lx writes
+    lx[0] = 3
+}

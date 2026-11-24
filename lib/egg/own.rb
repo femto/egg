@@ -336,6 +336,10 @@ module Egg
         path.nil? ? nil : "#{path}.#{name}"
       in Index[obj:] then place_path(obj)
       in SliceExpr[obj:] then place_path(obj)
+      in MethodCall[obj:, info: { soa_field: String => f }]
+        # s.items(.x): the column x is a place of its own, like a field.
+        path = place_path(obj)
+        path.nil? ? nil : "#{path}.#{f}"
       else nil
       end
     end
@@ -347,6 +351,7 @@ module Egg
       in Field[obj:, name:] then paths_of(obj).map { |p| "#{p}.#{name}" }
       in Index[obj:] then paths_of(obj)
       in SliceExpr[obj:] then paths_of(obj)
+      in MethodCall[obj:, info: { soa_field: String => f }] then paths_of(obj).map { |p| "#{p}.#{f}" }
       in Call | MethodCall then (e.info&.dig(:borrow_args) || []).flat_map { |a| paths_of(a) }.uniq
       in Orelse | Catch
         fb = e.fallback
@@ -377,6 +382,7 @@ module Egg
       case e
       in Var[name:] then name
       in Field | Index | SliceExpr then place_root(e.obj)
+      in MethodCall[info: { soa_field: String }] then place_root(e.obj)
       else nil
       end
     end
@@ -456,13 +462,16 @@ module Egg
     # A read of e: no other way in may write what it reads while it is used.
     def check_read(e)
       return unless @slices.any? { |_, s| s[2] }
-      path = place_path(e)
-      return if path.nil?
-      through = views_of(place_root(e))
+      check_read_path(place_path(e), place_root(e), e.line, e.col)
+    end
+
+    def check_read_path(path, root, line, col)
+      return if path.nil? || @slices.none? { |_, s| s[2] }
+      through = views_of(root)
       @slices.each do |name, (viewed, depth, writable, _, kind)|
         next if !writable || through.include?(name)
         next unless viewed.any? { |v| overlap?(v, path) } && live?(name, depth)
-        slice_err("'#{path}' cannot be read here: the writable #{kind == :borrow ? "borrow" : "slice"} '#{name}' of it is used later", e.line, e.col)
+        slice_err("'#{path}' cannot be read here: the writable #{kind == :borrow ? "borrow" : "slice"} '#{name}' of it is used later", line, col)
       end
     end
 
@@ -906,7 +915,7 @@ module Egg
     def walk(e, borrow = false)
       return if @st.nil?
       if e.is_a?(Var) || e.is_a?(Field)
-        check_read(e) unless @read_whole.equal?(e)
+        check_read(e) unless @read_whole.equal?(e) || (@column_of || []).any? { |r| r.equal?(e) }
         @read_whole = e.obj if e.is_a?(Field) # v.f does not read all of v
       end
       case e
@@ -938,11 +947,30 @@ module Egg
           err("E139", "'#{place_text(obj)}.get()' only lends the shared #{e.ty}; it cannot be moved. Copy it with #{place_text(obj)}.copy(a)", line, col)
         end
         walk(obj, true)
+      in MethodCall[obj:, info: { cap_method: "MultiArrayList.items" | "MultiArrayList.len" => m }]
+        # s.items(.x) reads only the column x, and s.len() only the
+        # length, which no column's slice can change.
+        path = place_path(obj)
+        part = m == "MultiArrayList.len" ? "(len)" : e.info[:soa_field]
+        check_read_path("#{path}.#{part}", place_root(obj), e.line, e.col) unless path.nil?
+        # Nor does it read all of the receiver, down to its variable
+        # (lists in lists[i].items(.x)); its indices are read as usual.
+        saved = @column_of
+        @column_of = []
+        r = obj
+        while r.is_a?(Index) || r.is_a?(Field)
+          @column_of << r
+          r = r.obj
+        end
+        @column_of << r
+        walk(obj, true)
+        @column_of = saved
       in MethodCall[obj:, args:, info:]
         unless obj.ty == "module" || obj.ty == "type"
           if info&.[](:self_inout)
             check_slices(place_path(obj), obj.line, obj.col, "changed", place_root(obj))
-            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col)
+            # s.set(i, v) writes elements in place: it resizes nothing.
+            check_inout_arg(obj, info[:sig], 0, obj.line, obj.col) unless info[:cap_method] == "MultiArrayList.set"
             walk_place(obj)
           else
             # self is borrowed unless the method takes `sink self`, or it
@@ -1068,7 +1096,7 @@ module Egg
         if a.is_a?(AddrOf)
           check_slices(place_path(a.expr), a.line, a.col, "changed", place_root(a.expr))
           # inout: the callee may replace or resize what its summary says
-          check_inout_arg(a.expr, callee, i + shift, a.line, a.col) unless a.expr.is_a?(SliceExpr)
+          check_inout_arg(a.expr, callee, i + shift, a.line, a.col) unless a.expr.is_a?(SliceExpr) || a.expr.is_a?(MethodCall)
           walk_place(a.expr)
         elsif params.nil? && !cap.nil?
           walk(a, !TAKING_CAP_METHODS.include?(cap))
@@ -1197,7 +1225,7 @@ module Egg
     # The Shared(T) whose s.get() e is, or a field or element of: what
     # lends it. nil for anything else.
     def shared_holder(e)
-      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr)
+      e = e.obj while e.is_a?(Field) || e.is_a?(Index) || e.is_a?(SliceExpr) || @checker.column?(e)
       @checker.shared_get?(e) ? e.obj : nil
     end
 

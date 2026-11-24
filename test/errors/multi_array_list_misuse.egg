@@ -1,0 +1,64 @@
+// error: E156 @22
+// error: E156 @28
+// error: E156 @29
+// error: E156 @30
+// error: E156 @31
+// error: E104 @32
+// error: E108 @33
+// error: E133 @34
+// error: E122 @36
+// error: E104 @37
+// error: E122 @38
+// error: E116 @40
+// error: E105 @41
+// error: E105 @45
+// error: E117 @59
+// error: E117 @63
+uses alloc, io
+
+const P = struct { x: i64 }
+const E = struct {}
+const B = struct { b: Buf(u8), n: i64 }
+const N = struct { kids: MultiArrayList(N), n: i64 }
+const U = union(enum) { a: i64, b }
+
+fn main(io: Io, a: Allocator) void {
+    const xs = [2]i64{ 1, 2 }
+    const s0: MultiArrayList(P) = .empty
+    const s1: MultiArrayList(i64) = .empty
+    const s2: MultiArrayList(E) = .empty
+    const s3: MultiArrayList(B) = .empty
+    const s4: MultiArrayList(U) = .empty
+    const s5: MultiArrayList(P, P) = .empty
+    const s6: MultiArrayList = .empty
+    io.print(make(a).len())
+    var s: MultiArrayList(P) = .empty
+    s.push(a, P{ .x = 1 })
+    io.print(@len(s.items(x)))
+    io.print(@len(s.items(.y)))
+    var b = [2]i64{ 1, 2 }
+    inout c = &b.items(.x)
+    s0.append(a, P{ .x = 1 })
+    io.print(xs[0], @len(s1), @len(s2), @len(s3), @len(s4), @len(s5), @len(s6), b[0], c[0])
+    a.free(s)
+    a.free(s0)
+    s0.set(0, P{ .x = 2 })
+}
+
+fn make(a: Allocator) MultiArrayList(P) {
+    var s: MultiArrayList(P) = .empty
+    s.append(a, P{ .x = 1 })
+    return s
+}
+
+fn step(inout xs: []i64, vs: []i64) void {
+    xs[0] = vs[0]
+}
+
+fn twice(inout s: MultiArrayList(P)) void {
+    step(&s.items(.x), s.items(.x))
+}
+
+fn twice_in(inout ls: Buf(MultiArrayList(P))) void {
+    step(&ls[0].items(.x), ls[0].items(.x))
+}
