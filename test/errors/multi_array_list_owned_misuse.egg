@@ -1,7 +1,8 @@
-// error: E139 @14
 // error: E139 @15
-// error: E113 @16
-// error: E141 @17
+// error: E139 @16
+// error: E113 @17
+// error: E141 @18
+// error: E117 @26
 uses alloc, io
 
 const User = struct { id: i64, name: Buf(u8) }
@@ -16,4 +17,12 @@ fn main(io: Io, a: Allocator) void {
     _ = us.swap_remove(0)
     const rs: MultiArrayList(Row) = .empty
     io.print(u.id, rs.len())
+}
+
+const N = struct { kids: MultiArrayList(N), n: i64 }
+
+fn into_itself(a: Allocator) void {
+    var s: MultiArrayList(N) = .empty
+    s.append(a, N{ .kids = s, .n = 0 })
+    a.free(s)
 }

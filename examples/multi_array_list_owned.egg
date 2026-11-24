@@ -7,6 +7,7 @@
 // expect: 100 -> nine
 // expect: 400 -> four
 // expect: 3 1
+// expect: nine
 // expect: 3 nine
 uses alloc, io, thread
 
@@ -52,6 +53,9 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     const last = us.pop() orelse return
     io.print(last.id, " ", @len(last.tags))
     a.free(last)
+    // A local borrow of a field in its column.
+    const r = &us.items(.name)[1]
+    io.print(r)
     // Shared and copied, owned columns too.
     const sh = threads.share(us)
     const c = sh.copy(a)

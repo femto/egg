@@ -2203,14 +2203,23 @@ module Egg
     def check_borrow(stmt, name, type, place, writable, line, col)
       declared = type.nil? ? nil : resolve_type(type, line, col)
       errors = @diagnostics.length
-      t = if !owned_place?(place)
+      not_place = "a borrow names a variable, or a field or element of one: `const #{name} = &x.f`"
+      t = if !writable
+            # Checked first: s.items(.f) is known to be a column, a place,
+            # only once it is.
+            pt = check_expr(place)
+            if owned_place?(place)
+              pt
+            else
+              err("E121", not_place, place.line, place.col)
+              "error"
+            end
+          elsif !owned_place?(place)
             check_expr(place)
-            err("E121", "a borrow names a variable, or a field or element of one: `const #{name} = &x.f`", place.line, place.col)
+            err("E121", not_place, place.line, place.col)
             "error"
-          elsif writable
-            slice_var?(place) ? check_expr(place) : check_lvalue(place, "borrow as writable")
           else
-            check_expr(place)
+            slice_var?(place) ? check_expr(place) : check_lvalue(place, "borrow as writable")
           end
       mark_root_used(place)
       if t != "error" && (!slice_in(t).nil? || t == "str")
@@ -3165,6 +3174,15 @@ module Egg
       params = { "append" => [["Allocator", nil], v], "get" => [["i64", nil]], "set" => [["i64", nil], v],
                  "replace" => [["i64", nil], v], "swap_remove" => [["i64", nil]] }.fetch(name, [])
       check_args(Sig.new(name, params, "void"), args, name, line, col)
+      if inout
+        # As for an inout self method: an argument may not move or lend
+        # what the list holds (s.append(a, N{ .kids = s, .n = 0 })).
+        path = inout_path(obj)
+        clash = path.nil? ? nil : args.find { |x| holds?(x, path) }
+        unless clash.nil?
+          err("E117", "'#{path}' is changed by '#{name}', and this argument borrows from it or moves part of it; copy what you need into a local first", clash.line, clash.col)
+        end
+      end
       @current.direct["alloc"] ||= [line, col, "MultiArrayList.append"] if name == "append"
       e.info[:cap_method] = "MultiArrayList.#{name}"
       e.info[:self_inout] = inout

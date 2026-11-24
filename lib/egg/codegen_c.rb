@@ -5730,6 +5730,9 @@ module Egg
         else
           "#{lvalue(obj)}.a[#{helper('egg_index')}(#{expr(index)}, INT64_C(#{info[:len]}))]"
         end
+      # s.items(.f): the column's view, computed once; its elements are
+      # written through it as through an inout slice's.
+      in MethodCall[info: { soa_field: String }] then hoist(expr(e), e.ty)
       else raise "codegen: not a place: #{e.class}"
       end
     end
