@@ -25,6 +25,11 @@
 # clutch            -- the package manager on packages made here: path, git
 #                      and index dependencies, the lock, and its errors
 #                      (skipped without git).
+# test/alias_matrix.rb -- a held owned element (for loop, switch capture,
+#                      borrow, slice) changed directly or through local
+#                      slices and borrows, in a MultiArrayList column, a Buf
+#                      and an array: every such program must be rejected,
+#                      and the same over plain elements must run (ASan).
 # eggc lsp          -- the language server answers definition, hover,
 #                      outline and diagnostics requests. EGGC=path tests
 #                      another eggc, such as a Spinel-built one.
@@ -2158,6 +2163,10 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "test", "errors", "*.egg")].sort.each do |path|
     check_errors(File.basename(path), File.read(path), path)
   end
+
+  puts "alias matrix"
+  out, st = Open3.capture2e(RbConfig.ruby, File.join(ROOT, "test", "alias_matrix.rb"))
+  report(st.success?, out.lines.first.to_s.strip, out.lines.drop(1).join)
 
   puts "lexer"
   check_lexer

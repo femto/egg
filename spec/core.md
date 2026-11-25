@@ -1350,7 +1350,11 @@ except through it. A borrow never owns what it names, so moving it, or any
 part of it, is E139: `@replace(&r.f, v)` swaps a value in instead, and a
 `switch` over a borrowed union only lends its payload. The place must
 be a variable's (`&make()` is E121), and a slice or `str` already views
-its data (E116).
+its data (E116). A borrow (or a local slice) stands for what it names
+everywhere: `&c[i]` of a local slice `c` borrows the container `c` views
+(every one, for an `if` that views two), so changing or taking an owned
+element through `c` or `r` is judged as changing that container, while a
+`for` loop or a `switch` capture holds it (E137, E149).
 
 ```egg
 // expect: maindb 0

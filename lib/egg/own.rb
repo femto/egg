@@ -508,9 +508,11 @@ module Egg
           @borrowed[name] = [:borrow, "it borrows '#{text}'#{how}"]
           declare(name, :borrowed, line, col, ty)
         end
-        path = place_path(place)
-        unless path.nil?
-          @slices[name] = [[path], @rest.length - 1, writable, place_root(place), :borrow]
+        # Every source of the place: &hc[0] of a slice with several
+        # (if (f) l[0..] else r[0..]) borrows each.
+        paths = paths_of(place)
+        unless paths.empty?
+          @slices[name] = [paths, @rest.length - 1, writable, place_root(place), :borrow]
           @frames.last.slices << name
         end
       in VarDecl[name:, value:, line:, col:, ty:, inout:]
@@ -800,7 +802,7 @@ module Egg
       check_elem_change(place, line, col, "passed as inout", false)
       # An owned element through a borrow of it (&item, &item.name) is
       # also judged as what the borrow names.
-      [path_of(place), borrow_source(place)].compact.uniq.each do |p|
+      ([path_of(place)].compact | borrow_sources(place)).each do |p|
         if callee.nil? || callee.func.nil?
           check_iterated(p, line, col, "passed as inout")
           next
@@ -817,12 +819,13 @@ module Egg
     end
 
     # What an owned place rooted at a local borrow names (s.name.x for
-    # item.x with inout item = &c[i]), or nil: a plain one may change.
-    def borrow_source(place)
-      return nil unless owned?(place.ty)
+    # item.x with inout item = &c[i]; every source of one with several),
+    # or none: a plain one may change.
+    def borrow_sources(place)
+      return [] unless owned?(place.ty)
       r = place_root(place)
-      return nil if r.nil? || !@slices.key?(r) || @slices[r][4] != :borrow
-      place_path(place)
+      return [] if r.nil? || !@slices.key?(r) || @slices[r][4] != :borrow
+      paths_of(place)
     end
 
     # A place changed in place (&x, @replace): if it is (in) an element of
@@ -833,9 +836,9 @@ module Egg
       p = place
       while p.is_a?(Field) || p.is_a?(Index)
         if p.is_a?(Index) && owned?(p.ty)
-          # Through a local slice (inout c = &s.items(.name)), its source.
-          c = path_of(p.obj) || place_path(p.obj)
-          check_iterated(c, line, col, "#{what} (its elements own buffers)") unless c.nil?
+          # The container, or through a local slice (inout c =
+          # &s.items(.name)) every source of it.
+          paths_of(p.obj).each { |c| check_iterated(c, line, col, "#{what} (its elements own buffers)") }
         end
         p = p.obj
       end
@@ -843,8 +846,7 @@ module Egg
       c = path_of(place)
       check_iterated(c, line, col, what) unless c.nil?
       # A borrow (inout item = &c[i]) changes what it names.
-      src = borrow_source(place)
-      check_iterated(src, line, col, what) unless src.nil? || src == c
+      (borrow_sources(place) - [c]).each { |src| check_iterated(src, line, col, what) }
     end
 
     # Does this return leave with an error (true), without one (false),
