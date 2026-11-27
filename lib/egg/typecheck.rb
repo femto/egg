@@ -1241,6 +1241,22 @@ module Egg
     end
     public :self_ending?
 
+    # Does t hold a Shared(T) or an Atomic, at any depth?
+    def handle_in?(t, seen = {})
+      return false if seen[t]
+      seen[t] = true
+      return true if self_ending?(t)
+      info = @types[t]
+      case info&.kind
+      when :array, :buf, :soa then handle_in?(info.elem, seen)
+      when :struct, :union
+        return false if info.resource
+        (info.fields || []).any? { |_, ft, _| ft != "void" && handle_in?(ft, seen) }
+      when :err, :opt then info.inner != "void" && handle_in?(info.inner, seen)
+      else false
+      end
+    end
+
     def shared?(t)
       t.start_with?("Shared(") && chan_end?(t)
     end
@@ -3344,8 +3360,10 @@ module Egg
             held = r == at ? "" : ", which holds a #{r}"
             err("E141", "a.free cannot end a #{at}#{held}: #{r} is an owned struct without a deinit; end it with its own API (such as a close method)", a.line, a.col)
           elsif at != "error"
-            # a.free calls the deinit of each owned struct it frees.
+            # a.free calls the deinit of each owned struct it frees, and
+            # closes each Shared or Atomic, which uses thread as close does.
             deinits(at).each { |g| @current.calls << [g, line, col] }
+            @current.direct["thread"] ||= [line, col, "Allocator.free"] if handle_in?(at)
           end
         elsif pt == "inout_buffer"
           unless a.is_a?(AddrOf)
