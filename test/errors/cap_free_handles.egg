@@ -1,0 +1,14 @@
+// a.free closes each Shared or Atomic it reaches, so it uses thread, as
+// close does; freeing plain buffers does not.
+// error: E130 @9
+uses alloc
+const handles = @import("lib/handles.egg")
+
+fn drop_seats(a: Allocator, sink seats: Buf(handles.Seat), sink text: Buf(u8)) void {
+    a.free(text)
+    a.free(seats)
+}
+
+fn main(a: Allocator) void {
+    drop_seats(a, .empty, a.concat("x", ""))
+}

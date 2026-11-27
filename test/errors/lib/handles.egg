@@ -1,0 +1,7 @@
+uses alloc, thread
+
+const Seat = struct { s: Shared(i64), n: i64 }
+
+fn make(threads: Threads) Seat {
+    return Seat{ .s = threads.share(1), .n = 0 }
+}

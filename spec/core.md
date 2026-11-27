@@ -2380,6 +2380,49 @@ expected, and returns the old value either way, so a loop that retries
 has the value to retry with. All are sequentially consistent. `x.clone()`
 and `x.close()` hold and end it, as for a `Shared(T)`.
 
+**Handles in containers.** A `Shared(T)` or an `Atomic` may be an element
+of a `Buf` or an array, or a field of a struct, like a buffer: `a.free`
+ends each one it reaches as `close` does. That only drops a holder; the
+value behind it is freed by the last holder to go, whoever made it, not
+by the `a.free` that dropped this one.
+
+```egg
+// expect: general 2 2
+// expect: rooms 2, visits 2
+uses alloc, io, thread
+
+const Room = struct {
+    name: Buf(u8)
+    members: Buf(Buf(u8))
+}
+
+const Seat = struct {
+    room: Shared(Room)
+    visits: Atomic
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    var members: Buf(Buf(u8)) = .empty
+    a.push(&members, a.concat("ann", ""))
+    a.push(&members, a.concat("bob", ""))
+    const room = threads.share(Room{ .name = a.concat("general", ""), .members = members })
+    const visits = threads.atomic(0)
+    var seats: Buf(Seat) = .empty
+    defer a.free(seats)                  // closes every handle in it
+    a.push(&seats, Seat{ .room = room.clone(), .visits = visits.clone() })
+    a.push(&seats, Seat{ .room = room, .visits = visits })
+    for (seats) |seat| {
+        _ = seat.visits.add(1)
+    }
+    io.print(seats[0].room.get().name, " ", @len(seats[1].room.get().members), " ", seats[0].visits.load())
+    var rooms: Buf(Shared(Room)) = .empty
+    a.push(&rooms, seats[0].room.clone())
+    a.push(&rooms, seats[1].room.clone())
+    io.print("rooms ", @len(rooms), ", visits ", seats[1].visits.load())
+    a.free(rooms)                        // two holders fewer; seats still hold the room
+}
+```
+
 ```egg
 // expect: 4 readers saw 11 bytes
 // expect: hello world 2
