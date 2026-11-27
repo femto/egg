@@ -1233,6 +1233,14 @@ module Egg
       true
     end
 
+    # A Shared(T) or an Atomic: a handle that a.free ends as close does,
+    # by dropping its count of holders (the last frees what it holds), so
+    # it may live in a Buf or a struct like a buffer.
+    def self_ending?(t)
+      shared?(t) || t == "Atomic"
+    end
+    public :self_ending?
+
     def shared?(t)
       t.start_with?("Shared(") && chan_end?(t)
     end
@@ -1381,7 +1389,7 @@ module Egg
       case info.kind
       when :array, :buf, :soa then resource_in(info.elem, seen)
       when :struct
-        return(info.deinit.nil? ? t : nil) if info.resource
+        return(info.deinit.nil? && !self_ending?(t) ? t : nil) if info.resource
         (info.fields || []).each do |_, ft, _|
           r = resource_in(ft, seen)
           return r unless r.nil?

@@ -3369,8 +3369,17 @@ module Egg
     # function.
     def drop(t)
       return @drops[t] if @drops.key?(t)
-      @drops[t] = "egg_drop_#{@types[t].c_name}"
+      @drops[t] = "egg_drop_#{@types[t].c_name || t.downcase}"
       info = @types[t]
+      if @checker.shared?(t)
+        drop(info.elem) if @checker.owned?(info.elem)
+        helper("egg_ref_release")
+        return @drops[t]
+      end
+      if t == "Atomic"
+        helper("egg_atomic_close")
+        return @drops[t]
+      end
       case info.kind
       when :buf, :array then drop(info.elem) if @checker.owned?(info.elem)
       when :soa then soa_columns(t).each { |_, ft| drop(ft) if @checker.owned?(ft) }
@@ -3445,7 +3454,16 @@ module Egg
       @drops.each { |t, name| out << "static void #{name}(#{c_type(t)} v);\n" }
       @drops.each do |t, name|
         info = @types[t]
-        body = case info.kind
+        body = if @checker.shared?(t)
+                 # A holder fewer; the last frees the value.
+                 elem = info.elem
+                 value = "(*(#{c_type(elem)} *)((char *)v.c + 16))"
+                 inner = @checker.owned?(elem) ? " #{drop(elem)}(#{value});" : ""
+                 "    if (egg_ref_release((int64_t *)v.c)) {#{inner} free(v.c); }\n"
+               elsif t == "Atomic"
+                 "    egg_atomic_close(v.c);\n"
+               else
+                 case info.kind
                when :buf
                  elem = @checker.owned?(info.elem) ? "    for (int64_t i = 0; i < v.len; i++) #{drop(info.elem)}(v.ptr[i]);\n" : ""
                  "#{elem}    free(v.ptr);\n"
@@ -3470,6 +3488,7 @@ module Egg
                  else
                    # Fields last declared first, as they may depend on earlier ones.
                    info.fields.select { |_, ft, _| @checker.owned?(ft) }.reverse.map { |f, ft, _| "    #{drop(ft)}(v.f_#{f});\n" }.join
+                 end
                  end
                end
         out << "static void #{name}(#{c_type(t)} v) {\n#{body}}\n"
