@@ -440,7 +440,8 @@ v3 (memory without GC, and what realistic programs needed):
   Erlang's ETS or Go's `sync.Map`): text or integer keys, values that own
   nothing kept in place and the rest as `Shared(V)` read without copying,
   `put`, `put_new`, `take`, `add` for counters, `put_if`/`remove_if` to
-  change what was read only if no one changed it since, and `entries`.
+  change a value only if it is still the expected one (equal, for values
+  kept in place; the same handle, for Shared ones), and `entries`.
   A `Shared`, `Atomic` or map may be kept in a `Buf` or a struct; `a.free`
   closes it. `threads.channel(T, n)` returns
   a `Receiver(T)` (with n of 0, `send` waits for the receiver), and

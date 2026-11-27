@@ -1106,6 +1106,7 @@ module Egg
         return try_send_type(args, line, col) if t.name == "TrySend"
         return shared_type(args, line, col) if t.name == "Shared"
         return cmap_type(args, line, col) if t.name == "ConcurrentMap"
+        return map_entry_of(args, line, col) if t.name == "MapEntry"
         return soa_type(args, line, col) if t.name == "MultiArrayList"
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
@@ -1296,6 +1297,16 @@ module Egg
       e.fields = [["key", k, line], ["val", cmap_value(info.elem, line, col), line]]
       e.mod = ""
       canon
+    end
+
+    # MapEntry(K, V) as written: the entry type of a ConcurrentMap(K, V).
+    def map_entry_of(args, line, col)
+      if args.length != 2
+        err("E104", "MapEntry takes a key type and a value type, but #{args.length} were given", line, col)
+        return "error"
+      end
+      t = cmap_type(args, line, col)
+      t == "error" ? "error" : map_entry_type(t, line, col)
     end
 
     # threads.map(K, V): a new, empty ConcurrentMap(K, V).
@@ -1749,7 +1760,15 @@ module Egg
       info.mod = f.mod || ""
       info.fn_line = f.line
       info.return_line = body[0].line
-      outside_aliases { with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) } }
+      # As for a declared struct: checks that need its fields wait until
+      # they are all resolved (Node(T) { kids: ConcurrentMap(i64, @This()) }).
+      @registering += 1
+      begin
+        outside_aliases { with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) } }
+      ensure
+        @registering -= 1
+      end
+      flush_elem_checks if @registering.zero?
       outside_aliases do
         in_module(f.mod) do
           st.fns.each do |m|
@@ -2984,10 +3003,16 @@ module Egg
       local = lookup(written)
       return check_indirect_call(e, local, args, written, line, col) unless local.nil?
       name = qualify(written)
-      if written == "Buf" || written == "MultiArrayList"
+      if %w[Buf MultiArrayList Shared ConcurrentMap MapEntry].include?(written)
         types = args.map { |a| type_arg(a) }
         return "error" if types.include?("error")
-        e.info[:type] = written == "Buf" ? buf_type(types, line, col) : soa_type(types, line, col)
+        e.info[:type] = case written
+                        when "Buf" then buf_type(types, line, col)
+                        when "MultiArrayList" then soa_type(types, line, col)
+                        when "Shared" then shared_type(types, line, col)
+                        when "ConcurrentMap" then cmap_type(types, line, col)
+                        else map_entry_of(types, line, col)
+                        end
         return e.info[:type] == "error" ? "error" : "type"
       end
       if @type_fns.key?(name)

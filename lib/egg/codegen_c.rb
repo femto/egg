@@ -1561,12 +1561,19 @@ module Egg
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
-            if (x != NULL && out != NULL) {
+            /* Decided under the lock: x may be freed once it is let go. */
+            bool found = x != NULL;
+            if (found && out != NULL) {
                 memcpy(out, EGG_CMAP_VAL(x), m->vsize);
-                if (m->shared) egg_atomic_fetch_add(*(int64_t **)EGG_CMAP_VAL(x), 1);
+                if (m->shared) {
+                    /* The handle is a void *: read it as one. */
+                    void *hold;
+                    memcpy(&hold, EGG_CMAP_VAL(x), sizeof hold);
+                    egg_atomic_fetch_add((int64_t *)hold, 1);
+                }
             }
             EGG_CMAP_UNLOCK(sh);
-            return x != NULL;
+            return found;
         }
       C
       # v in for the key; the value it replaces, if any, out into old.
@@ -1577,14 +1584,15 @@ module Egg
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
-            if (x != NULL) {
+            bool found = x != NULL;
+            if (found) {
                 memcpy(old, EGG_CMAP_VAL(x), m->vsize);
                 memcpy(EGG_CMAP_VAL(x), v, m->vsize);
             } else {
                 egg_cmap_insert(m, sh, h, k, n, v);
             }
             EGG_CMAP_UNLOCK(sh);
-            return x != NULL;
+            return found;
         }
       C
       "egg_cmap_put_new" => <<~C,
@@ -1608,14 +1616,15 @@ module Egg
             EGG_CMAP_LOCK(sh);
             egg_cmap_node **at = egg_cmap_find(m, sh, h, k, n);
             egg_cmap_node *x = *at;
-            if (x != NULL) {
+            bool found = x != NULL;
+            if (found) {
                 *at = x->next;
                 sh->s.count -= 1;
                 memcpy(out, EGG_CMAP_VAL(x), m->vsize);
             }
             EGG_CMAP_UNLOCK(sh);
             free(x);
-            return x != NULL;
+            return found;
         }
       C
       # Replaces the value (old out into old), or takes the node out (v
@@ -3699,8 +3708,10 @@ module Egg
       emitted.each { |sig| out << signature(sig) << ";\n" }
       out << "\n"
       @spawns.each { |text| out << text << "\n" }
-      # After the prototypes: an owned struct's drop calls its deinit.
+      # After the prototypes: an owned struct's drop calls its deinit. A
+      # map's drop passes its value-ending function, declared first.
       emit_soa_fns(out)
+      @cmap_fns.each_value { |_, text| out << text[/\Astatic [^{]*/].rstrip << ";\n" }
       emit_drops(out)
       emit_dups(out)
       @cmap_fns.each_value { |_, text| out << text << "\n" }

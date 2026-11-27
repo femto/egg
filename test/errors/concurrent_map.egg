@@ -1,11 +1,12 @@
-// error: E156 @14
 // error: E156 @15
-// error: E155 @16
+// error: E156 @16
 // error: E155 @17
-// error: E103 @21
+// error: E155 @18
 // error: E103 @22
-// error: E133 @23
-// error: E122 @24
+// error: E103 @23
+// error: E133 @24
+// error: E122 @25
+// error: E155 @32
 uses alloc, net, thread
 
 const P = struct { x: i64 }
@@ -24,3 +25,12 @@ fn main(a: Allocator, threads: Threads) void {
     m.push(1)
     m.close()
 }
+
+// A generic struct is checked once its fields are known.
+fn Node(comptime T: type) type {
+    return struct {
+        kids: ConcurrentMap(i64, @This())
+        v: T
+    }
+}
+fn nodes(n: Node(i64)) void {}

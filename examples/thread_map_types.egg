@@ -1,0 +1,38 @@
+// ConcurrentMap and Shared as type arguments in expressions, MapEntry in a
+// signature, and a map with owned values kept in a struct in a Buf, which
+// a.free closes.
+// expect: 1 1
+// expect: total 5
+// expect: kept 1
+uses io, alloc, thread
+
+const Holder = struct {
+    m: ConcurrentMap(i64, Buf(u8))
+}
+
+fn total(es: Buf(MapEntry(i64, i64))) i64 {
+    var t = 0
+    for (es) |e| {
+        t = t + e.val
+    }
+    return t
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    var maps = Buf(ConcurrentMap(i64, i64)).empty
+    defer a.free(maps)
+    a.push(&maps, threads.map(i64, i64))
+    var shared = Buf(Shared(i64)).empty
+    defer a.free(shared)
+    a.push(&shared, threads.share(1))
+    io.print(@len(maps), " ", @len(shared))
+    _ = maps[0].add(a, 1, 5)
+    const es = maps[0].entries(a)
+    defer a.free(es)
+    io.print("total ", total(es))
+    var hs: Buf(Holder) = .empty
+    defer a.free(hs)
+    a.push(&hs, Holder{ .m = threads.map(i64, Buf(u8)) })
+    _ = hs[0].m.put_new(a, 1, a.concat("x", ""))
+    io.print("kept ", hs[0].m.count())
+}

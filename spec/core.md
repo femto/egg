@@ -2443,16 +2443,18 @@ one reads it as it was, and keeps it alive until it closes it.
 | `m.remove(k)` | k's value taken out and ended; whether there was one |
 | `m.contains(k)`, `m.count()` | whether k has a value; how many pairs there are |
 | `m.add(a, k, d)` | for a `ConcurrentMap(K, i64)`: d added to k's value (0 if new) in place; the sum (an overflow panics) |
-| `m.put_if(a, k, expected, v)` | v in, if k's value is still expected; whether it went in |
+| `m.put_if(a, k, expected, v)` | v in, if k's value is still expected; whether it went in (if not, v is freed: a retry builds a new one) |
 | `m.remove_if(k, expected)` | k's value taken out and ended, if it is still expected |
 | `m.entries(a)` | a `Buf(MapEntry(K, V))`: every pair, `e.key` (text as a `Buf(u8)` of the caller's) and `e.val` as `get` gives it |
 | `m.clone()`, `m.close()` | another holder; one fewer, the last freeing every value |
 
-`expected` is what `get` gave: compared with `==` for a value kept in
-place (a number, `bool`, enum or `str`; E103 for others), and by identity
-for a `Shared(V)`, which cannot be reused while the caller holds it. So
-reading, computing a new value and `put_if` is a change no other thread's
-can undo unseen; on false, read again and retry. No code of the program
+`expected` is what `get` gave, and is checked against the value k has
+when `put_if` runs, not against what happened since. A value kept in
+place (a number, `bool`, enum or `str`; E103 for others) is compared
+with `==`: if another thread changed it and changed it back, it matches.
+A `Shared(V)` is compared by identity, and no other value can take its
+place while the caller holds it, so a match means no other put came in
+between. Either way, on false, read again, build a new value and retry. No code of the program
 runs while the map is locked: a read only copies a value or holds a
 handle once more. The map is in shards, each a table behind its own lock
 (as many as four per CPU, rounded up to a power of two), so threads
@@ -2495,7 +2497,8 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     const g = rooms.get("general") orelse return
     defer g.close()
     io.print(g.get().members[0])         // read in place
-    // A change made from what was read goes in only if no one changed it since.
+    // A change made from what was read goes in only if the value is still
+    // that one: the same handle, so no other put came in between.
     const first = rooms.put_if(a, "general", g, room(a, "general", "cy"))
     const second = rooms.put_if(a, "general", g, room(a, "general", "dan"))
     io.print("put_if ", first, ", then ", second)
