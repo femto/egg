@@ -1,0 +1,26 @@
+// error: E156 @14
+// error: E156 @15
+// error: E155 @16
+// error: E155 @17
+// error: E103 @21
+// error: E103 @22
+// error: E133 @23
+// error: E122 @24
+uses alloc, net, thread
+
+const P = struct { x: i64 }
+
+// Keys are text or integers; values what a Shared may hold.
+fn float_key(m: ConcurrentMap(f64, i64)) void {}
+fn struct_key(m: ConcurrentMap(P, i64)) void {}
+fn socket_value(m: ConcurrentMap(str, TcpConn)) void {}
+fn map_in_shared(s: Shared(ConcurrentMap(str, i64))) void {}
+
+fn main(a: Allocator, threads: Threads) void {
+    const m = threads.map(str, P)
+    _ = m.add(a, "x", 1)                                // add is for i64 values
+    _ = m.put_if(a, "x", P{ .x = 1 }, P{ .x = 2 })      // P has no ==
+    _ = threads.map(str, i64).count()                  // a temporary, never closed
+    m.push(1)
+    m.close()
+}

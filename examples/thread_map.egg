@@ -1,0 +1,56 @@
+// A ConcurrentMap under contention: eight threads put, read and remove
+// overlapping keys, holding what they read while others replace it, and
+// count into a second map. The counts come out exact.
+// expect: 8 threads, 160000 adds, 16 counters, map <= 512: true
+uses io, alloc, thread
+
+fn work(a: Allocator, sink m: ConcurrentMap(i64, Buf(u8)), sink c: ConcurrentMap(i64, i64), id: i64, sink done: Sender(i64)) void {
+    defer done.close()
+    var seen = 0
+    var i = 0
+    while (i < 20000) {
+        const k = (i * 7 + id) % 512
+        if (i % 3 == 0) {
+            if (m.put(a, k, a.concat("v", ""))) |old| {
+                old.close()
+            }
+        } else if (i % 3 == 1) {
+            if (m.get(k)) |v| {
+                seen = seen + @len(v.get())
+                v.close()
+            }
+        } else {
+            _ = m.remove(k)
+        }
+        _ = c.add(a, k % 16, 1)
+        i = i + 1
+    }
+    m.close()
+    c.close()
+    done.send(if (seen >= 0) 1 else 0)
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const m = threads.map(i64, Buf(u8))
+    const c = threads.map(i64, i64)
+    const rx = threads.channel(i64, 8)
+    var t = 0
+    while (t < 8) {
+        threads.spawn(work, a, m.clone(), c.clone(), t, rx.sender()).detach()
+        t = t + 1
+    }
+    var total = 0
+    while (rx.recv()) |finished| {
+        total = total + finished
+    }
+    rx.close()
+    var sum = 0
+    const es = c.entries(a)
+    for (es) |e| {
+        sum = sum + e.val
+    }
+    a.free(es)
+    io.print(total, " threads, ", sum, " adds, ", c.count(), " counters, map <= 512: ", m.count() <= 512)
+    m.close()
+    c.close()
+}
