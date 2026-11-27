@@ -147,6 +147,7 @@ module Egg
                       egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_try_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_atomic_base egg_atomic_fetch_add egg_atomic_load egg_atomic_swap egg_atomic_cas egg_ref_retain egg_ref_release egg_atomic_new egg_atomic_add egg_atomic_close egg_shared_new
+                      egg_cmap egg_cmap_hash egg_cmap_new egg_cmap_shard_of egg_cmap_find egg_cmap_insert egg_cmap_get egg_cmap_put egg_cmap_put_new egg_cmap_take egg_cmap_swap_if egg_cmap_add egg_cmap_count egg_cmap_each egg_cmap_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_conn_new egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
@@ -1391,6 +1392,348 @@ module Egg
             int64_t *p = (int64_t *)egg_buf_resize(NULL, 1, 16 + size);
             p[0] = 1;
             return p;
+        }
+      C
+      # A ConcurrentMap: shards, each a hash table behind its own mutex,
+      # 128 bytes apart so that no two share a cache line. A key's hash
+      # picks the shard by its high bits and the bucket by its low ones.
+      # A node holds the value (vsize bytes, as the program lays it out)
+      # and the key's bytes after it; an integer key is its 8 bytes.
+      "egg_cmap" => <<~C,
+        #ifndef _WIN32
+        #include <unistd.h>
+        #endif
+        typedef struct egg_cmap_node {
+            struct egg_cmap_node *next;
+            uint64_t hash;
+            int64_t klen;
+        } egg_cmap_node;
+        typedef struct {
+        #ifdef _WIN32
+            CRITICAL_SECTION lock;
+        #else
+            pthread_mutex_t lock;
+        #endif
+            egg_cmap_node **buckets;
+            int64_t nbuckets;
+            int64_t count;
+        } egg_cmap_shard_body;
+        typedef union {
+            egg_cmap_shard_body s;
+            char pad[((sizeof(egg_cmap_shard_body) + 127) / 128) * 128];
+        } egg_cmap_shard;
+        typedef struct {
+            int64_t refs;
+            int shift;
+            int64_t nshards;
+            size_t vsize, vspace;
+            /* Values are Shared handles: reading one holds it once more. */
+            bool shared;
+            void *raw;
+            egg_cmap_shard *shards;
+        } egg_cmap;
+        #define EGG_CMAP_VAL(n) ((void *)((char *)(n) + sizeof(egg_cmap_node)))
+        #define EGG_CMAP_KEY(m, n) ((const uint8_t *)EGG_CMAP_VAL(n) + (m)->vspace)
+        #ifdef _WIN32
+        #define EGG_CMAP_LOCK(sh) EnterCriticalSection(&(sh)->s.lock)
+        #define EGG_CMAP_UNLOCK(sh) LeaveCriticalSection(&(sh)->s.lock)
+        #else
+        #define EGG_CMAP_LOCK(sh) pthread_mutex_lock(&(sh)->s.lock)
+        #define EGG_CMAP_UNLOCK(sh) pthread_mutex_unlock(&(sh)->s.lock)
+        #endif
+      C
+      # FNV-1a, then a finalizer that spreads every bit into the high ones,
+      # which pick the shard. Computed before any lock is taken.
+      "egg_cmap_hash" => <<~C,
+        static uint64_t egg_cmap_hash(const uint8_t *k, int64_t n) {
+            uint64_t h = UINT64_C(1469598103934665603);
+            for (int64_t i = 0; i < n; i++) {
+                h ^= k[i];
+                h *= UINT64_C(1099511628211);
+            }
+            h ^= h >> 33;
+            h *= UINT64_C(0xff51afd7ed558ccd);
+            h ^= h >> 33;
+            h *= UINT64_C(0xc4ceb9fe1a85ec53);
+            h ^= h >> 33;
+            return h;
+        }
+      C
+      "egg_cmap_new" => <<~C,
+        static void *egg_cmap_new(size_t vsize, bool shared) {
+            long cpus;
+        #ifdef _WIN32
+            SYSTEM_INFO si;
+            GetSystemInfo(&si);
+            cpus = (long)si.dwNumberOfProcessors;
+        #else
+            cpus = sysconf(_SC_NPROCESSORS_ONLN);
+        #endif
+            if (cpus < 1) cpus = 1;
+            /* The next power of two from 4 per CPU, 4 to 1024. */
+            int64_t n = 4;
+            int shift = 62;
+            while (n < 4 * (int64_t)cpus && n < 1024) {
+                n *= 2;
+                shift -= 1;
+            }
+            egg_cmap *m = (egg_cmap *)egg_buf_resize(NULL, 1, sizeof(egg_cmap));
+            m->refs = 1;
+            m->shift = shift;
+            m->nshards = n;
+            m->vsize = vsize;
+            m->vspace = (vsize + 7) / 8 * 8;
+            m->shared = shared;
+            m->raw = egg_buf_resize(NULL, n * (int64_t)sizeof(egg_cmap_shard) + 127, 1);
+            m->shards = (egg_cmap_shard *)(((uintptr_t)m->raw + 127) & ~(uintptr_t)127);
+            for (int64_t i = 0; i < n; i++) {
+                egg_cmap_shard *sh = &m->shards[i];
+        #ifdef _WIN32
+                InitializeCriticalSection(&sh->s.lock);
+        #else
+                if (pthread_mutex_init(&sh->s.lock, NULL) != 0) egg_panic("cannot make a map");
+        #endif
+                sh->s.nbuckets = 8;
+                sh->s.count = 0;
+                sh->s.buckets = (egg_cmap_node **)egg_buf_resize(NULL, 8, sizeof(egg_cmap_node *));
+                memset(sh->s.buckets, 0, 8 * sizeof(egg_cmap_node *));
+            }
+            return m;
+        }
+      C
+      "egg_cmap_shard_of" => <<~C,
+        static egg_cmap_shard *egg_cmap_shard_of(egg_cmap *m, uint64_t h) {
+            return &m->shards[(int64_t)(h >> m->shift) & (m->nshards - 1)];
+        }
+      C
+      # The link that points at the key's node (or the NULL at the end of
+      # its bucket), in a locked shard.
+      "egg_cmap_find" => <<~C,
+        static egg_cmap_node **egg_cmap_find(egg_cmap *m, egg_cmap_shard *sh, uint64_t h, const uint8_t *k, int64_t n) {
+            egg_cmap_node **at = &sh->s.buckets[h & (uint64_t)(sh->s.nbuckets - 1)];
+            while (*at != NULL) {
+                egg_cmap_node *x = *at;
+                if (x->hash == h && x->klen == n && (n == 0 || memcmp(EGG_CMAP_KEY(m, x), k, (size_t)n) == 0)) return at;
+                at = &x->next;
+            }
+            return at;
+        }
+      C
+      # A new node for the key with value v, in a locked shard that does
+      # not have it; the shard's table doubles past one node a bucket.
+      "egg_cmap_insert" => <<~C,
+        static void egg_cmap_insert(egg_cmap *m, egg_cmap_shard *sh, uint64_t h, const uint8_t *k, int64_t n, const void *v) {
+            if (sh->s.count >= sh->s.nbuckets) {
+                int64_t nb = sh->s.nbuckets * 2;
+                egg_cmap_node **fresh = (egg_cmap_node **)egg_buf_resize(NULL, nb, sizeof(egg_cmap_node *));
+                memset(fresh, 0, (size_t)nb * sizeof(egg_cmap_node *));
+                for (int64_t i = 0; i < sh->s.nbuckets; i++) {
+                    egg_cmap_node *x = sh->s.buckets[i];
+                    while (x != NULL) {
+                        egg_cmap_node *next = x->next;
+                        egg_cmap_node **to = &fresh[x->hash & (uint64_t)(nb - 1)];
+                        x->next = *to;
+                        *to = x;
+                        x = next;
+                    }
+                }
+                free(sh->s.buckets);
+                sh->s.buckets = fresh;
+                sh->s.nbuckets = nb;
+            }
+            egg_cmap_node *x = (egg_cmap_node *)egg_buf_resize(NULL, (int64_t)(sizeof(egg_cmap_node) + m->vspace) + n, 1);
+            x->hash = h;
+            x->klen = n;
+            memcpy(EGG_CMAP_VAL(x), v, m->vsize);
+            if (n > 0) memcpy((uint8_t *)EGG_CMAP_VAL(x) + m->vspace, k, (size_t)n);
+            egg_cmap_node **at = &sh->s.buckets[h & (uint64_t)(sh->s.nbuckets - 1)];
+            x->next = *at;
+            *at = x;
+            sh->s.count += 1;
+        }
+      C
+      # The value for the key into out (NULL: only whether it is there),
+      # holding a Shared value once more for the reader.
+      "egg_cmap_get" => <<~C,
+        static bool egg_cmap_get(void *mp, const uint8_t *k, int64_t n, void *out) {
+            egg_cmap *m = (egg_cmap *)mp;
+            uint64_t h = egg_cmap_hash(k, n);
+            egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
+            EGG_CMAP_LOCK(sh);
+            egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
+            /* Decided under the lock: x may be freed once it is let go. */
+            bool found = x != NULL;
+            if (found && out != NULL) {
+                memcpy(out, EGG_CMAP_VAL(x), m->vsize);
+                if (m->shared) {
+                    /* The handle is a void *: read it as one. */
+                    void *hold;
+                    memcpy(&hold, EGG_CMAP_VAL(x), sizeof hold);
+                    egg_atomic_fetch_add((int64_t *)hold, 1);
+                }
+            }
+            EGG_CMAP_UNLOCK(sh);
+            return found;
+        }
+      C
+      # v in for the key; the value it replaces, if any, out into old.
+      "egg_cmap_put" => <<~C,
+        static bool egg_cmap_put(void *mp, const uint8_t *k, int64_t n, const void *v, void *old) {
+            egg_cmap *m = (egg_cmap *)mp;
+            uint64_t h = egg_cmap_hash(k, n);
+            egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
+            EGG_CMAP_LOCK(sh);
+            egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
+            bool found = x != NULL;
+            if (found) {
+                memcpy(old, EGG_CMAP_VAL(x), m->vsize);
+                memcpy(EGG_CMAP_VAL(x), v, m->vsize);
+            } else {
+                egg_cmap_insert(m, sh, h, k, n, v);
+            }
+            EGG_CMAP_UNLOCK(sh);
+            return found;
+        }
+      C
+      "egg_cmap_put_new" => <<~C,
+        static bool egg_cmap_put_new(void *mp, const uint8_t *k, int64_t n, const void *v) {
+            egg_cmap *m = (egg_cmap *)mp;
+            uint64_t h = egg_cmap_hash(k, n);
+            egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
+            EGG_CMAP_LOCK(sh);
+            bool fresh = *egg_cmap_find(m, sh, h, k, n) == NULL;
+            if (fresh) egg_cmap_insert(m, sh, h, k, n, v);
+            EGG_CMAP_UNLOCK(sh);
+            return fresh;
+        }
+      C
+      # The key's node taken out of the map, its value into out.
+      "egg_cmap_take" => <<~C,
+        static bool egg_cmap_take(void *mp, const uint8_t *k, int64_t n, void *out) {
+            egg_cmap *m = (egg_cmap *)mp;
+            uint64_t h = egg_cmap_hash(k, n);
+            egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
+            EGG_CMAP_LOCK(sh);
+            egg_cmap_node **at = egg_cmap_find(m, sh, h, k, n);
+            egg_cmap_node *x = *at;
+            bool found = x != NULL;
+            if (found) {
+                *at = x->next;
+                sh->s.count -= 1;
+                memcpy(out, EGG_CMAP_VAL(x), m->vsize);
+            }
+            EGG_CMAP_UNLOCK(sh);
+            free(x);
+            return found;
+        }
+      C
+      # Replaces the value (old out into old), or takes the node out (v
+      # NULL), if it is expected: by eq, or byte for byte (a Shared
+      # value's handle, so by identity).
+      "egg_cmap_swap_if" => <<~C,
+        static bool egg_cmap_swap_if(void *mp, const uint8_t *k, int64_t n, const void *expected, const void *v, void *old, bool (*eq)(const void *, const void *)) {
+            egg_cmap *m = (egg_cmap *)mp;
+            uint64_t h = egg_cmap_hash(k, n);
+            egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
+            EGG_CMAP_LOCK(sh);
+            egg_cmap_node **at = egg_cmap_find(m, sh, h, k, n);
+            egg_cmap_node *x = *at;
+            bool same = x != NULL && (eq != NULL ? eq(EGG_CMAP_VAL(x), expected) : memcmp(EGG_CMAP_VAL(x), expected, m->vsize) == 0);
+            if (same) {
+                memcpy(old, EGG_CMAP_VAL(x), m->vsize);
+                if (v != NULL) {
+                    memcpy(EGG_CMAP_VAL(x), v, m->vsize);
+                    x = NULL;
+                } else {
+                    *at = x->next;
+                    sh->s.count -= 1;
+                }
+            } else {
+                x = NULL;
+            }
+            EGG_CMAP_UNLOCK(sh);
+            free(x);
+            return same;
+        }
+      C
+      # d added to an i64 value in place (0 if the key is new); the sum.
+      "egg_cmap_add" => <<~C,
+        static int64_t egg_cmap_add(void *mp, const uint8_t *k, int64_t n, int64_t d) {
+            egg_cmap *m = (egg_cmap *)mp;
+            uint64_t h = egg_cmap_hash(k, n);
+            egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
+            EGG_CMAP_LOCK(sh);
+            egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
+            int64_t sum;
+            if (x == NULL) {
+                sum = d;
+                egg_cmap_insert(m, sh, h, k, n, &sum);
+            } else {
+                int64_t old;
+                memcpy(&old, EGG_CMAP_VAL(x), sizeof old);
+                if ((d > 0 && old > INT64_MAX - d) || (d < 0 && old < INT64_MIN - d)) {
+                    EGG_CMAP_UNLOCK(sh);
+                    egg_panic("integer overflow");
+                }
+                sum = old + d;
+                memcpy(EGG_CMAP_VAL(x), &sum, sizeof sum);
+            }
+            EGG_CMAP_UNLOCK(sh);
+            return sum;
+        }
+      C
+      "egg_cmap_count" => <<~C,
+        static int64_t egg_cmap_count(void *mp) {
+            egg_cmap *m = (egg_cmap *)mp;
+            int64_t total = 0;
+            for (int64_t i = 0; i < m->nshards; i++) {
+                EGG_CMAP_LOCK(&m->shards[i]);
+                total += m->shards[i].s.count;
+                EGG_CMAP_UNLOCK(&m->shards[i]);
+            }
+            return total;
+        }
+      C
+      # f on each pair, a shard at a time under its lock (each shard as it
+      # was at one moment; the map as a whole, as it was while it ran).
+      "egg_cmap_each" => <<~C,
+        static void egg_cmap_each(void *mp, void (*f)(void *, const uint8_t *, int64_t, const void *), void *ctx) {
+            egg_cmap *m = (egg_cmap *)mp;
+            for (int64_t i = 0; i < m->nshards; i++) {
+                egg_cmap_shard *sh = &m->shards[i];
+                EGG_CMAP_LOCK(sh);
+                for (int64_t b = 0; b < sh->s.nbuckets; b++)
+                    for (egg_cmap_node *x = sh->s.buckets[b]; x != NULL; x = x->next) f(ctx, EGG_CMAP_KEY(m, x), x->klen, EGG_CMAP_VAL(x));
+                EGG_CMAP_UNLOCK(sh);
+            }
+        }
+      C
+      # A holder fewer; the last frees every node, ending each value with
+      # drop (NULL for values that own nothing).
+      "egg_cmap_close" => <<~C,
+        static void egg_cmap_close(void *mp, void (*drop)(void *)) {
+            egg_cmap *m = (egg_cmap *)mp;
+            if (!egg_ref_release(&m->refs)) return;
+            for (int64_t i = 0; i < m->nshards; i++) {
+                egg_cmap_shard *sh = &m->shards[i];
+                for (int64_t b = 0; b < sh->s.nbuckets; b++) {
+                    egg_cmap_node *x = sh->s.buckets[b];
+                    while (x != NULL) {
+                        egg_cmap_node *next = x->next;
+                        if (drop != NULL) drop(EGG_CMAP_VAL(x));
+                        free(x);
+                        x = next;
+                    }
+                }
+                free(sh->s.buckets);
+        #ifdef _WIN32
+                DeleteCriticalSection(&sh->s.lock);
+        #else
+                pthread_mutex_destroy(&sh->s.lock);
+        #endif
+            }
+            free(m->raw);
+            free(m);
         }
       C
       "egg_thread_base" => <<~C,
@@ -3191,6 +3534,17 @@ module Egg
                     "egg_ref_retain" => ["egg_atomic_fetch_add"], "egg_ref_release" => ["egg_atomic_fetch_add"],
                     "egg_atomic_new" => ["egg_buf_resize"], "egg_atomic_add" => ["egg_atomic_fetch_add"],
                     "egg_atomic_close" => ["egg_ref_release"], "egg_shared_new" => ["egg_buf_resize"],
+                    "egg_cmap" => ["egg_thread_base"], "egg_cmap_new" => %w[egg_cmap egg_buf_resize],
+                    "egg_cmap_shard_of" => ["egg_cmap"], "egg_cmap_find" => ["egg_cmap"],
+                    "egg_cmap_insert" => %w[egg_cmap egg_buf_resize],
+                    "egg_cmap_get" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_atomic_fetch_add],
+                    "egg_cmap_put" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_cmap_insert],
+                    "egg_cmap_put_new" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_cmap_insert],
+                    "egg_cmap_take" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find],
+                    "egg_cmap_swap_if" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find],
+                    "egg_cmap_add" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_cmap_insert],
+                    "egg_cmap_count" => ["egg_cmap"], "egg_cmap_each" => ["egg_cmap"],
+                    "egg_cmap_close" => %w[egg_cmap egg_ref_release],
                     "egg_chan_new" => %w[egg_chan egg_buf_resize], "egg_chan_free" => ["egg_chan"],
                     "egg_chan_sender" => ["egg_chan"], "egg_chan_receiver" => ["egg_chan"], "egg_chan_queue" => ["egg_chan"], "egg_chan_line" => %w[egg_chan egg_chan_queue], "egg_chan_get" => ["egg_chan_line"], "egg_chan_put" => ["egg_chan_line"], "egg_chan_line_close" => ["egg_chan"], "egg_chan_wait" => %w[egg_chan egg_chan_queue], "egg_chan_send" => %w[egg_chan_wait egg_chan_put], "egg_chan_try_send" => ["egg_chan_put"], "egg_chan_recv" => %w[egg_chan_get egg_chan_wait], "egg_chan_recv_for" => %w[egg_chan_get egg_chan_wait],
                     "egg_chan_tx_close" => %w[egg_chan_line_close egg_chan_free], "egg_chan_rx_close" => %w[egg_chan_line_close egg_chan_free],
@@ -3259,6 +3613,7 @@ module Egg
       @int_helpers = {} # name -> C text, generated in use order
       @drops = {}       # owned type -> its egg_drop_ function's name
       @dups = {}        # owned type -> its egg_dup_ function's name
+      @cmap_fns = {}    # [kind, map type] -> [its function's name, its C]
       @soa_fns = {}     # [MultiArrayList type, kind] -> its egg_soa_ function's name
       @fixed_indices = false # lvalue computes indices at once (column_receiver)
       @tagged = {}      # types declared up front as tagged structs (emit_types)
@@ -3353,10 +3708,13 @@ module Egg
       emitted.each { |sig| out << signature(sig) << ";\n" }
       out << "\n"
       @spawns.each { |text| out << text << "\n" }
-      # After the prototypes: an owned struct's drop calls its deinit.
+      # After the prototypes: an owned struct's drop calls its deinit. A
+      # map's drop passes its value-ending function, declared first.
       emit_soa_fns(out)
+      @cmap_fns.each_value { |_, text| out << text[/\Astatic [^{]*/].rstrip << ";\n" }
       emit_drops(out)
       emit_dups(out)
+      @cmap_fns.each_value { |_, text| out << text << "\n" }
       out << body
       out
     end
@@ -3378,6 +3736,11 @@ module Egg
       end
       if t == "Atomic"
         helper("egg_atomic_close")
+        return @drops[t]
+      end
+      if @checker.cmap?(t)
+        helper("egg_cmap_close")
+        cmap_value_drop(t)
         return @drops[t]
       end
       case info.kind
@@ -3462,6 +3825,8 @@ module Egg
                  "    if (egg_ref_release((int64_t *)v.c)) {#{inner} free(v.c); }\n"
                elsif t == "Atomic"
                  "    egg_atomic_close(v.c);\n"
+               elsif @checker.cmap?(t)
+                 "    egg_cmap_close(v.c, #{cmap_value_drop(t)});\n"
                else
                  case info.kind
                when :buf
@@ -4989,6 +5354,178 @@ module Egg
       end
     end
 
+    # The value type a ConcurrentMap keeps: V, or Shared(V).
+    def cmap_ve(t)
+      @checker.cmap_value(@types[t].elem)
+    end
+
+    # A function ending a value kept in map type t, or NULL for values
+    # that own nothing.
+    def cmap_value_drop(t)
+      ve = cmap_ve(t)
+      return "NULL" unless @checker.owned?(ve)
+      key = [:drop, t]
+      return @cmap_fns[key][0] if @cmap_fns.key?(key)
+      name = "egg_cmap_vdrop_#{@types[t].c_name}"
+      @cmap_fns[key] = [name, "static void #{name}(void *v) {\n    #{drop(ve)}(*(#{c_type(ve)} *)v);\n}"]
+      name
+    end
+
+    # == on two values kept in place, for put_if and remove_if.
+    def cmap_eq(t)
+      ve = cmap_ve(t)
+      return "NULL" if @checker.owned?(ve) # a Shared(V): its handle, byte for byte
+      key = [:eq, t]
+      return @cmap_fns[key][0] if @cmap_fns.key?(key)
+      name = "egg_cmap_eq_#{@types[t].c_name}"
+      ct = c_type(ve)
+      body = if ve == "str"
+               "    return #{helper('egg_str_eq')}(*(const egg_str *)x, *(const egg_str *)y);"
+             else
+               "    return *(const #{ct} *)x == *(const #{ct} *)y;"
+             end
+      @cmap_fns[key] = [name, "static bool #{name}(const void *x, const void *y) {\n#{body}\n}"]
+      name
+    end
+
+    # What entries calls on each pair: the pair pushed onto a Buf of
+    # MapEntry, a copy of the key and the value as get gives it.
+    def cmap_entry_fn(t, buf_t)
+      key = [:entry, t]
+      return @cmap_fns[key][0] if @cmap_fns.key?(key)
+      info = @types[t]
+      ve = cmap_ve(t)
+      entry = @types[buf_t].elem
+      name = "egg_cmap_entry_#{@types[t].c_name}"
+      helper("egg_buf_resize")
+      keycode = if @checker.cmap_text_key?(info.inner)
+                  "    e.f_key.len = n;\n    e.f_key.cap = n;\n    e.f_key.ptr = n == 0 ? NULL : (uint8_t *)egg_buf_resize(NULL, n, 1);\n" \
+                    "    if (n > 0) memcpy(e.f_key.ptr, k, (size_t)n);\n"
+                else
+                  "    int64_t raw;\n    (void)n;\n    memcpy(&raw, k, sizeof raw);\n    e.f_key = (#{c_type(info.inner)})raw;\n"
+                end
+      hold = @checker.owned?(ve) ? "    #{helper('egg_atomic_fetch_add')}((int64_t *)e.f_val.c, 1);\n" : ""
+      text = <<~C
+        static void #{name}(void *ctx, const uint8_t *k, int64_t n, const void *v) {
+            #{c_type(buf_t)} *b = (#{c_type(buf_t)} *)ctx;
+            #{c_type(entry)} e;
+        #{keycode}    memcpy(&e.f_val, v, sizeof e.f_val);
+        #{hold}    if (b->len == b->cap) {
+                b->cap = b->cap < 4 ? 4 : b->cap * 2;
+                b->ptr = (#{c_type(entry)} *)egg_buf_resize(b->ptr, b->cap, sizeof(#{c_type(entry)}));
+            }
+            b->ptr[b->len++] = e;
+        }
+      C
+      @cmap_fns[key] = [name, text.chomp]
+      name
+    end
+
+    # The bytes of a map's key: a text's own, or an integer's 8.
+    def cmap_key(t, arg)
+      if @checker.cmap_text_key?(@types[t].inner)
+        v = hoist(coerce(expr(arg), arg.ty, "[]u8"), "[]u8")
+        "(const uint8_t *)#{v}.ptr, #{v}.len"
+      else
+        v = tmp
+        line("int64_t #{v} = (int64_t)(#{expr(arg)});")
+        "(const uint8_t *)&#{v}, 8"
+      end
+    end
+
+    # A V as the map keeps it: itself, or moved into a new Shared(V).
+    def cmap_put_value(t, arg)
+      v = @types[t].elem
+      code = hoist(coerce(expr(arg), arg.ty, v), v)
+      return code unless @checker.owned?(v)
+      p = tmp
+      line("void *#{p} = #{helper('egg_shared_new')}(sizeof(#{c_type(v)}));")
+      line("*(#{c_type(v)} *)((char *)#{p} + 16) = #{code};")
+      hoist("(#{c_type(cmap_ve(t))}){ #{p} }", cmap_ve(t))
+    end
+
+    def cmap_call(m, obj, recv, args, ret)
+      if m == "Threads.map"
+        line("(void)#{recv};")
+        ve = cmap_ve(ret)
+        return hoist("(#{c_type(ret)}){ #{helper('egg_cmap_new')}(sizeof(#{c_type(ve)}), #{@checker.owned?(ve)}) }", ret)
+      end
+      t = obj.ty
+      ve = cmap_ve(t)
+      c = "#{hoist(recv, t)}.c"
+      owned = @checker.owned?(ve)
+      case m
+      when "ConcurrentMap.get", "ConcurrentMap.take"
+        k = cmap_key(t, args[0])
+        r = tmp
+        line("#{c_type(ret)} #{r} = { .has = false };")
+        line("#{r}.has = #{helper(m.end_with?('get') ? 'egg_cmap_get' : 'egg_cmap_take')}(#{c}, #{k}, &#{r}.value);")
+        r
+      when "ConcurrentMap.contains"
+        k = cmap_key(t, args[0])
+        hoist("#{helper('egg_cmap_get')}(#{c}, #{k}, NULL)", "bool")
+      when "ConcurrentMap.remove"
+        k = cmap_key(t, args[0])
+        old = tmp
+        line("#{c_type(ve)} #{old};")
+        had = hoist("#{helper('egg_cmap_take')}(#{c}, #{k}, &#{old})", "bool")
+        if owned
+          line("if (#{had}) #{drop(ve)}(#{old});")
+        else
+          line("(void)#{old};")
+        end
+        had
+      when "ConcurrentMap.put"
+        line("(void)#{expr(args[0])};")
+        k = cmap_key(t, args[1])
+        v = cmap_put_value(t, args[2])
+        r = tmp
+        line("#{c_type(ret)} #{r} = { .has = false };")
+        line("#{r}.has = #{helper('egg_cmap_put')}(#{c}, #{k}, &#{v}, &#{r}.value);")
+        r
+      when "ConcurrentMap.put_new"
+        line("(void)#{expr(args[0])};")
+        k = cmap_key(t, args[1])
+        v = cmap_put_value(t, args[2])
+        fresh = hoist("#{helper('egg_cmap_put_new')}(#{c}, #{k}, &#{v})", "bool")
+        line("if (!#{fresh}) #{drop(ve)}(#{v});") if owned
+        fresh
+      when "ConcurrentMap.add"
+        line("(void)#{expr(args[0])};")
+        k = cmap_key(t, args[1])
+        hoist("#{helper('egg_cmap_add')}(#{c}, #{k}, #{expr(args[2])})", "i64")
+      when "ConcurrentMap.put_if", "ConcurrentMap.remove_if"
+        put = m.end_with?("put_if")
+        line("(void)#{expr(args[0])};") if put
+        rest = put ? args[1..] : args
+        k = cmap_key(t, rest[0])
+        expected = hoist(expr(rest[1]), ve)
+        v = put ? cmap_put_value(t, rest[2]) : nil
+        old = tmp
+        line("#{c_type(ve)} #{old};")
+        ok = hoist("#{helper('egg_cmap_swap_if')}(#{c}, #{k}, &#{expected}, #{v.nil? ? 'NULL' : "&#{v}"}, &#{old}, #{cmap_eq(t)})", "bool")
+        if owned
+          line("if (#{ok}) #{drop(ve)}(#{old});")
+          line("if (!#{ok}) #{drop(ve)}(#{v});") if put
+        else
+          line("(void)#{old};")
+        end
+        ok
+      when "ConcurrentMap.count"
+        hoist("#{helper('egg_cmap_count')}(#{c})", "i64")
+      when "ConcurrentMap.entries"
+        line("(void)#{expr(args[0])};")
+        r = tmp
+        line("#{c_type(ret)} #{r} = { .ptr = NULL, .len = 0, .cap = 0 };")
+        line("#{helper('egg_cmap_each')}(#{c}, #{cmap_entry_fn(t, ret)}, &#{r});")
+        r
+      when "ConcurrentMap.clone"
+        hoist("(#{c_type(ret)}){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c}) }", ret)
+      else
+        "#{helper('egg_cmap_close')}(#{c}, #{cmap_value_drop(t)})"
+      end
+    end
+
     # threads.share and threads.atomic, and the methods of what they make.
     def shared_call(m, obj, recv, args, ret)
       case m
@@ -5054,6 +5591,7 @@ module Egg
       recv = expr(obj)
       return chan_call(m, obj, recv, args, ret) if m.start_with?("Sender.", "Receiver.") || m == "Threads.channel"
       return shared_call(m, obj, recv, args, ret) if m.start_with?("Shared.", "Atomic.") || %w[Threads.share Threads.atomic].include?(m)
+      return cmap_call(m, obj, recv, args, ret) if m.start_with?("ConcurrentMap.") || m == "Threads.map"
       codes = args.each_with_index.map do |a, i|
         a.is_a?(AddrOf) && a.expr.is_a?(SliceExpr) ? slice_expr(a.expr) : in_order(expr(a), a, args[(i + 1)..])
       end

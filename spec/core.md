@@ -2423,6 +2423,104 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
 }
 ```
 
+**Concurrent maps.** `threads.map(K, V)` is a `ConcurrentMap(K, V)`, a
+hash map that every thread holding one reads and changes at once, like
+Erlang's ETS or Go's `sync.Map`. K is text (`str` or `Buf(u8)`; the map
+keeps its own copy, and is looked up by any text) or an integer (E156
+otherwise); V is what a `Shared(V)` may hold (E155). A V that owns
+nothing is kept in place and read as a copy: `m.get(k)` is a `?V`. Any
+other V is kept as a `Shared(V)`: `m.get(k)` is a `?Shared(V)`, another
+holder of the value, read with `get` without copying and closed when
+done. Changing a value is putting a new one: whoever still holds the old
+one reads it as it was, and keeps it alive until it closes it.
+
+| Method | Does |
+| --- | --- |
+| `m.get(k)` | the value, or null |
+| `m.put(a, k, v)` | v in for k; the value it replaces, or null |
+| `m.put_new(a, k, v)` | v in, if k has none; whether it went in (if not, v is freed) |
+| `m.take(k)` | k's value taken out, or null |
+| `m.remove(k)` | k's value taken out and ended; whether there was one |
+| `m.contains(k)`, `m.count()` | whether k has a value; how many pairs there are |
+| `m.add(a, k, d)` | for a `ConcurrentMap(K, i64)`: d added to k's value (0 if new) in place; the sum (an overflow panics) |
+| `m.put_if(a, k, expected, v)` | v in, if k's value is still expected; whether it went in (if not, v is freed: a retry builds a new one) |
+| `m.remove_if(k, expected)` | k's value taken out and ended, if it is still expected |
+| `m.entries(a)` | a `Buf(MapEntry(K, V))`: every pair, `e.key` (text as a `Buf(u8)` of the caller's) and `e.val` as `get` gives it |
+| `m.clone()`, `m.close()` | another holder; one fewer, the last freeing every value |
+
+`expected` is what `get` gave, and is checked against the value k has
+when `put_if` runs, not against what happened since. A value kept in
+place (a number, `bool`, enum or `str`; E103 for others) is compared
+with `==`: if another thread changed it and changed it back, it matches.
+A `Shared(V)` is compared by identity, and no other value can take its
+place while the caller holds it, so a match means no other put came in
+between. Either way, on false, read again, build a new value and retry. No code of the program
+runs while the map is locked: a read only copies a value or holds a
+handle once more. The map is in shards, each a table behind its own lock
+(as many as four per CPU, rounded up to a power of two), so threads
+working on different keys seldom wait for each other; `count` and
+`entries` go shard by shard, each as it was at one moment.
+
+```egg
+// expect: ann
+// expect: put_if true, then false
+// expect: 2 rooms, 4000 hits from 4 threads
+uses alloc, io, thread
+
+const Room = struct {
+    name: Buf(u8)
+    members: Buf(Buf(u8))
+}
+
+fn room(a: Allocator, name: []u8, who: []u8) Room {
+    var members: Buf(Buf(u8)) = .empty
+    a.push(&members, a.concat(who, ""))
+    return Room{ .name = a.concat(name, ""), .members = members }
+}
+
+fn visit(a: Allocator, sink hits: ConcurrentMap(str, i64), sink done: Sender(i64)) void {
+    defer done.close()
+    var i = 0
+    while (i < 1000) {
+        _ = hits.add(a, "general", 1)
+        i = i + 1
+    }
+    hits.close()
+    done.send(1)
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const rooms = threads.map(Buf(u8), Room)
+    defer rooms.close()
+    _ = rooms.put_new(a, "general", room(a, "general", "ann"))
+    _ = rooms.put_new(a, "random", room(a, "random", "bob"))
+    const g = rooms.get("general") orelse return
+    defer g.close()
+    io.print(g.get().members[0])         // read in place
+    // A change made from what was read goes in only if the value is still
+    // that one: the same handle, so no other put came in between.
+    const first = rooms.put_if(a, "general", g, room(a, "general", "cy"))
+    const second = rooms.put_if(a, "general", g, room(a, "general", "dan"))
+    io.print("put_if ", first, ", then ", second)
+    const hits = threads.map(str, i64)
+    defer hits.close()
+    const done = threads.channel(i64, 4)
+    defer done.close()
+    var i = 0
+    while (i < 4) {
+        threads.spawn(visit, a, hits.clone(), done.sender()).detach()
+        i = i + 1
+    }
+    var finished = 0
+    while (done.recv()) |n| {
+        finished = finished + n
+    }
+    const all = rooms.entries(a)
+    defer a.free(all)                    // the keys, and a holder of each room
+    io.print(@len(all), " rooms, ", hits.get("general") orelse 0, " hits from ", finished, " threads")
+}
+```
+
 ```egg
 // expect: 4 readers saw 11 bytes
 // expect: hello world 2

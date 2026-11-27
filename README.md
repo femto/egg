@@ -435,7 +435,15 @@ v3 (memory without GC, and what realistic programs needed):
   with `s.get()` (lent, not copied; `s.copy(a)` gives a copy to change),
   held by more threads with `s.clone()` and freed by the last `s.close()`;
   `threads.atomic(n)` an `Atomic` i64 (`load`, `store`, `add` giving the new
-  value, `swap`, `compare_swap` giving the old one). `threads.channel(T, n)` returns
+  value, `swap`, `compare_swap` giving the old one); `threads.map(K, V)` a
+  `ConcurrentMap(K, V)`, a hash map every thread reads and changes (like
+  Erlang's ETS or Go's `sync.Map`): text or integer keys, values that own
+  nothing kept in place and the rest as `Shared(V)` read without copying,
+  `put`, `put_new`, `take`, `add` for counters, `put_if`/`remove_if` to
+  change a value only if it is still the expected one (equal, for values
+  kept in place; the same handle, for Shared ones), and `entries`.
+  A `Shared`, `Atomic` or map may be kept in a `Buf` or a struct; `a.free`
+  closes it. `threads.channel(T, n)` returns
   a `Receiver(T)` (with n of 0, `send` waits for the receiver), and
   `rx.sender()` a `Sender(T)`; `tx.send(v)` moves v, and `rx.recv()` gives
   null once every sender has closed and it is empty; `rx.recv_timeout(ms)`

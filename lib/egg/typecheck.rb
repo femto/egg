@@ -133,7 +133,7 @@ module Egg
       "UdpSocket" => { "recv_from" => [%w[Allocator inout_buffer i64], "!Addr"], "send_to" => [%w[Addr text], "!void"],
                        "set_timeout" => [["i64"], "!void"], "port" => [[], "i64"], "close" => [[], "void"] },
       "Addr" => { "port" => [[], "i64"] },
-      "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"], "share" => [[], "Shared"], "atomic" => [["i64"], "Atomic"] },
+      "Threads" => { "spawn" => [[], "Thread"], "channel" => [[], "Receiver"], "share" => [[], "Shared"], "atomic" => [["i64"], "Atomic"], "map" => [[], "ConcurrentMap"] },
       # An i64 every thread holding a clone reaches; add returns the new
       # value and panics on overflow, as + does; swap and compare_swap
       # return the old one (compare_swap stored new if it was expected).
@@ -163,7 +163,7 @@ module Egg
                        "push" => [%w[inout_buffer element], "void"], "pop" => [["inout_buffer"], "?T"] }
     }.freeze
     # Type names the language defines; no declaration may take them.
-    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend Shared MultiArrayList]).freeze
+    RESERVED_TYPES = (PRIMS + FS_VALUE_TYPES + NET_VALUE_TYPES + %w[Buf Sender Receiver TrySend Shared MultiArrayList ConcurrentMap MapEntry]).freeze
     ARITH_OPS = %w[+ - * / %].freeze
     ORDER_OPS = %w[< <= > >=].freeze
     # Integers only, both sides of one type.
@@ -899,6 +899,11 @@ module Egg
         begin
           case what
           when :shared then shared_value_error(elem, line, col)
+          when :cmap then shared_value_error(elem, line, col, "a ConcurrentMap's value")
+          when :map_entry
+            info = @types[elem]
+            entry = @types["MapEntry(#{info.inner}, #{info.elem})"]
+            entry.fields << ["val", cmap_value(info.elem, line, col), line] if entry.fields.length == 1
           when :soa then soa_elem_error(elem, line, col)
           when :owned_err then owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
           else resource_elem_error(elem, what, line, col)
@@ -1104,6 +1109,8 @@ module Egg
         return chan_type(t.name, args, line, col) if %w[Sender Receiver].include?(t.name)
         return try_send_type(args, line, col) if t.name == "TrySend"
         return shared_type(args, line, col) if t.name == "Shared"
+        return cmap_type(args, line, col) if t.name == "ConcurrentMap"
+        return map_entry_of(args, line, col) if t.name == "MapEntry"
         return soa_type(args, line, col) if t.name == "MultiArrayList"
         instantiate_type_fn(qualify(t.name), args, line, col, t.name)
       when PtrType
@@ -1220,24 +1227,177 @@ module Egg
     end
 
     # E155 for a T no Shared(T) can hold.
-    def shared_value_error(t, line, col)
+    def shared_value_error(t, line, col, what = "a shared value")
       r = any_resource(t)
       unless r.nil?
         held = r == t ? "" : " (it holds a #{r})"
-        err("E155", "a shared value cannot be a #{t}#{held}: #{r} is an owned struct, which copying could not duplicate; share the data it holds", line, col)
+        err("E155", "#{what} cannot be a #{t}#{held}: #{r} is an owned struct, which copying could not duplicate; share the data it holds", line, col)
         return true
       end
       p = ptr_in(t)
       return false if p.nil?
-      err("E155", "a shared value cannot hold a pointer (#{p}): what it points at could change under other threads", line, col)
+      err("E155", "#{what} cannot hold a pointer (#{p}): what it points at could change under other threads", line, col)
       true
+    end
+
+    # ConcurrentMap(K, V): a hash map every thread holding one reads and
+    # changes, a handle like a Shared(T). K is text (str or Buf(u8), the
+    # map keeping a copy) or an integer. A V that owns nothing is kept in
+    # place and read as a copy; any other is kept as a Shared(V), and read
+    # as another holder of it. info.elem is V, info.inner K.
+    def cmap_type(args, line, col)
+      if args.length != 2
+        err("E104", "ConcurrentMap takes a key type and a value type, but #{args.length} were given", line, col)
+        return "error"
+      end
+      k, v = args
+      return "error" if k == "error" || v == "error"
+      unless cmap_text_key?(k) || INT_TYPES.include?(k)
+        err("E156", "a ConcurrentMap's key is text (str or Buf(u8)) or an integer, not #{k}", line, col)
+        return "error"
+      end
+      return value_type_error(v, "a ConcurrentMap's value", line, col) unless storable?(v)
+      return owned_place_error(v, "a ConcurrentMap's value", line, col) if owned_err?(v)
+      if @registering.positive?
+        @elem_checks << [v, :cmap, line, col, @mod]
+      elsif shared_value_error(v, line, col, "a ConcurrentMap's value")
+        return "error"
+      end
+      canon = "ConcurrentMap(#{k}, #{v})"
+      info = register(canon, :struct, line, col)
+      info.resource = true
+      info.fields = []
+      info.elem = v
+      info.inner = k
+      info.mod = ""
+      canon
+    end
+
+    def cmap?(t)
+      t.start_with?("ConcurrentMap(") && chan_end?(t)
+    end
+    public :cmap?
+
+    def cmap_text_key?(k)
+      k == "str" || k == "Buf(u8)"
+    end
+    public :cmap_text_key?
+
+    # What a map with values of type v gives for one: v itself when it owns
+    # nothing, else a Shared(v).
+    def cmap_value(v, line = nil, col = nil)
+      owned?(v) ? shared_type([v], line, col) : v
+    end
+    public :cmap_value
+
+    # MapEntry(K, V): what entries gives for each pair, a key of the
+    # caller's own (text as a Buf(u8)) and the value as get gives it.
+    def map_entry_type(t, line, col)
+      info = @types[t]
+      k = cmap_text_key?(info.inner) ? resolve_type(GenericType.new("Buf", ["u8"]), line, col) : info.inner
+      canon = "MapEntry(#{info.inner}, #{info.elem})"
+      return canon if @types.key?(canon)
+      e = register(canon, :struct, line, col)
+      e.mod = ""
+      if @registering.positive?
+        # Whether V owns something (so the value is a Shared(V)) is known
+        # once the types being registered are: Node(T) with a field of
+        # Buf(MapEntry(i64, @This())). The key alone until then.
+        e.fields = [["key", k, line]]
+        @elem_checks << [t, :map_entry, line, col, @mod]
+      else
+        e.fields = [["key", k, line], ["val", cmap_value(info.elem, line, col), line]]
+      end
+      canon
+    end
+
+    # MapEntry(K, V) as written: the entry type of a ConcurrentMap(K, V).
+    def map_entry_of(args, line, col)
+      if args.length != 2
+        err("E104", "MapEntry takes a key type and a value type, but #{args.length} were given", line, col)
+        return "error"
+      end
+      t = cmap_type(args, line, col)
+      t == "error" ? "error" : map_entry_type(t, line, col)
+    end
+
+    # threads.map(K, V): a new, empty ConcurrentMap(K, V).
+    def check_map(e, args, line, col)
+      @current.direct["thread"] ||= [line, col, "Threads.map"]
+      if args.length != 2
+        err("E104", "'map' takes a key type and a value type, but #{args.length} were given", line, col)
+        return check_all_error(args)
+      end
+      k = type_arg(args[0])
+      v = type_arg(args[1])
+      return "error" if k == "error" || v == "error"
+      t = cmap_type([k, v], line, col)
+      return "error" if t == "error"
+      e.info[:cap_method] = "Threads.map"
+      e.info[:args] = []
+      e.info[:params] = []
+      t
+    end
+
+    CMAP_METHODS = %w[get put put_new take remove contains count add put_if remove_if entries clone close].freeze
+
+    def check_cmap_method(e, obj, t, name, args, line, col)
+      info = @types[t]
+      k = info.inner
+      v = info.elem
+      ve = cmap_value(v, line, col)
+      @current.direct["thread"] ||= [line, col, "ConcurrentMap.#{name}"]
+      unless CMAP_METHODS.include?(name)
+        err("E122", "ConcurrentMap has no method '#{name}' (methods: #{CMAP_METHODS.join(', ')})", line, col)
+        return check_all_error(args)
+      end
+      check_borrowed(obj, t) unless name == "close"
+      # A text key is any text, passed as a []u8.
+      key = [cmap_text_key?(k) ? resolve_type(SliceType.new("u8"), line, col) : k, nil]
+      value = [v, owned?(v) ? "sink" : nil]
+      al = ["Allocator", nil]
+      params = case name
+               when "get", "take", "remove", "contains" then [key]
+               when "put", "put_new" then [al, key, value]
+               when "add" then [al, key, ["i64", nil]]
+               when "put_if" then [al, key, [ve, nil], value]
+               when "remove_if" then [key, [ve, nil]]
+               when "entries" then [al]
+               else []
+               end
+      if name == "add" && v != "i64"
+        err("E103", "'add' adds to the values of a ConcurrentMap(#{k}, i64), not of #{t}", line, col)
+        return check_all_error(args)
+      end
+      if %w[put_if remove_if].include?(name) && !owned?(v) && !cmap_comparable?(v)
+        err("E103", "'#{name}' compares the value with ==, which a #{v} does not have", line, col)
+        return check_all_error(args)
+      end
+      check_args(Sig.new(name, params, "void"), args, name, line, col)
+      @current.direct["alloc"] ||= [line, col, "ConcurrentMap.#{name}"] if params.first == al
+      e.info[:cap_method] = "ConcurrentMap.#{name}"
+      e.info[:args] = args
+      e.info[:params] = params
+      case name
+      when "get", "put", "take" then opt_type(ve)
+      when "put_new", "remove", "contains", "put_if", "remove_if" then "bool"
+      when "count", "add" then "i64"
+      when "entries" then buf_type([map_entry_type(t, line, col)], line, col)
+      when "clone" then t
+      else "void"
+      end
+    end
+
+    # Values put_if and remove_if compare in the map: those == takes.
+    def cmap_comparable?(v)
+      INT_TYPES.include?(v) || FLOAT_TYPES.include?(v) || %w[bool str].include?(v) || @types[v]&.kind == :enum
     end
 
     # A Shared(T) or an Atomic: a handle that a.free ends as close does,
     # by dropping its count of holders (the last frees what it holds), so
     # it may live in a Buf or a struct like a buffer.
     def self_ending?(t)
-      shared?(t) || t == "Atomic"
+      shared?(t) || t == "Atomic" || cmap?(t)
     end
     public :self_ending?
 
@@ -1612,7 +1772,15 @@ module Egg
       info.mod = f.mod || ""
       info.fn_line = f.line
       info.return_line = body[0].line
-      outside_aliases { with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) } }
+      # As for a declared struct: checks that need its fields wait until
+      # they are all resolved (Node(T) { kids: ConcurrentMap(i64, @This()) }).
+      @registering += 1
+      begin
+        outside_aliases { with_env(tenv, canon, f.mod) { info.fields = resolve_fields(st.members) } }
+      ensure
+        @registering -= 1
+      end
+      flush_elem_checks if @registering.zero?
       outside_aliases do
         in_module(f.mod) do
           st.fns.each do |m|
@@ -2847,10 +3015,16 @@ module Egg
       local = lookup(written)
       return check_indirect_call(e, local, args, written, line, col) unless local.nil?
       name = qualify(written)
-      if written == "Buf" || written == "MultiArrayList"
+      if %w[Buf MultiArrayList Shared ConcurrentMap MapEntry].include?(written)
         types = args.map { |a| type_arg(a) }
         return "error" if types.include?("error")
-        e.info[:type] = written == "Buf" ? buf_type(types, line, col) : soa_type(types, line, col)
+        e.info[:type] = case written
+                        when "Buf" then buf_type(types, line, col)
+                        when "MultiArrayList" then soa_type(types, line, col)
+                        when "Shared" then shared_type(types, line, col)
+                        when "ConcurrentMap" then cmap_type(types, line, col)
+                        else map_entry_of(types, line, col)
+                        end
         return e.info[:type] == "error" ? "error" : "type"
       end
       if @type_fns.key?(name)
@@ -2980,6 +3154,7 @@ module Egg
       return check_spawn(e, args, line, col) if t == "Threads" && name == "spawn"
       return check_channel(e, args, line, col) if t == "Threads" && name == "channel"
       return check_share(e, args, line, col) if t == "Threads" && name == "share"
+      return check_map(e, args, line, col) if t == "Threads" && name == "map"
       # The receiver is an operand too: an argument must not take it
       # (x.add(close(x))) before it is used.
       if soa?(t)
@@ -2987,8 +3162,11 @@ module Egg
         check_nested_writes([obj] + args)
         return r
       end
-      if shared?(t) || chan_end?(t)
-        r = shared?(t) ? check_shared_method(e, obj, t, name, args, line, col) : check_chan_method(e, t, name, args, line, col)
+      if shared?(t) || cmap?(t) || chan_end?(t)
+        r = if shared?(t) then check_shared_method(e, obj, t, name, args, line, col)
+            elsif cmap?(t) then check_cmap_method(e, obj, t, name, args, line, col)
+            else check_chan_method(e, t, name, args, line, col)
+            end
         check_nested_writes([obj] + args)
         return r
       end
@@ -4229,12 +4407,20 @@ module Egg
     # The type an expression names (K, str, i64, Point, m.Point), or nil
     # when it is not a type; reports nothing.
     def comptime_type(e)
-      # Buf(T) names a buffer type when T does (K == Buf(u8)); MultiArrayList(T) too.
-      if e.is_a?(Call) && %w[Buf MultiArrayList].include?(e.name) && e.args.length == 1
-        elem = comptime_type(e.args[0])
-        return nil if elem.nil?
+      # Buf(T) names a buffer type when T does (K == Buf(u8)); so do the
+      # other built-in type constructors, with one or two types.
+      arity = { "Buf" => 1, "MultiArrayList" => 1, "Shared" => 1, "ConcurrentMap" => 2, "MapEntry" => 2 }
+      if e.is_a?(Call) && arity[e.name] == e.args.length
+        types = e.args.map { |a| comptime_type(a) }
+        return nil if types.include?(nil)
         before = @diagnostics.length
-        t = e.name == "Buf" ? buf_type([elem], e.line, e.col) : soa_type([elem], e.line, e.col)
+        t = case e.name
+            when "Buf" then buf_type(types, e.line, e.col)
+            when "MultiArrayList" then soa_type(types, e.line, e.col)
+            when "Shared" then shared_type(types, e.line, e.col)
+            when "ConcurrentMap" then cmap_type(types, e.line, e.col)
+            else map_entry_of(types, e.line, e.col)
+            end
         if @diagnostics.length > before || t == "error"
           @diagnostics.slice!(before..)
           return nil
