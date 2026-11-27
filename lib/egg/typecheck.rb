@@ -900,6 +900,10 @@ module Egg
           case what
           when :shared then shared_value_error(elem, line, col)
           when :cmap then shared_value_error(elem, line, col, "a ConcurrentMap's value")
+          when :map_entry
+            info = @types[elem]
+            entry = @types["MapEntry(#{info.inner}, #{info.elem})"]
+            entry.fields << ["val", cmap_value(info.elem, line, col), line] if entry.fields.length == 1
           when :soa then soa_elem_error(elem, line, col)
           when :owned_err then owned_place_error(elem, "a Buf element", line, col) if owned_err?(elem)
           else resource_elem_error(elem, what, line, col)
@@ -1294,8 +1298,16 @@ module Egg
       canon = "MapEntry(#{info.inner}, #{info.elem})"
       return canon if @types.key?(canon)
       e = register(canon, :struct, line, col)
-      e.fields = [["key", k, line], ["val", cmap_value(info.elem, line, col), line]]
       e.mod = ""
+      if @registering.positive?
+        # Whether V owns something (so the value is a Shared(V)) is known
+        # once the types being registered are: Node(T) with a field of
+        # Buf(MapEntry(i64, @This())). The key alone until then.
+        e.fields = [["key", k, line]]
+        @elem_checks << [t, :map_entry, line, col, @mod]
+      else
+        e.fields = [["key", k, line], ["val", cmap_value(info.elem, line, col), line]]
+      end
       canon
     end
 
@@ -4395,12 +4407,20 @@ module Egg
     # The type an expression names (K, str, i64, Point, m.Point), or nil
     # when it is not a type; reports nothing.
     def comptime_type(e)
-      # Buf(T) names a buffer type when T does (K == Buf(u8)); MultiArrayList(T) too.
-      if e.is_a?(Call) && %w[Buf MultiArrayList].include?(e.name) && e.args.length == 1
-        elem = comptime_type(e.args[0])
-        return nil if elem.nil?
+      # Buf(T) names a buffer type when T does (K == Buf(u8)); so do the
+      # other built-in type constructors, with one or two types.
+      arity = { "Buf" => 1, "MultiArrayList" => 1, "Shared" => 1, "ConcurrentMap" => 2, "MapEntry" => 2 }
+      if e.is_a?(Call) && arity[e.name] == e.args.length
+        types = e.args.map { |a| comptime_type(a) }
+        return nil if types.include?(nil)
         before = @diagnostics.length
-        t = e.name == "Buf" ? buf_type([elem], e.line, e.col) : soa_type([elem], e.line, e.col)
+        t = case e.name
+            when "Buf" then buf_type(types, e.line, e.col)
+            when "MultiArrayList" then soa_type(types, e.line, e.col)
+            when "Shared" then shared_type(types, e.line, e.col)
+            when "ConcurrentMap" then cmap_type(types, e.line, e.col)
+            else map_entry_of(types, e.line, e.col)
+            end
         if @diagnostics.length > before || t == "error"
           @diagnostics.slice!(before..)
           return nil

@@ -1,12 +1,13 @@
-// error: E156 @15
 // error: E156 @16
-// error: E155 @17
+// error: E156 @17
 // error: E155 @18
-// error: E103 @22
+// error: E155 @19
 // error: E103 @23
-// error: E133 @24
-// error: E122 @25
-// error: E155 @32
+// error: E103 @24
+// error: E133 @25
+// error: E122 @26
+// error: E155 @33
+// error: E155 @48
 uses alloc, net, thread
 
 const P = struct { x: i64 }
@@ -34,3 +35,14 @@ fn Node(comptime T: type) type {
     }
 }
 fn nodes(n: Node(i64)) void {}
+
+// MapEntry's value is decided once the struct holding it is complete: a
+// Shared(Tree(i64)), so Tree holds a Shared and cannot be a map's value.
+fn Tree(comptime T: type) type {
+    return struct {
+        seen: Buf(MapEntry(i64, @This()))
+        name: Buf(u8)
+        v: T
+    }
+}
+fn trees(m: ConcurrentMap(i64, Tree(i64))) void {}

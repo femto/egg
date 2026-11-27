@@ -1,0 +1,20 @@
+// Comptime type tests see Shared, ConcurrentMap and MapEntry as types.
+// expect: 1230
+uses io, thread
+
+fn kind(comptime T: type) i64 {
+    if (T == ConcurrentMap(i64, i64)) {
+        return 1
+    }
+    if (T == Shared(i64)) {
+        return 2
+    }
+    if (T == MapEntry(i64, i64)) {
+        return 3
+    }
+    return 0
+}
+
+fn main(io: Io) void {
+    io.print(kind(ConcurrentMap(i64, i64)), kind(Shared(i64)), kind(MapEntry(i64, i64)), kind(i64))
+}
