@@ -1,0 +1,24 @@
+// error: E103 @13
+// error: E103 @14
+// error: E103 @17
+// error: E125 @20
+uses io
+
+const P = struct {
+    x: i64
+}
+
+fn main(io: Io) void {
+    const n = 3
+    const b = @hasDecl(P, "x")
+    if (@hasField(P, "x") and n > 0) {
+        io.print(1)
+    }
+    if (@hasDecl(P, n)) {
+        io.print(2)
+    }
+    if (@hasField(n, "x")) {
+        io.print(3)
+    }
+    io.print(b)
+}

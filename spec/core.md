@@ -1636,6 +1636,55 @@ fn main(io: Io) void {
 }
 ```
 
+**Choosing by what a type declares.** `@hasDecl(T, "name")` is true when
+T has a method of that name and `@hasField(T, "name")` when it has a field
+of that name (a union's member, an enum's value). They are conditions of
+the same kind and join type comparisons with `and`, `or` and `!`, so code
+calls a method only for the types that have it. Only types the program
+declares, itself or through a type function, have methods and fields
+here: for `i64`, `str`, `Buf(T)` and the other built-in types both are
+false. The name is a string literal, and both are used nowhere else (E103).
+
+```egg
+// expect: 12
+// expect: 5
+// expect: 7
+// expect: -1
+uses io
+
+const Point = struct {
+    x: i64
+    y: i64
+
+    fn code(self: Point) i64 {
+        return self.x * 10 + self.y
+    }
+}
+
+const Size = struct {
+    x: i64
+}
+
+fn code(comptime T: type, v: T) i64 {
+    if (@hasDecl(T, "code")) {
+        return v.code()
+    } else if (@hasField(T, "x")) {
+        return v.x
+    } else if (T == i64) {
+        return v
+    } else {
+        return -1
+    }
+}
+
+fn main(io: Io) void {
+    io.print(code(Point, Point{ .x = 1, .y = 2 }))
+    io.print(code(Size, Size{ .x = 5 }))
+    io.print(code(i64, 7))
+    io.print(code(str, "abc"))
+}
+```
+
 ```egg
 // error: E146
 uses io
@@ -1662,6 +1711,8 @@ Builtins start with `@`; any other name is E112.
 | `@len(x)` | length of an array, a slice, a `Buf` or a `str`, as `i64` |
 | `@sizeOf(T)` | size of a value of type T in bytes, as `i64` |
 | `@typeName(T)` | the type's name, as a `str` |
+| `@hasDecl(T, "m")` | whether the type T declares the method m; only in an `if` condition, which it decides at compile time (section 14) |
+| `@hasField(T, "f")` | whether the type T has the field f (a union's member, an enum's value); only in an `if` condition, as `@hasDecl` (section 14) |
 | `@errorName(e)` | the name of the error `e: anyerror`, without `error.`, as a `str` (section 13) |
 | `@compileError("msg")` | E146 with that message wherever it is checked: everywhere except in a comptime `if` branch that is not chosen (section 14); msg must be a string literal |
 | `@splat(v)` | an array with every element `v`; the array type comes from context (E115) |
