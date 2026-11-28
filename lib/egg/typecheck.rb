@@ -4489,7 +4489,14 @@ module Egg
       # Buf(T) names a buffer type when T does (K == Buf(u8)); so do the
       # other built-in type constructors, with one or two types.
       arity = { "Buf" => 1, "MultiArrayList" => 1, "Shared" => 1, "ConcurrentMap" => 2, "MapEntry" => 2 }
-      # A type function's instance names a type too (T == Pair(i64)).
+      # A type function's instance names a type too (T == Pair(i64)), in
+      # another module as well (T == m.Pair(i64)).
+      if e.is_a?(MethodCall) && !module_ref(e.obj).nil? && @type_fns.key?(qualify("#{e.obj.name}.#{e.name}"))
+        types = e.args.map { |a| comptime_type(a) }
+        return nil if types.include?(nil)
+        t = instantiate_type_fn(qualify("#{e.obj.name}.#{e.name}"), types, e.line, e.col, "#{e.obj.name}.#{e.name}")
+        return t == "error" ? nil : t
+      end
       if e.is_a?(Call) && (arity[e.name] == e.args.length || @type_fns.key?(qualify(e.name)))
         types = e.args.map { |a| comptime_type(a) }
         return nil if types.include?(nil)

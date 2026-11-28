@@ -1,0 +1,11 @@
+// Types for examples/has_decl.egg.
+
+fn Box(comptime T: type) type {
+    return struct {
+        v: T
+
+        fn get(self: @This()) T {
+            return self.v
+        }
+    }
+}
