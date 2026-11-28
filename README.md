@@ -294,9 +294,10 @@ v3 (memory without GC, and what realistic programs needed):
   `bin/eggc run app.egg --pkg http=DIR` makes `@import("http")` `DIR/http.egg` and
   `@import("http/client")` `DIR/client.egg`. `std/map` has `HashMap(K, V)`, in
   insertion order until the first remove, hashed with SipHash-1-3 under a
-  random key of its own (as `ConcurrentMap` is; `EGG_HASH_SEED` fixes it): `init()` for str, `Buf(u8)` and
-  integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
-  `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
+  random key of its own (as `ConcurrentMap` is; `EGG_HASH_SEED` fixes it): `init()` for any key with a canonical form (text, integers, bool,
+  enums, and structs, arrays and unions of them, text inside them a
+  `Buf(u8)`), which hashes and compares field by field with nothing to
+  write (a float keys by `@floatBits(x)`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
   `std/text` searches and takes text apart (`find`, `find_from`, `contains`,
   `starts_with`, `ends_with`, `is_utf8`, `trim`, `strip` (a part, not a copy), `split`,

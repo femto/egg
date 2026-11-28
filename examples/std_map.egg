@@ -1,5 +1,5 @@
-// std/map's HashMap(K, V): str and integer keys hash by themselves, other
-// keys take functions; values may own buffers. Pairs keep insertion order,
+// std/map's HashMap(K, V): keys hash and compare by what they hold, a
+// struct field by field; values may own buffers. Pairs keep insertion order,
 // and a removal moves the last pair into the gap.
 // expect: the 3
 // expect: cat 2
@@ -27,14 +27,6 @@ uses alloc, io
 const map = @import("std/map")
 
 const Point = struct { x: i64, y: i64 }
-
-fn point_hash(p: Point) i64 {
-    return p.x * 1000 + p.y
-}
-
-fn point_eq(p: Point, q: Point) bool {
-    return p.x == q.x and p.y == q.y
-}
 
 fn main(io: Io, a: Allocator) void {
     // counting words
@@ -111,7 +103,7 @@ fn main(io: Io, a: Allocator) void {
     io.print(@len(squares.index) <= 8192)
 
     // struct keys with their own hash and eq
-    var grid = map.HashMap(Point, str).init_with(point_hash, point_eq)
+    var grid = map.HashMap(Point, str).init()
     defer a.free(grid)
     grid.put(a, Point{ .x = 1, .y = 2 }, "a")
     grid.put(a, Point{ .x = 3, .y = 4 }, "b")

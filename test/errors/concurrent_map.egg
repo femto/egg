@@ -1,5 +1,5 @@
-// error: E156 @16
-// error: E156 @17
+// error: E157 @16
+// error: E157 @17
 // error: E155 @18
 // error: E155 @19
 // error: E103 @23

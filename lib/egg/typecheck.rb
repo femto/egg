@@ -176,11 +176,14 @@ module Egg
                       "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
                       "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1,
-                      "mulWide" => 2, "hashSeed" => 0, "hash" => 2 }.freeze
+                      "mulWide" => 2, "hashSeed" => 0, "hash" => 2, "eql" => 2, "keyBytes" => 2, "checkKey" => 1,
+                      "floatBits" => 1 }.freeze
     # Builtins only the standard library may call: std/text's parse_float
     # is @parseF64, which the C library's strtod rounds; std/map hashes a
     # key with @hash under a seed of its own from @hashSeed.
-    STD_BUILTINS = %w[parseF64 hashSeed hash].freeze
+    # @eql compares two keys as @hash sees them; @keyBytes writes a key's
+    # canonical bytes, the definition both follow (for std's own tests).
+    STD_BUILTINS = %w[parseF64 hashSeed hash eql keyBytes checkKey].freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr bufPtr sliceFromPtr].freeze
     BUILTINS = BUILTIN_ARITY.keys.freeze
@@ -1253,8 +1256,12 @@ module Egg
       end
       k, v = args
       return "error" if k == "error" || v == "error"
-      unless cmap_text_key?(k) || INT_TYPES.include?(k)
-        err("E156", "a ConcurrentMap's key is text (str or Buf(u8)) or an integer, not #{k}", line, col)
+      why = key_error(k)
+      if why.nil? && !(cmap_text_key?(k) || INT_TYPES.include?(k))
+        why = "a ConcurrentMap's key is text (str or Buf(u8)) or an integer, not #{k}"
+      end
+      unless why.nil?
+        err("E157", why, line, col)
         return "error"
       end
       return value_type_error(v, "a ConcurrentMap's value", line, col) unless storable?(v)
@@ -1387,6 +1394,71 @@ module Egg
       when "clone" then t
       else "void"
       end
+    end
+
+    def text_type?(t)
+      t == "str" || t == "[]u8" || t == "Buf(u8)"
+    end
+
+    # A map key, checked: text, or anything key_error accepts.
+    def key_arg(k)
+      t = slice_expr?(k) ? check_slice_arg(k, nil) : check_expr(k)
+      return t if t == "error"
+      why = key_error(t)
+      err("E157", why, k.line, k.col) unless why.nil?
+      check_borrowed(k, t) if owned?(t)
+      t
+    end
+
+    # Why t cannot be a map key, or nil. A key is hashed and compared by
+    # its canonical bytes: an integer as its type's width of bytes, least
+    # significant first; a bool as 0 or 1; an enum as its member's index
+    # (4 bytes); a union as its member's index, then that member; a
+    # struct as its fields, an array as its elements, in order; text as
+    # its bytes, after its length (8 bytes) inside another key (never
+    # padding). Text inside another key is a Buf(u8), which a map can copy.
+    def key_error(t, top = true, seen = {})
+      return nil if INT_TYPES.include?(t) || t == "bool"
+      return nil if top && text_type?(t)
+      return "a str inside a map key would point at text the map does not own; make the field a Buf(u8)" if t == "str"
+      return nil if t == "Buf(u8)"
+      if FLOAT_TYPES.include?(t)
+        return "#{t} cannot be a map key: NaN is not equal to itself and -0.0 is equal to 0.0, so equal keys could hash apart; key by @floatBits(x), the #{t == "f32" ? "u32" : "u64"} of its bits, or by a scaled integer"
+      end
+      info = @types[t]
+      return "#{t} cannot be a map key" if info.nil?
+      return "#{t} cannot be a map key: a pointer's address says nothing of what it points at; key by an id or a name" if info.kind == :ptr
+      return "a map key cannot hold a #{t}: key by an id, a number or text that names it" if info.resource || FILE_TYPES.key?(t)
+      return nil if seen[t]
+      seen[t] = true
+      case info.kind
+      when :enum then nil
+      when :struct
+        (info.fields || []).each do |f, ft, _|
+          why = key_error(ft, false, seen)
+          return "#{t} cannot be a map key: field '#{f}' #{key_part(ft, why)}" unless why.nil?
+        end
+        nil
+      when :array
+        why = key_error(info.elem, false, seen)
+        why.nil? ? nil : "#{t} cannot be a map key: #{why}"
+      when :union
+        (info.fields || []).each do |m, ft, _|
+          next if ft == "void"
+          why = key_error(ft, false, seen)
+          return "#{t} cannot be a map key: member '#{m}' #{key_part(ft, why)}" unless why.nil?
+        end
+        nil
+      when :opt, :err then "#{t} cannot be a map key: unwrap it, or key by a union with a member for null"
+      else "#{t} cannot be a map key"
+      end
+    end
+    public :key_error
+
+    # "is a f32: ..." for a part of type ft that key_error refused.
+    def key_part(ft, why)
+      prefix = "#{ft} cannot be a map key: "
+      why.start_with?(prefix) ? "is a #{ft}: #{why[prefix.length..]}" : "is a #{ft}: #{why}"
     end
 
     # Values put_if and remove_if compare in the map: those == takes.
@@ -4806,16 +4878,41 @@ module Egg
         # EGG_HASH_SEED's) it keys the map's SipHash.
         "i64"
       when "hash"
-        # @hash(seed, k): the SipHash-1-3 of the key k under seed: text by
-        # its bytes, an integer by its type's width of bytes.
+        # @hash(seed, k): the SipHash-1-3 of the key k's canonical bytes
+        # (see key_error) under seed.
         expect_type("i64", check_expr(a, "i64"), a)
-        k = args[1]
-        t = slice_expr?(k) ? check_slice_arg(k, nil) : check_expr(k)
-        unless t == "error" || t == "str" || t == "[]u8" || t == "Buf(u8)" || INT_TYPES.include?(t)
-          err("E103", "@hash takes text or an integer, found #{t}", k.line, k.col)
-        end
-        check_borrowed(k, t) if t == "Buf(u8)"
+        key_arg(args[1])
         "i64"
+      when "eql"
+        # @eql(x, y): are two keys the same, as their canonical bytes are?
+        t = key_arg(a)
+        u = key_arg(args[1])
+        err("E103", "@eql compares two keys of one type, found #{t} and #{u}", line, col) unless t == "error" || u == "error" || t == u || (text_type?(t) && text_type?(u))
+        "bool"
+      when "keyBytes"
+        # @keyBytes(a, k): the canonical bytes of the key k.
+        expect_type("Allocator", check_expr(a), a)
+        @current.direct["alloc"] ||= [line, col, "@keyBytes"]
+        key_arg(args[1])
+        resolve_type(GenericType.new("Buf", ["u8"]), line, col)
+      when "checkKey"
+        # @checkKey(K): E157 now if K cannot be a map key, before any key
+        # is hashed (std/map's init).
+        t = type_arg(a)
+        unless t == "error"
+          why = key_error(t)
+          err("E157", why, line, col) unless why.nil?
+        end
+        "void"
+      when "floatBits"
+        # @floatBits(x): the IEEE 754 bits of a float, as an unsigned
+        # integer of its width (to key a map by a float, for one).
+        t = check_expr(a)
+        unless t == "error" || FLOAT_TYPES.include?(t)
+          err("E103", "@floatBits takes an f32 or an f64, found #{t}", a.line, a.col)
+          return "error"
+        end
+        t == "f32" ? "u32" : "u64"
       when "swap"
         check_elem_swap(args, line, col)
       when "forget"

@@ -1,12 +1,11 @@
-// HashMap(K, V).init() takes str, Buf(u8) or integer keys; others need init_with.
+// A HashMap key hashes and compares by its canonical bytes, which a float
+// does not have (NaN is not equal to itself): E157, pointing at @floatBits.
 uses alloc
 
 const map = @import("std/map")
 
-const Point = struct { x: i64, y: i64 }
-
 fn main(a: Allocator) void {
-    const m = map.HashMap(Point, i64).init()
+    const m = map.HashMap(f64, i64).init()
     a.free(m)
 }
-// error: E146 @std/map.egg:60
+// error: E157 @std/map.egg:56

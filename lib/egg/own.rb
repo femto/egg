@@ -1050,7 +1050,7 @@ module Egg
         # @len, @strPtr, @bufPtr and @hash look at a buffer without taking it.
         # Through @bufPtr C may write it, so no slice of it may be in use.
         check_slices(place_path(args[0]), e.line, e.col, "written through @bufPtr", place_root(args[0])) if name == "bufPtr"
-        args.each { |a| walk(a, %w[len strPtr bufPtr hash].include?(name)) }
+        args.each { |a| walk(a, %w[len strPtr bufPtr hash eql keyBytes].include?(name)) }
       in Field[obj:, line:, col:]
         path = path_of(e)
         if path.nil?

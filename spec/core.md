@@ -1673,6 +1673,7 @@ Builtins start with `@`; any other name is E112.
 | `@forget(v)` | ends the owned struct v without running anything; only in the file that declares its type (section 21) |
 | `@secureZero(&x)`, `@secureZero(&x[lo..hi])` | sets every byte of a place, or of a writable slice, to zero with stores the C compiler must keep, even when nothing reads the place again (where it may drop a plain assignment): for keys and other secrets, usually as `defer @secureZero(&key)`; the place must own nothing (E103: free a `Buf`, after zeroing its bytes with `&b[0..]`) |
 | `@mulWide(a, b)` | the whole product of two `u64`, which can need 128 bits, as `[2]u64{ low, high }`: `a * b` is `low + high * 2^64`; for bignum and field arithmetic, whose limbs are then 64 bits (`*` panics past 64 bits and `*%` drops the high half) |
+| `@floatBits(x)` | the IEEE 754 bits of an `f32` or `f64`, as a `u32` or `u64`: a float as a map key (where `-0.0` and `0.0` are two keys, and a NaN is one), or written out bit for bit |
 | `@This()` | inside a struct or union: its own type |
 | `@import("m.egg")` | another file as a module; only as `const m = @import(...)` at the top level (section 16, E129) |
 | `@as(T, x)` | the number x as number type T; to an integer type it panics `integer cast out of range` (from an integer) or `float cast out of range` (from a float) if it does not fit (section 7) |
@@ -2426,7 +2427,7 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
 **Concurrent maps.** `threads.map(K, V)` is a `ConcurrentMap(K, V)`, a
 hash map that every thread holding one reads and changes at once, like
 Erlang's ETS or Go's `sync.Map`. K is text (`str` or `Buf(u8)`; the map
-keeps its own copy, and is looked up by any text) or an integer (E156
+keeps its own copy, and is looked up by any text) or an integer (E157
 otherwise); V is what a `Shared(V)` may hold (E155). A V that owns
 nothing is kept in place and read as a copy: `m.get(k)` is a `?V`. Any
 other V is kept as a `Shared(V)`: `m.get(k)` is a `?Shared(V)`, another
@@ -2471,6 +2472,17 @@ or not; a `HashMap`'s are too until its first `remove`, which moves the
 last pair into the gap. The environment
 variable `EGG_HASH_SEED` (a number) replaces the random key, to make a
 run's internal layout repeat while debugging.
+
+A key hashes and compares by its canonical bytes, so a struct, an enum, a
+union or an array is a key with nothing to write: an integer is its
+type's width of bytes, least significant first; a `bool` 0 or 1; an enum
+member, or a union's live member, its index in 4 bytes (then the
+member); text is its bytes, after its length in 8 bytes when it is part
+of a larger key (so `{a: "ab", b: "c"}` and `{a: "a", b: "bc"}` are two
+keys); a struct's fields and an array's elements come in order, and no
+padding is read. Text inside a key is a `Buf(u8)`, which a map can copy.
+A float is not a key (NaN is not equal to itself); key by
+`@floatBits(x)`. Nor are pointers, handles or optionals (E157).
 
 ```egg
 // expect: ann
