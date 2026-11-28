@@ -15,4 +15,4 @@ fn main(a: Allocator) void {
     const m = map.HashMap(Buf(u8), i64).init_with(h, same)
     a.free(m)
 }
-// error: E146 @std/map.egg:64
+// error: E146 @std/map.egg:69
