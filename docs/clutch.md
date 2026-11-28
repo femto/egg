@@ -36,7 +36,7 @@ name = "chat"
 version = "0.1.0"
 
 [dependencies]
-http = "~> 0.1"                                    # from the index
+json = "~> 0.1"                                    # from the index
 ansi = { git = "https://github.com/x/egg-ansi" }   # its default branch
 term = { git = "https://...", ref = "v0.2.0" }     # a branch, tag or commit
 util = { path = "../util" }                        # a directory
@@ -137,12 +137,12 @@ holds every pinned commit, and fails naming what is missing otherwise.
 ```bash
 clutch new chat              # a program: src/main.egg
 clutch new --lib util        # a library: src/util.egg
-clutch add http              # from the index, "~> MAJOR.MINOR" of its newest release
-clutch add http "~> 0.2"
+clutch add json              # from the index, "~> MAJOR.MINOR" of its newest release
+clutch add json "~> 0.1"
 clutch add ansi --git URL [--ref REF]
 clutch add util --path ../util
 clutch add check --dev       # a dev-dependency (with any of the forms above)
-clutch remove http
+clutch remove json
 clutch check                 # a library is checked through a root that imports it
 clutch build [--release] [-g] [-o EXE]   # into build/NAME by default
 clutch run [--release] [-g] [-- ARGS]
