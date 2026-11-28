@@ -5869,7 +5869,8 @@ module Egg
       when "ConcurrentMap.add"
         line("(void)#{expr(args[0])};")
         k = cmap_key(t, args[1])
-        hoist("#{helper('egg_cmap_add')}(#{c}, #{k.()}, #{expr(args[2])})", "i64")
+        d = hoist(expr(args[2]), "i64")
+        hoist("#{helper('egg_cmap_add')}(#{c}, #{k.()}, #{d})", "i64")
       when "ConcurrentMap.put_if", "ConcurrentMap.remove_if"
         put = m.end_with?("put_if")
         line("(void)#{expr(args[0])};") if put
