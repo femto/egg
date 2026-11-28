@@ -2,16 +2,18 @@
 // expect: true
 // expect: true
 // expect: true
-uses alloc, fs, io, time
+uses alloc, fs, io
 
-fn main(io: Io, files: Fs, a: Allocator, clock: Clock) !void {
-    const before = clock.now()
+const time = @import("std/time")
+
+fn main(io: Io, files: Fs, a: Allocator) !void {
+    const before = time.now()
     try files.write("egg_modified.txt", "x")
     defer files.remove_file("egg_modified.txt") catch {}
     const st = try files.stat("egg_modified.txt")
     // File systems keep coarser times than the clock (FAT two seconds),
     // and may be on another machine's clock: a minute either way.
-    io.print(st.modified > before - 60000000000 and st.modified < clock.now() + 60000000000)
+    io.print(st.modified > before - 60000000000 and st.modified < time.now() + 60000000000)
     try files.make_dir("egg_modified_dir")
     defer files.remove_dir("egg_modified_dir") catch {}
     const d = try files.stat("egg_modified_dir")

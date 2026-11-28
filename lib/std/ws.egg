@@ -11,15 +11,16 @@
 // if (ws.is_handshake(a, req)) { try c.write(ws.handshake(a, key, "")) ...
 //     var conn = ws.server(@replace(&inbox, .empty)) ... }
 // Client:
-// var conn = ws.client(rng, a)
+// var conn = ws.client(a)
 // const c = try ws.connect(net, a, &conn, "ws://example.com/chat", "", "")
 // then try ws.send(c, a, &conn, ws.TEXT, "hi") and
 // const kind = try ws.read_message(c, a, &conn, &data)
-uses alloc, net, rand
+uses alloc, net
 
 const codec = @import("std/codec")
 const sha1 = @import("std/sha1")
 const http = @import("std/http")
+const rand = @import("std/rand")
 const text = @import("std/text")
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -82,11 +83,11 @@ fn server(sink inbox: Buf(u8)) Conn {
 }
 
 // A client's end of a connection, before connect. Its masking keys come
-// from 32 bytes of rng, through SHA-1, so they cannot be predicted
-// (section 5.3) though rng is read once.
-fn client(rng: Random, a: Allocator) Conn {
+// from 32 random bytes, through SHA-1, so they cannot be predicted
+// (section 5.3) though the random source is read once.
+fn client(a: Allocator) Conn {
     var seed = a.alloc(32, @as(u8, 0))
-    rng.fill(&seed)
+    rand.fill(&seed[0..])
     return Conn{ .client = true, .inbox = .empty, .kind = -1, .part = .empty, .seed = seed, .masks = 0, .closing = false, .protocol = .empty }
 }
 

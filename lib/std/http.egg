@@ -755,7 +755,7 @@ fn strong(tag: []u8) []u8 {
 }
 
 // The Date header of a response sent at now (nanoseconds since 1970, as
-// clock.now() gives them) at the end of out, for the `own` headers:
+// time.now() gives them) at the end of out, for the `own` headers:
 // "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n". RFC 9110 asks a server with a
 // clock to send it with every 2xx, 3xx and 4xx response.
 fn append_date(a: Allocator, inout out: Buf(u8), now: i64) void {

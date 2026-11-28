@@ -1,8 +1,9 @@
 // std/time: the calendar, in UTC. An instant is an i64 of nanoseconds since
-// 1970-01-01 UTC, as clock.now() gives it, which reaches from 1677 to 2262;
+// 1970-01-01 UTC, as now() gives it, which reaches from 1677 to 2262;
 // a DateTime is one taken apart into year, month, day and time of day, in
 // the proleptic Gregorian calendar and without leap seconds.
 // const time = @import("std/time")
+// time.now() is the time now; time.monotonic() measures how long a run took;
 // time.utc(0) is 1970-01-01 00:00:00, a Thursday;
 // time.append_rfc3339(a, &out, 0, 0) appends "1970-01-01T00:00:00Z";
 // time.append_http_date(a, &out, 0) appends "Thu, 01 Jan 1970 00:00:00 GMT";
@@ -130,6 +131,18 @@ fn epoch_days(year: i64, month: i64, day: i64) i64 {
 // 0 for Sunday: 1970-01-01 was a Thursday.
 fn weekday_index(days: i64) i64 {
     return floor_mod(days + 4, 7)
+}
+
+// The time now, from the system's clock, which may be set back; failing to
+// read it panics "cannot read the clock".
+fn now() i64 {
+    return @clockNow()
+}
+
+// Nanoseconds since an unspecified start, never decreasing: for measuring
+// how long something took.
+fn monotonic() i64 {
+    return @clockMonotonic()
 }
 
 // The UTC date and time of an instant in nanoseconds.
