@@ -224,7 +224,7 @@ bin/eggc check file.egg --json       # diagnostics as JSON lines
 bin/eggc build -g examples/fib.egg   # debug build: gdb/lldb break on .egg lines
 bin/eggc run app.egg -- one two      # what follows -- goes to the program
 bin/eggc run app.egg -lfoo -L lib    # link a C library (or `link "foo"` in an `allow unsafe` file)
-bin/eggc run app.egg --pkg http=../egg-http/src   # @import("http") is ../egg-http/src/http.egg
+bin/eggc run app.egg --pkg json=../egg-json/src   # @import("json") is ../egg-json/src/json.egg
 bin/eggc spec                        # whole spec, for pasting into an AI
 bin/eggc lsp                         # language server for editors (stdin/stdout)
 ruby test/run.rb                     # all tests (CC=clang to switch compilers)
@@ -291,8 +291,8 @@ v3 (memory without GC, and what realistic programs needed):
 - A standard library in `lib/std/`, imported by module name without `.egg`:
   `const math = @import("std/math")`; a file import (`"lib/x.egg"`) may
   not leave its module's root. A package is a module by name too:
-  `bin/eggc run app.egg --pkg http=DIR` makes `@import("http")` `DIR/http.egg` and
-  `@import("http/client")` `DIR/client.egg`. `std/map` has `HashMap(K, V)`, in
+  `bin/eggc run app.egg --pkg json=DIR` makes `@import("json")` `DIR/json.egg` and
+  `@import("json/util")` `DIR/util.egg`. `std/map` has `HashMap(K, V)`, in
   insertion order until the first remove, hashed with SipHash-1-3 under a
   random key of its own (as `ConcurrentMap` is; `EGG_HASH_SEED` fixes it): `init()` for str, `Buf(u8)` and
   integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,

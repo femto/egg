@@ -1739,8 +1739,8 @@ library (`"std/a/b"` is `a/b.egg` in it, and `"std"` alone is `std.egg`),
 which ships with the compiler in `lib/std` (the `EGG_STD`
 environment variable points elsewhere). The other module names are
 **packages**, given to eggc as `--pkg NAME=DIR` (the package manager,
-`clutch`, passes one per dependency): `@import("http")` is `DIR/http.egg`
-and `@import("http/client")` is `DIR/client.egg`, as for `std`. The
+`clutch`, passes one per dependency): `@import("json")` is `DIR/json.egg`
+and `@import("json/util")` is `DIR/util.egg`, as for `std`. The
 packages given hold for the whole program: a package imports the
 packages it needs by name from the same list, so every package that any
 file imports must be given. Any other name is E129. A file import may
