@@ -1,0 +1,41 @@
+// @hasDecl and @hasField on types of another module and type function
+// instances, alone and joined with type comparisons.
+// expect: 3
+// expect: 0
+// expect: box
+// expect: local
+// expect: enum
+uses io
+
+const boxes = @import("lib/boxes.egg")
+
+fn Pair(comptime T: type) type {
+    return struct {
+        a: T
+        b: T
+    }
+}
+
+const Color = enum { red, green }
+
+fn value(comptime T: type, x: T) i64 {
+    if (@hasDecl(T, "get")) {
+        return x.get()
+    } else {
+        return 0
+    }
+}
+
+fn main(io: Io) void {
+    io.print(value(boxes.Box(i64), boxes.Box(i64){ .v = 3 }))
+    io.print(value(i64, 9))
+    if (@hasField(boxes.Box(i64), "v") and !@hasDecl(boxes.Box(i64), "v") and boxes.Box(i64) == boxes.Box(i64)) {
+        io.print("box")
+    }
+    if (@hasField(Pair(u8), "b") and !@hasDecl(Pair(u8), "b") and !@hasDecl(Buf(u8), "append")) {
+        io.print("local")
+    }
+    if (@hasField(Color, "green") and !@hasField(Color, "blue")) {
+        io.print("enum")
+    }
+}

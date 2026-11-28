@@ -175,7 +175,7 @@ module Egg
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
                       "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1,
                       "mulWide" => 2, "hashSeed" => 0, "hash" => 2, "eql" => 2, "keyBytes" => 2, "checkKey" => 1,
-                      "floatBits" => 1, "clockNow" => 0, "clockMonotonic" => 0, "randomFill" => 1 }.freeze
+                      "floatBits" => 1, "hasDecl" => 2, "hasField" => 2, "clockNow" => 0, "clockMonotonic" => 0, "randomFill" => 1 }.freeze
     # Builtins only the standard library may call: std/text's parse_float
     # is @parseF64, which the C library's strtod rounds; std/map hashes a
     # key with @hash under a seed of its own from @hashSeed; std/time's now
@@ -4461,8 +4461,23 @@ module Egg
       in Unary[op: "!", operand:]
         c = comptime_cond(operand)
         c.nil? ? nil : !c
+      in Builtin[name: ("hasDecl" | "hasField") => name, args: [t, StrLit[value:]]]
+        t = comptime_type(t)
+        t.nil? ? nil : has_member?(name, t, value)
       else nil
       end
+    end
+
+    # @hasDecl(T, "m"): T is a struct or union declared in a program (or
+    # made by a type function) with a method m. @hasField(T, "f"): such a
+    # type with the field f (a union's member, an enum's value). Built-in
+    # types have neither, so generic code cannot come to rely on how the
+    # compiler provides theirs.
+    def has_member?(name, t, member)
+      info = @types[t]
+      return false if info.nil? || !(@decls.key?(t) || info.fn_line)
+      return @sigs.key?(method_key(t, member)) if name == "hasDecl"
+      info.kind == :enum ? info.members.include?(member) : info.fields.any? { |f, _| f == member }
     end
 
     # The type an expression names (K, str, i64, Point, m.Point), or nil
@@ -4471,7 +4486,15 @@ module Egg
       # Buf(T) names a buffer type when T does (K == Buf(u8)); so do the
       # other built-in type constructors, with one or two types.
       arity = { "Buf" => 1, "MultiArrayList" => 1, "Shared" => 1, "ConcurrentMap" => 2, "MapEntry" => 2 }
-      if e.is_a?(Call) && arity[e.name] == e.args.length
+      # A type function's instance names a type too (T == Pair(i64)), in
+      # another module as well (T == m.Pair(i64)).
+      if e.is_a?(MethodCall) && !module_ref(e.obj).nil? && @type_fns.key?(qualify("#{e.obj.name}.#{e.name}"))
+        types = e.args.map { |a| comptime_type(a) }
+        return nil if types.include?(nil)
+        t = instantiate_type_fn(qualify("#{e.obj.name}.#{e.name}"), types, e.line, e.col, "#{e.obj.name}.#{e.name}")
+        return t == "error" ? nil : t
+      end
+      if e.is_a?(Call) && (arity[e.name] == e.args.length || @type_fns.key?(qualify(e.name)))
         types = e.args.map { |a| comptime_type(a) }
         return nil if types.include?(nil)
         before = @diagnostics.length
@@ -4480,7 +4503,11 @@ module Egg
             when "MultiArrayList" then soa_type(types, e.line, e.col)
             when "Shared" then shared_type(types, e.line, e.col)
             when "ConcurrentMap" then cmap_type(types, e.line, e.col)
-            else map_entry_of(types, e.line, e.col)
+            when "MapEntry" then map_entry_of(types, e.line, e.col)
+            else
+              # Errors in the instance are kept: it is made only once.
+              t = instantiate_type_fn(qualify(e.name), types, e.line, e.col)
+              return t == "error" ? nil : t
             end
         if @diagnostics.length > before || t == "error"
           @diagnostics.slice!(before..)
@@ -4831,6 +4858,17 @@ module Egg
       when "typeName"
         e.info[:type] = type_arg(a)
         "str"
+      when "hasDecl", "hasField"
+        # Reached only when the if around it is not decided at compile
+        # time; say what is wrong with it.
+        if type_arg(a) == "error"
+          nil
+        elsif args[1].is_a?(StrLit)
+          err("E103", "@#{name} is used only in an if condition, which is decided at compile time: if (@#{name}(T, \"x\")) { ... }", line, col)
+        else
+          err("E103", "@#{name} needs the name as a string literal", args[1].line, args[1].col)
+        end
+        "bool"
       when "compileError"
         # Reached only in a branch that is checked: a comptime if keeps
         # just the branch its types choose.
