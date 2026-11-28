@@ -1,0 +1,64 @@
+// Keys past 128 bytes (their bytes on the heap) in a map call inside
+// another's arguments, and before a try that fails: each call frees its
+// own key's bytes once, and only after its other arguments are computed,
+// so a failing try leaves nothing behind.
+// expect: 5
+// expect: 3 failed puts, value still 5
+// expect: 3 failed adds, count still 5
+uses io, alloc, thread
+
+const Long = struct {
+    name: Buf(u8)
+    pad: [20]i64
+}
+
+fn long(a: Allocator, n: []u8) Long {
+    return Long{ .name = a.concat(n, ""), .pad = @splat(1) }
+}
+
+fn read_value(fail: bool) !i64 {
+    if (fail) {
+        return error.Nope
+    }
+    return 7
+}
+
+fn put_it(a: Allocator, m: ConcurrentMap(Long, i64), k: Long, fail: bool) !void {
+    _ = m.put(a, k, try read_value(fail))
+}
+
+fn add_it(a: Allocator, m: ConcurrentMap(Long, i64), k: Long, fail: bool) !void {
+    _ = m.add(a, k, try read_value(fail))
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const inner = threads.map(Long, i64)
+    defer inner.close()
+    const outer = threads.map(Long, i64)
+    defer outer.close()
+    const k1 = long(a, "inner")
+    defer a.free(k1)
+    const k2 = long(a, "outer")
+    defer a.free(k2)
+    _ = inner.put(a, k1, 5)
+    _ = outer.put(a, k2, inner.get(k1) orelse 0)
+    io.print(outer.get(k2) orelse -1)
+    var failed = 0
+    while (failed < 3) {
+        put_it(a, outer, k2, true) catch {
+            failed = failed + 1
+            continue
+        }
+        break
+    }
+    io.print(failed, " failed puts, value still ", outer.get(k2) orelse -1)
+    var adds = 0
+    while (adds < 3) {
+        add_it(a, outer, k2, true) catch {
+            adds = adds + 1
+            continue
+        }
+        break
+    }
+    io.print(adds, " failed adds, count still ", outer.get(k2) orelse -1)
+}

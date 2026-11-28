@@ -137,7 +137,7 @@ module Egg
     HELPER_ORDER = %w[egg_panic egg_stdin_prepare egg_args_state egg_args_len egg_args_get egg_clock_now egg_clock_monotonic egg_random_fill egg_secure_zero egg_mul_wide egg_add egg_sub egg_mul egg_div egg_mod egg_neg egg_index egg_slice_check egg_soa_col
                       egg_str_eq egg_str_cmp egg_print_i64 egg_print_bool egg_print_str egg_print_cstr
                       egg_null_deref egg_print_u64 egg_alloc egg_len_add egg_concat
-                      egg_fmt_float egg_print_float egg_cstr egg_buf_resize egg_args_env
+                      egg_fmt_float egg_print_float egg_cstr egg_kbuf egg_buf_resize egg_args_env
                       egg_append egg_append_int egg_append_uint egg_append_float egg_parse_f64 egg_append_cstr
                       egg_fs_class egg_fs_path egg_fs_open egg_fs_read egg_fs_write
                       egg_fs_handle egg_fs_sys egg_fs_kind egg_fs_remove egg_fs_rename egg_fs_mkdir egg_fs_stat egg_fs_real egg_dir egg_dir_next egg_fs_seek egg_line_max egg_read_line egg_read_all egg_read_bytes
@@ -692,6 +692,10 @@ module Egg
         }
       C
       # p (NULL for a new buffer) resized to n elements of size bytes.
+      # A map key's canonical bytes, 128 of them on the stack (egg_kbuf_put).
+      "egg_kbuf" => <<~C,
+        typedef struct { uint8_t *p; int64_t len, cap; uint8_t small[128]; } egg_kbuf;
+      C
       "egg_buf_resize" => <<~C,
         static void *egg_buf_resize(void *p, int64_t n, size_t size) {
             if (n < 0) egg_panic("negative buffer length");
@@ -5512,6 +5516,36 @@ module Egg
       { "i8" => 1, "u8" => 1, "i16" => 2, "u16" => 2, "i32" => 4, "u32" => 4 }.fetch(t, 8)
     end
 
+    # A key's canonical bytes for a ConcurrentMap: on the stack while they
+    # fit in 128 bytes, on the heap past that. (Never copied: p may point
+    # at its own small.)
+    def kbuf_put
+      key = [:kbuf_put, ""]
+      return @cmap_fns[key][0] if @cmap_fns.key?(key)
+      helper("egg_buf_resize")
+      helper("egg_kbuf")
+      name = "egg_kbuf_put"
+      @cmap_fns[key] = [name, <<~C.chomp]
+        static void #{name}(egg_kbuf *b, const uint8_t *p, int64_t n) {
+            if (n == 0) return;
+            if (b->len + n > b->cap) {
+                int64_t cap = b->len + n < 2 * b->cap ? 2 * b->cap : b->len + n;
+                if (b->p == b->small) {
+                    uint8_t *q = (uint8_t *)egg_buf_resize(NULL, cap, 1);
+                    memcpy(q, b->small, (size_t)b->len);
+                    b->p = q;
+                } else {
+                    b->p = (uint8_t *)egg_buf_resize(b->p, cap, 1);
+                }
+                b->cap = cap;
+            }
+            memcpy(b->p + b->len, p, (size_t)n);
+            b->len += n;
+        }
+      C
+      name
+    end
+
     # Appends n bytes to a Buf(u8) (for @keyBytes).
     def key_put
       key = [:key_put, ""]
@@ -5548,8 +5582,15 @@ module Egg
       name = "egg_key#{kind}_#{(info&.c_name || t).gsub(/\W/, '_')}"
       @cmap_fns[key] = [name, ""] # a recursive field finds the name
       ct = c_type(t)
+      return key_dec_fn(t, key, name, info) if kind == :dec
       sip = kind == :hash
-      put = ->(ptr, n) { sip ? "egg_sip_write(s, #{ptr}, #{n})" : "#{key_put}(out, #{ptr}, #{n})" }
+      put = lambda do |ptr, n|
+        case kind
+        when :hash then "egg_sip_write(s, #{ptr}, #{n})"
+        when :enc then "#{kbuf_put}(out, #{ptr}, #{n})"
+        else "#{key_put}(out, #{ptr}, #{n})"
+        end
+      end
       int = lambda do |code, width|
         "    { uint64_t x = (uint64_t)(#{code}); uint8_t b[8]; for (int i = 0; i < #{width}; i++) b[i] = (uint8_t)(x >> (8 * i)); #{put.('b', width)}; }\n"
       end
@@ -5602,12 +5643,55 @@ module Egg
                  tag + arms
                else part.(t, "(*v)") # a bool, an enum, an integer
                end
-        target = sip ? "egg_sip *s" : "#{c_type("Buf(u8)")} *out"
+        target = case kind
+                 when :hash then "egg_sip *s"
+                 when :enc then "egg_kbuf *out"
+                 else "#{c_type("Buf(u8)")} *out"
+                 end
         # Only a body that writes needs it (a struct without fields does not;
         # the bytes path gets egg_buf_resize through key_put).
         helper("egg_sip_write") if sip && body.include?("egg_sip_write(")
         @cmap_fns[key] = [name, "static void #{name}(#{target}, const #{ct} *v) {\n    (void)#{sip ? 's' : 'out'};\n    (void)v;\n#{body}}"]
       end
+      name
+    end
+
+    # Reads a key of type t back from its canonical bytes at *p (moving *p
+    # past them), into *out: a map's entries give each key as one of the
+    # caller's own, text in new buffers.
+    def key_dec_fn(t, key, name, info)
+      ct = c_type(t)
+      unsigned = { "i8" => "uint8_t", "i16" => "uint16_t", "i32" => "uint32_t", "i64" => "uint64_t" }
+      int = lambda do |at, width, cast|
+        "    { uint64_t x = 0; for (int i = 0; i < #{width}; i++) x |= (uint64_t)(*p)[i] << (8 * i); *p += #{width}; #{at} = #{cast}; }\n"
+      end
+      part = lambda do |ft, at|
+        if INT_C.key?(ft)
+          u = unsigned[ft]
+          int.(at, int_width(ft), u.nil? ? "(#{c_type(ft)})x" : "(#{c_type(ft)})(#{u})x")
+        elsif ft == "bool"
+          "    #{at} = **p != 0;\n    *p += 1;\n"
+        elsif @types[ft]&.kind == :enum
+          int.(at, 4, "(#{c_type(ft)})(int32_t)(uint32_t)x")
+        elsif ft == "Buf(u8)"
+          helper("egg_buf_resize")
+          int.("#{at}.len", 8, "(int64_t)x") +
+            "    #{at}.cap = #{at}.len;\n    #{at}.ptr = #{at}.len == 0 ? NULL : (uint8_t *)egg_buf_resize(NULL, #{at}.len, 1);\n" \
+            "    if (#{at}.len > 0) memcpy(#{at}.ptr, *p, (size_t)#{at}.len);\n    *p += #{at}.len;\n"
+        else
+          "    #{key_fn(:dec, ft)}(p, &#{at});\n"
+        end
+      end
+      body = case info&.kind
+             when :struct then info.fields.map { |f, ft, _| part.(ft, "out->f_#{f}") }.join
+             when :array then "    for (int64_t j = 0; j < #{info.len}; j++) {\n#{part.(info.elem, 'out->a[j]')}    }\n"
+             when :union
+               arms = info.fields.each_with_index.reject { |(_, ft, _), _| ft == "void" }
+                            .map { |(m, ft, _), i| "    if (out->tag == #{i}) {\n#{part.(ft, "out->u.m_#{m}")}    }\n" }.join
+               int.("out->tag", 4, "(int32_t)(uint32_t)x") + arms
+             else part.(t, "(*out)")
+             end
+      @cmap_fns[key] = [name, "static void #{name}(const uint8_t **p, #{ct} *out) {\n    (void)p;\n    (void)out;\n#{body}}"]
       name
     end
 
@@ -5659,7 +5743,8 @@ module Egg
                   "    e.f_key.len = n;\n    e.f_key.cap = n;\n    e.f_key.ptr = n == 0 ? NULL : (uint8_t *)egg_buf_resize(NULL, n, 1);\n" \
                     "    if (n > 0) memcpy(e.f_key.ptr, k, (size_t)n);\n"
                 else
-                  "    int64_t raw;\n    (void)n;\n    memcpy(&raw, k, sizeof raw);\n    e.f_key = (#{c_type(info.inner)})raw;\n"
+                  # Its canonical bytes read back into a key of the caller's own.
+                  "    const uint8_t *at = k;\n    (void)n;\n    #{key_fn(:dec, info.inner)}(&at, &e.f_key);\n"
                 end
       hold = @checker.owned?(ve) ? "    #{helper('egg_atomic_fetch_add')}((int64_t *)e.f_val.c, 1);\n" : ""
       text = <<~C
@@ -5685,14 +5770,30 @@ module Egg
     end
 
     # The bytes of a map's key: a text's own, or an integer's 8.
+    # The bytes of a map's key: a text's own, or any other key's canonical
+    # bytes, written to a buffer on the stack (on the heap only past 128
+    # bytes; freed in @cmap_after, once the map has the key). The key is
+    # computed here, in its place among the arguments; its bytes are
+    # written by the returned proc, called in the map call's own line,
+    # after every other argument, so that no try among them returns while
+    # a buffer is on the heap.
     def cmap_key(t, arg)
-      if @checker.cmap_text_key?(@types[t].inner)
+      k = @types[t].inner
+      if @checker.cmap_text_key?(k)
         v = hoist(coerce(expr(arg), arg.ty, "[]u8"), "[]u8")
-        "(const uint8_t *)#{v}.ptr, #{v}.len"
-      else
-        v = tmp
-        line("int64_t #{v} = (int64_t)(#{expr(arg)});")
-        "(const uint8_t *)&#{v}, 8"
+        return -> { "(const uint8_t *)#{v}.ptr, #{v}.len" }
+      end
+      v = hoist(expr(arg), k)
+      lambda do
+        b = tmp
+        helper("egg_kbuf")
+        line("egg_kbuf #{b};")
+        line("#{b}.p = #{b}.small;")
+        line("#{b}.len = 0;")
+        line("#{b}.cap = (int64_t)sizeof #{b}.small;")
+        line("#{key_fn(:enc, k)}(&#{b}, &#{v});")
+        @cmap_after << "if (#{b}.p != #{b}.small) free(#{b}.p);"
+        "#{b}.p, #{b}.len"
       end
     end
 
@@ -5707,7 +5808,19 @@ module Egg
       hoist("(#{c_type(cmap_ve(t))}){ #{p} }", cmap_ve(t))
     end
 
+    # Each map call frees its own key buffers (a map call inside another's
+    # arguments has a list of its own).
     def cmap_call(m, obj, recv, args, ret)
+      saved = @cmap_after
+      @cmap_after = []
+      r = cmap_call_inner(m, obj, recv, args, ret)
+      @cmap_after.each { |l| line(l) }
+      r
+    ensure
+      @cmap_after = saved
+    end
+
+    def cmap_call_inner(m, obj, recv, args, ret)
       if m == "Threads.map"
         line("(void)#{recv};")
         ve = cmap_ve(ret)
@@ -5722,16 +5835,16 @@ module Egg
         k = cmap_key(t, args[0])
         r = tmp
         line("#{c_type(ret)} #{r} = { .has = false };")
-        line("#{r}.has = #{helper(m.end_with?('get') ? 'egg_cmap_get' : 'egg_cmap_take')}(#{c}, #{k}, &#{r}.value);")
+        line("#{r}.has = #{helper(m.end_with?('get') ? 'egg_cmap_get' : 'egg_cmap_take')}(#{c}, #{k.()}, &#{r}.value);")
         r
       when "ConcurrentMap.contains"
         k = cmap_key(t, args[0])
-        hoist("#{helper('egg_cmap_get')}(#{c}, #{k}, NULL)", "bool")
+        hoist("#{helper('egg_cmap_get')}(#{c}, #{k.()}, NULL)", "bool")
       when "ConcurrentMap.remove"
         k = cmap_key(t, args[0])
         old = tmp
         line("#{c_type(ve)} #{old};")
-        had = hoist("#{helper('egg_cmap_take')}(#{c}, #{k}, &#{old})", "bool")
+        had = hoist("#{helper('egg_cmap_take')}(#{c}, #{k.()}, &#{old})", "bool")
         if owned
           line("if (#{had}) #{drop(ve)}(#{old});")
         else
@@ -5744,19 +5857,20 @@ module Egg
         v = cmap_put_value(t, args[2])
         r = tmp
         line("#{c_type(ret)} #{r} = { .has = false };")
-        line("#{r}.has = #{helper('egg_cmap_put')}(#{c}, #{k}, &#{v}, &#{r}.value);")
+        line("#{r}.has = #{helper('egg_cmap_put')}(#{c}, #{k.()}, &#{v}, &#{r}.value);")
         r
       when "ConcurrentMap.put_new"
         line("(void)#{expr(args[0])};")
         k = cmap_key(t, args[1])
         v = cmap_put_value(t, args[2])
-        fresh = hoist("#{helper('egg_cmap_put_new')}(#{c}, #{k}, &#{v})", "bool")
+        fresh = hoist("#{helper('egg_cmap_put_new')}(#{c}, #{k.()}, &#{v})", "bool")
         line("if (!#{fresh}) #{drop(ve)}(#{v});") if owned
         fresh
       when "ConcurrentMap.add"
         line("(void)#{expr(args[0])};")
         k = cmap_key(t, args[1])
-        hoist("#{helper('egg_cmap_add')}(#{c}, #{k}, #{expr(args[2])})", "i64")
+        d = hoist(expr(args[2]), "i64")
+        hoist("#{helper('egg_cmap_add')}(#{c}, #{k.()}, #{d})", "i64")
       when "ConcurrentMap.put_if", "ConcurrentMap.remove_if"
         put = m.end_with?("put_if")
         line("(void)#{expr(args[0])};") if put
@@ -5766,7 +5880,7 @@ module Egg
         v = put ? cmap_put_value(t, rest[2]) : nil
         old = tmp
         line("#{c_type(ve)} #{old};")
-        ok = hoist("#{helper('egg_cmap_swap_if')}(#{c}, #{k}, &#{expected}, #{v.nil? ? 'NULL' : "&#{v}"}, &#{old}, #{cmap_eq(t)})", "bool")
+        ok = hoist("#{helper('egg_cmap_swap_if')}(#{c}, #{k.()}, &#{expected}, #{v.nil? ? 'NULL' : "&#{v}"}, &#{old}, #{cmap_eq(t)})", "bool")
         if owned
           line("if (#{ok}) #{drop(ve)}(#{old});")
           line("if (!#{ok}) #{drop(ve)}(#{v});") if put

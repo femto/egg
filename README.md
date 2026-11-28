@@ -439,7 +439,8 @@ v3 (memory without GC, and what realistic programs needed):
   `threads.atomic(n)` an `Atomic` i64 (`load`, `store`, `add` giving the new
   value, `swap`, `compare_swap` giving the old one); `threads.map(K, V)` a
   `ConcurrentMap(K, V)`, a hash map every thread reads and changes (like
-  Erlang's ETS or Go's `sync.Map`): text or integer keys, values that own
+  Erlang's ETS or Go's `sync.Map`): keys as for `HashMap` (text,
+  integers, and structs, arrays and unions of them), values that own
   nothing kept in place and the rest as `Shared(V)` read without copying,
   `put`, `put_new`, `take`, `add` for counters, `put_if`/`remove_if` to
   change a value only if it is still the expected one (equal, for values
