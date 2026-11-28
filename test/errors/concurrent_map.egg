@@ -1,20 +1,21 @@
-// error: E157 @16
 // error: E157 @17
-// error: E155 @18
+// error: E157 @18
 // error: E155 @19
-// error: E103 @23
+// error: E155 @20
 // error: E103 @24
-// error: E133 @25
-// error: E122 @26
-// error: E155 @33
-// error: E155 @48
+// error: E103 @25
+// error: E133 @26
+// error: E122 @27
+// error: E155 @34
+// error: E155 @49
 uses alloc, net, thread
 
 const P = struct { x: i64 }
 
-// Keys are text or integers; values what a Shared may hold.
+// Keys have a canonical form (a struct does; a float or optional does not);
+// values are what a Shared may hold.
 fn float_key(m: ConcurrentMap(f64, i64)) void {}
-fn struct_key(m: ConcurrentMap(P, i64)) void {}
+fn optional_key(m: ConcurrentMap(?i64, i64)) void {}
 fn socket_value(m: ConcurrentMap(str, TcpConn)) void {}
 fn map_in_shared(s: Shared(ConcurrentMap(str, i64))) void {}
 

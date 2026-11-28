@@ -1257,9 +1257,6 @@ module Egg
       k, v = args
       return "error" if k == "error" || v == "error"
       why = key_error(k)
-      if why.nil? && !(cmap_text_key?(k) || INT_TYPES.include?(k))
-        why = "a ConcurrentMap's key is text (str or Buf(u8)) or an integer, not #{k}"
-      end
       unless why.nil?
         err("E157", why, line, col)
         return "error"

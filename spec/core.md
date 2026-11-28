@@ -2454,9 +2454,12 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
 
 **Concurrent maps.** `threads.map(K, V)` is a `ConcurrentMap(K, V)`, a
 hash map that every thread holding one reads and changes at once, like
-Erlang's ETS or Go's `sync.Map`. K is text (`str` or `Buf(u8)`; the map
-keeps its own copy, and is looked up by any text) or an integer (E157
-otherwise); V is what a `Shared(V)` may hold (E155). A V that owns
+Erlang's ETS or Go's `sync.Map`. K is any key with a canonical form, as
+for a `HashMap` (below; E157 otherwise): text (`str` or `Buf(u8)`, looked
+up by any text), an integer, or a struct, array or union of keys. The
+map keeps its own copy of each key, its canonical bytes, and `entries`
+gives keys of the caller's own read back from them. V is what a
+`Shared(V)` may hold (E155). A V that owns
 nothing is kept in place and read as a copy: `m.get(k)` is a `?V`. Any
 other V is kept as a `Shared(V)`: `m.get(k)` is a `?Shared(V)`, another
 holder of the value, read with `get` without copying and closed when
@@ -2474,7 +2477,7 @@ one reads it as it was, and keeps it alive until it closes it.
 | `m.add(a, k, d)` | for a `ConcurrentMap(K, i64)`: d added to k's value (0 if new) in place; the sum (an overflow panics) |
 | `m.put_if(a, k, expected, v)` | v in, if k's value is still expected; whether it went in (if not, v is freed: a retry builds a new one) |
 | `m.remove_if(k, expected)` | k's value taken out and ended, if it is still expected |
-| `m.entries(a)` | a `Buf(MapEntry(K, V))`: every pair, in the order the keys went in (a key put again keeps its place; one taken out and put back goes last), `e.key` (text as a `Buf(u8)` of the caller's) and `e.val` as `get` gives it |
+| `m.entries(a)` | a `Buf(MapEntry(K, V))`: every pair, in the order the keys went in (a key put again keeps its place; one taken out and put back goes last), `e.key` (of the caller's own: text as a `Buf(u8)`, any other key a copy) and `e.val` as `get` gives it |
 | `m.clone()`, `m.close()` | another holder; one fewer, the last freeing every value |
 
 `expected` is what `get` gave, and is checked against the value k has

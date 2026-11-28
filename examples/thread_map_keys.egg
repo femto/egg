@@ -1,0 +1,102 @@
+// ConcurrentMap keys of any canonical shape: the map keeps each key's
+// canonical bytes (on the stack while it encodes them, up to 128 bytes),
+// and entries reads them back into keys of the caller's own. Every key
+// entries gives finds its own value again, past 128 bytes too.
+// expect: 60 keys, 60 found again
+// expect: a|bc and ab|c: 2 keys
+// expect: long key: 1, back 49 bytes, last 59
+uses io, alloc, thread
+
+const Kind = enum { room, direct, bot }
+
+const Tag = union(enum) {
+    id: i64
+    name: Buf(u8)
+    none
+}
+
+const Key = struct {
+    kind: Kind
+    on: bool
+    small: i8
+    wide: u32
+    tags: [2]Tag
+    name: Buf(u8)
+}
+
+const Pair = struct {
+    a: Buf(u8)
+    b: Buf(u8)
+}
+
+const Long = struct {
+    name: Buf(u8)
+    pad: [10]i64
+}
+
+fn tag(a: Allocator, i: i64) Tag {
+    if (i % 3 == 0) {
+        return Tag{ .id = -i }
+    } else if (i % 3 == 1) {
+        return Tag{ .name = a.int_str(i) }
+    }
+    return .none
+}
+
+fn key(a: Allocator, i: i64) Key {
+    const kinds = [_]Kind{ .room, .direct, .bot }
+    return Key{
+        .kind = kinds[i % 3],
+        .on = i % 2 == 0,
+        .small = @as(i8, i % 7 - 3),
+        .wide = @as(u32, i * 1000),
+        .tags = [_]Tag{ tag(a, i), tag(a, i + 1) },
+        .name = a.int_str(i * 31),
+    }
+}
+
+fn main(io: Io, a: Allocator, threads: Threads) void {
+    const m = threads.map(Key, i64)
+    defer m.close()
+    var i = 0
+    while (i < 60) {
+        const k = key(a, i)
+        defer a.free(k)
+        _ = m.put_new(a, k, i)
+        i = i + 1
+    }
+    const es = m.entries(a)
+    defer a.free(es)
+    var found = 0
+    for (es) |e| {
+        if ((m.get(e.key) orelse -1) == e.val) {
+            found = found + 1
+        }
+    }
+    io.print(m.count(), " keys, ", found, " found again")
+
+    const pairs = threads.map(Pair, i64)
+    defer pairs.close()
+    const p = Pair{ .a = a.concat("a", ""), .b = a.concat("bc", "") }
+    defer a.free(p)
+    const q = Pair{ .a = a.concat("ab", ""), .b = a.concat("c", "") }
+    defer a.free(q)
+    _ = pairs.put_new(a, p, 1)
+    _ = pairs.put_new(a, q, 2)
+    io.print("a|bc and ab|c: ", pairs.count(), " keys")
+
+    const longs = threads.map(Long, i64)
+    defer longs.close()
+    var pad: [10]i64 = @splat(0)
+    var j = 0
+    while (j < 10) {
+        pad[j] = 50 + j
+        j = j + 1
+    }
+    const l = Long{ .name = a.concat("a name that makes the key's bytes longer than", " 128"), .pad = pad }
+    defer a.free(l)
+    _ = longs.put_new(a, l, 1)
+    const les = longs.entries(a)
+    defer a.free(les)
+    io.print("long key: ", longs.get(l) orelse 0, ", back ", @len(les[0].key.name), " bytes, last ", les[0].key.pad[9])
+}
