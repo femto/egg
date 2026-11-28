@@ -1,0 +1,15 @@
+// error: E117 @14
+// As for ==, neither operand of @eql (or @hash) may change what the
+// other reads: the index here frees keys[0] before it is compared.
+uses io, alloc
+
+fn replace_first(a: Allocator, inout keys: Buf(Buf(u8))) i64 {
+    a.free(@replace(&keys[0], a.concat("z", "")))
+    return 0
+}
+
+fn main(io: Io, a: Allocator) void {
+    var keys: Buf(Buf(u8)) = .empty
+    defer a.free(keys)
+    io.print(@eql(keys[0], keys[replace_first(a, &keys)]))
+}

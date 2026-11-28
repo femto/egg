@@ -13,6 +13,10 @@
 # spec/core.md      -- every ```egg block is a test of one of the kinds above
 #                      ("// error: CODE" there needs no line), so the spec
 #                      cannot drift from the compiler.
+# test/std/*.egg    -- run like examples/*.egg, but as part of a copy of
+#                      std (EGG_STD), so they may call std's own builtins
+#                      (@hash, @eql, @keyBytes: the map key properties);
+#                      with "// error: CODE @LINE" lines, checked instead.
 # examples/complex/ -- larger programs (a parser, Dijkstra, a VM, ...),
 #                      run like examples/*.egg.
 # examples/ffi/*/   -- programs (files with "// expect:") calling C
@@ -36,6 +40,7 @@
 #
 # Usage: ruby test/run.rb
 
+require "fileutils"
 require "json"
 require "rbconfig"
 require "open3"
@@ -2137,6 +2142,32 @@ Dir.mktmpdir do |dir|
   Dir[File.join(ROOT, "examples", "*.egg")].sort.each do |path|
     check_program(File.basename(path), File.read(path), dir, path)
     check_program("#{File.basename(path)} -g", File.read(path), dir, path, debug: true)
+  end
+
+  puts "test/std"
+  Dir[File.join(ROOT, "test", "std", "*.egg")].sort.each do |path|
+    Dir.mktmpdir do |std|
+      FileUtils.cp_r(File.join(ROOT, "lib", "std", "."), std)
+      copy = File.join(std, File.basename(path))
+      FileUtils.cp(path, copy)
+      src = File.read(path)
+      errors = comment_values(src, "error")
+      if errors.empty?
+        out, err, st = Open3.capture3({ "EGG_STD" => std }, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), "run", copy)
+        want = comment_values(src, "expect")
+        report(st.success? && out.lines.map(&:chomp) == want, "std/#{File.basename(path)}", "#{out}#{err}")
+      else
+        # "// error: CODE @LINE": eggc check must report each.
+        out, err, st = Open3.capture3({ "EGG_STD" => std }, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), "check", copy)
+        got = "#{out}#{err}"
+        # The file, line and code of one diagnostic, together.
+        missing = errors.reject do |e|
+          code, at = e.split(" @")
+          got.lines.any? { |l| l.include?("#{File.basename(path)}:#{at}:") && l.include?("error[#{code}]") }
+        end
+        report(!st.success? && missing.empty?, "std/#{File.basename(path)}", "missing #{missing.inspect} in:\n#{got}")
+      end
+    end
   end
 
   puts "examples/complex"

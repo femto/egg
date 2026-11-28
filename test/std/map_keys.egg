@@ -1,0 +1,112 @@
+// The properties map keys rest on, over many keys of many shapes: the
+// streamed hash is the SipHash of the canonical bytes (@hash(seed, k) ==
+// @hash(seed, @keyBytes(a, k))); two keys are @eql exactly when their
+// bytes are equal; and the bytes are injective: text carries its length,
+// so {a: "ab", b: "c"} and {a: "a", b: "bc"} differ.
+// expect: hash = siphash(bytes): 48 of 48
+// expect: eql = bytes equal: 2304 of 2304, 48 equal pairs
+// expect: ab|c vs a|bc: eql false, bytes differ true
+uses alloc, io
+
+const Kind = enum { room, user, bot }
+
+const Tag = union(enum) {
+    id: i64
+    name: Buf(u8)
+    none
+}
+
+const Pair = struct {
+    a: Buf(u8)
+    b: Buf(u8)
+}
+
+const Key = struct {
+    kind: Kind
+    on: bool
+    small: u8
+    mid: i16
+    wide: u32
+    tags: [2]Tag
+    pair: Pair
+}
+
+fn text(a: Allocator, i: i64) Buf(u8) {
+    var t: Buf(u8) = .empty
+    var k = 0
+    while (k < i % 4) {
+        a.push(&t, @as(u8, 'a' + (i + k) % 3))
+        k = k + 1
+    }
+    return t
+}
+
+fn tag(a: Allocator, i: i64) Tag {
+    if (i % 3 == 0) {
+        return Tag{ .id = i % 5 }
+    } else if (i % 3 == 1) {
+        return Tag{ .name = text(a, i) }
+    }
+    return .none
+}
+
+// The i-th key; keys i and i + 24 are equal (each has one twin).
+fn key(a: Allocator, i: i64) Key {
+    const kinds = [_]Kind{ .room, .user, .bot }
+    return Key{
+        .kind = kinds[i % 3],
+        .on = i % 2 == 0,
+        .small = @as(u8, (i * 7) % 3),
+        .mid = @as(i16, (i % 2) * -300),
+        .wide = @as(u32, i % 2),
+        .tags = [_]Tag{ tag(a, i), tag(a, i / 3) },
+        .pair = Pair{ .a = text(a, i), .b = text(a, i / 2) },
+    }
+}
+
+fn main(io: Io, a: Allocator) void {
+    var keys: Buf(Key) = .empty
+    defer a.free(keys)
+    var i = 0
+    while (i < 48) {
+        a.push(&keys, key(a, i % 24))
+        i = i + 1
+    }
+    const seed = @hashSeed()
+    var hashed = 0
+    for (keys) |k| {
+        const bytes = @keyBytes(a, k)
+        defer a.free(bytes)
+        if (@hash(seed, k) == @hash(seed, bytes)) {
+            hashed = hashed + 1
+        }
+    }
+    io.print("hash = siphash(bytes): ", hashed, " of ", @len(keys))
+    var agree = 0
+    var equal = 0
+    for (keys) |x| {
+        const bx = @keyBytes(a, x)
+        defer a.free(bx)
+        for (keys) |y| {
+            const by = @keyBytes(a, y)
+            defer a.free(by)
+            const same = @eql(x, y)
+            if (same == (bx == by)) {
+                agree = agree + 1
+            }
+            if (same) {
+                equal = equal + 1
+            }
+        }
+    }
+    io.print("eql = bytes equal: ", agree, " of ", @len(keys) * @len(keys), ", ", equal - @len(keys), " equal pairs")
+    const p = Pair{ .a = a.concat("ab", ""), .b = a.concat("c", "") }
+    defer a.free(p)
+    const q = Pair{ .a = a.concat("a", ""), .b = a.concat("bc", "") }
+    defer a.free(q)
+    const bp = @keyBytes(a, p)
+    defer a.free(bp)
+    const bq = @keyBytes(a, q)
+    defer a.free(bq)
+    io.print("ab|c vs a|bc: eql ", @eql(p, q), ", bytes differ ", bp != bq)
+}

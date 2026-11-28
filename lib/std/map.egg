@@ -10,11 +10,12 @@
 //     const n = m.get("apple") orelse 0
 //     for (m.entries) |e| { ... e.key ... e.val ... }
 //
-// Keys of type str, Buf(u8) or any integer type hash and compare by
-// themselves; for other keys pass the functions:
-// HashMap(Point, V).init_with(hash, eq), with hash returning any i64. Keys
-// and values may own buffers: put and remove free what they replace or
-// drop, and a.free(m) frees everything.
+// A key is text, an integer, a bool, an enum, or a struct, array or union
+// of those (text inside one a Buf(u8)): it hashes and compares by what it
+// holds, field by field, with nothing to write (HashMap(Point, V).init()).
+// Floats, pointers and handles are not keys (E157). Keys and values may own
+// buffers: put and remove free what they replace or drop, and a.free(m)
+// frees everything.
 //
 // A map with Buf(u8) keys owns its keys' text and is looked up by any text
 // (a str, a Buf(u8), a slice), allocating nothing:
@@ -46,30 +47,14 @@ fn HashMap(comptime K: type, comptime V: type) type {
         // -1: empty slot; -2: a removed pair was here; else a position
         index: Buf(i64)
         dead: i64
-        hash: ?fn(K) i64
-        eq: ?fn(K, K) bool
         // This map's own key for SipHash, so that no one can choose keys
         // that all land in one place (HashDoS); it changes no order.
         seed: i64
 
-        // A map with str, Buf(u8) or integer keys.
+        // An empty map.
         fn init() @This() {
-            if (K == str or K == Buf(u8) or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
-                return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = null, .eq = null, .seed = @hashSeed() }
-            } else {
-                @compileError("HashMap(K, V).init() needs str, Buf(u8) or integer keys; for other keys use init_with(hash, eq)")
-            }
-        }
-
-        // A map whose keys hash and compare with these functions. Not for
-        // Buf(u8) keys: they are looked up by text, which such functions
-        // could not take.
-        fn init_with(hash: fn(K) i64, eq: fn(K, K) bool) @This() {
-            if (K == Buf(u8)) {
-                @compileError("HashMap(Buf(u8), V) hashes and compares keys by their bytes; use init()")
-            } else {
-                return @This(){ .entries = .empty, .index = .empty, .dead = 0, .hash = hash, .eq = eq, .seed = @hashSeed() }
-            }
+            @checkKey(K)
+            return @This(){ .entries = .empty, .index = .empty, .dead = 0, .seed = @hashSeed() }
         }
 
         fn count(self: @This()) i64 {
@@ -295,32 +280,13 @@ fn HashMap(comptime K: type, comptime V: type) type {
             }
         }
 
+        // The SipHash-1-3 of k's canonical bytes under this map's seed.
         fn hash_of(self: @This(), k: K) i64 {
-            const f = self.hash orelse return default_hash(K, k, self.seed)
-            return f(k)
+            return @hash(self.seed, k)
         }
 
         fn same(self: @This(), x: K, y: K) bool {
-            if (K == str or K == Buf(u8) or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
-                const f = self.eq orelse return x == y
-                return f(x, y)
-            } else {
-                const f = self.eq orelse return false
-                return f(x, y)
-            }
+            return @eql(x, y)
         }
-    }
-}
-
-// A hash of text (a str or a Buf(u8)) or an integer, in [0, 1000000007).
-// The SipHash-1-3 of k under seed: text by its bytes (the same for a
-// str, a Buf(u8) or a slice), an integer by its type's width of bytes.
-fn default_hash(comptime K: type, k: K, seed: i64) i64 {
-    if (K == str or K == Buf(u8) or K == i8 or K == i16 or K == i32 or K == i64 or K == u8 or K == u16 or K == u32 or K == u64 or K == usize) {
-        return @hash(seed, k)
-    } else {
-        // Not reached: init() takes only these keys, and init_with sets
-        // the hash.
-        return 0
     }
 }

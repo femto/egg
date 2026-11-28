@@ -1,18 +1,10 @@
-// Maps that never hash a key (made and counted), and a HashMap with its own
-// hash, build without the SipHash helpers they do not use.
+// Maps that never hash a key (made and counted) build without the SipHash
+// helpers they do not use; a map of u8 keys hashes them in one piece.
 // expect: 0 0
 // expect: 2
 uses io, alloc, thread
 
 const map = @import("std/map")
-
-fn same_number(n: i64) i64 {
-    return n
-}
-
-fn equal(x: i64, y: i64) bool {
-    return x == y
-}
 
 fn main(io: Io, a: Allocator, threads: Threads) void {
     const m = map.HashMap(i64, i64).init()
@@ -20,7 +12,7 @@ fn main(io: Io, a: Allocator, threads: Threads) void {
     io.print(m.count(), " ", c.count())
     a.free(m)
     c.close()
-    var own = map.HashMap(i64, i64).init_with(same_number, equal)
+    var own = map.HashMap(u8, i64).init()
     defer a.free(own)
     own.put(a, 1, 2)
     io.print(own.get(1) orelse 0)

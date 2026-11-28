@@ -5508,6 +5508,109 @@ module Egg
       end
     end
 
+    def int_width(t)
+      { "i8" => 1, "u8" => 1, "i16" => 2, "u16" => 2, "i32" => 4, "u32" => 4 }.fetch(t, 8)
+    end
+
+    # Appends n bytes to a Buf(u8) (for @keyBytes).
+    def key_put
+      key = [:key_put, ""]
+      return @cmap_fns[key][0] if @cmap_fns.key?(key)
+      helper("egg_buf_resize")
+      bt = c_type("Buf(u8)")
+      name = "egg_key_put"
+      @cmap_fns[key] = [name, <<~C.chomp]
+        static void #{name}(#{bt} *out, const uint8_t *p, int64_t n) {
+            if (n == 0) return;
+            if (out->len + n > out->cap) {
+                out->cap = out->len + n < 2 * out->cap ? 2 * out->cap : out->len + n;
+                out->ptr = (uint8_t *)egg_buf_resize(out->ptr, out->cap, 1);
+            }
+            memcpy(out->ptr + out->len, p, (size_t)n);
+            out->len += n;
+        }
+      C
+      name
+    end
+
+    # A map key's function of a kind, for type t (not text alone, which
+    # hashes and compares as its bytes): :hash feeds its canonical bytes to
+    # a SipHash, :eq compares two field by field, :bytes appends the bytes
+    # to a Buf(u8). All three follow the one canonical form: an integer
+    # its width of bytes, least significant first; a bool 0 or 1; an enum
+    # or a union's tag its index in 4 bytes, then a union's live member;
+    # text inside a key its length in 8 bytes, then its bytes; a struct's
+    # fields and an array's elements in order. Padding is never read.
+    def key_fn(kind, t)
+      key = [kind, t]
+      return @cmap_fns[key][0] if @cmap_fns.key?(key)
+      info = @types[t]
+      name = "egg_key#{kind}_#{(info&.c_name || t).gsub(/\W/, '_')}"
+      @cmap_fns[key] = [name, ""] # a recursive field finds the name
+      ct = c_type(t)
+      sip = kind == :hash
+      put = ->(ptr, n) { sip ? "egg_sip_write(s, #{ptr}, #{n})" : "#{key_put}(out, #{ptr}, #{n})" }
+      int = lambda do |code, width|
+        "    { uint64_t x = (uint64_t)(#{code}); uint8_t b[8]; for (int i = 0; i < #{width}; i++) b[i] = (uint8_t)(x >> (8 * i)); #{put.('b', width)}; }\n"
+      end
+      part = lambda do |ft, at|
+        # at: a C lvalue of type ft inside *v.
+        if INT_C.key?(ft)
+          int.(at, int_width(ft))
+        elsif ft == "bool"
+          "    { uint8_t b = #{at} ? 1 : 0; #{put.('&b', 1)}; }\n"
+        elsif @types[ft]&.kind == :enum
+          int.("(uint32_t)#{at}", 4)
+        elsif ft == "Buf(u8)"
+          int.("#{at}.len", 8) + "    #{put.("#{at}.ptr", "#{at}.len")};\n"
+        else
+          "    #{key_fn(kind, ft)}(#{sip ? 's' : 'out'}, &#{at});\n"
+        end
+      end
+      if kind == :eq
+        same = lambda do |ft, ax, ay|
+          if ft == "Buf(u8)"
+            "(#{ax}.len == #{ay}.len && (#{ax}.len == 0 || memcmp(#{ax}.ptr, #{ay}.ptr, (size_t)#{ax}.len) == 0))"
+          elsif INT_C.key?(ft) || ft == "bool" || @types[ft]&.kind == :enum
+            "#{ax} == #{ay}"
+          else
+            "#{key_fn(:eq, ft)}(&#{ax}, &#{ay})"
+          end
+        end
+        body = case info&.kind
+               when :struct
+                 terms = info.fields.map { |f, ft, _| same.(ft, "x->f_#{f}", "y->f_#{f}") }
+                 "    return #{terms.empty? ? 'true' : terms.join(" &&\n        ")};\n"
+               when :array
+                 "    for (int64_t i = 0; i < #{info.len}; i++) if (!(#{same.(info.elem, 'x->a[i]', 'y->a[i]')})) return false;\n    return true;\n"
+               when :union
+                 arms = info.fields.each_with_index.reject { |(_, ft, _), _| ft == "void" }
+                              .map { |(m, ft, _), i| "    if (x->tag == #{i}) return #{same.(ft, "x->u.m_#{m}", "y->u.m_#{m}")};\n" }.join
+                 "    if (x->tag != y->tag) return false;\n#{arms}    return true;\n"
+               else "    return #{same.(t, '(*x)', '(*y)')};\n" # a bool, an enum, an integer
+               end
+        # (void): a struct without fields reads neither.
+        @cmap_fns[key] = [name, "static bool #{name}(const #{ct} *x, const #{ct} *y) {\n    (void)x;\n    (void)y;\n#{body}}"]
+      else
+        body = case info&.kind
+               when :struct then info.fields.map { |f, ft, _| part.(ft, "v->f_#{f}") }.join
+               when :array then "    for (int64_t j = 0; j < #{info.len}; j++) {\n#{part.(info.elem, 'v->a[j]')}    }\n"
+               when :union
+                 tag = int.("(uint32_t)v->tag", 4)
+                 arms = info.fields.each_with_index.reject { |(_, ft, _), _| ft == "void" }
+                              .map { |(m, ft, _), i| "    if (v->tag == #{i}) {\n#{part.(ft, "v->u.m_#{m}")}    }\n" }.join
+                 tag + arms
+               else part.(t, "(*v)") # a bool, an enum, an integer
+               end
+        target = sip ? "egg_sip *s" : "#{c_type("Buf(u8)")} *out"
+        # Only a body that writes needs it (a struct without fields does not;
+        # the bytes path gets egg_buf_resize through key_put).
+        helper("egg_sip_write") if sip && body.include?("egg_sip_write(")
+        @cmap_fns[key] = [name, "static void #{name}(#{target}, const #{ct} *v) {\n    (void)#{sip ? 's' : 'out'};\n    (void)v;\n#{body}}"]
+      end
+      name
+    end
+
     # The value type a ConcurrentMap keeps: V, or Shared(V).
     def cmap_ve(t)
       @checker.cmap_value(@types[t].elem)
@@ -6292,12 +6395,52 @@ module Egg
         seed = hoist(expr(a), "i64")
         k = args[1]
         if INT_C.key?(k.ty)
-          width = { "i8" => 1, "u8" => 1, "i16" => 2, "u16" => 2, "i32" => 4, "u32" => 4 }.fetch(k.ty, 8)
-          hoist("#{helper('egg_hash_int')}(#{seed}, (uint64_t)(#{expr(k)}), #{width})", "i64")
-        else
+          hoist("#{helper('egg_hash_int')}(#{seed}, (uint64_t)(#{expr(k)}), #{int_width(k.ty)})", "i64")
+        elsif text_type?(k.ty)
           v = hoist(expr(k), k.ty)
           hoist("#{helper('egg_hash_bytes')}(#{seed}, (const uint8_t *)#{v}.ptr, #{v}.len)", "i64")
+        else
+          # A composite key: its fields fed in, never copied into one buffer.
+          v = hoist(expr(k), k.ty)
+          st = tmp
+          line("egg_sip #{st};")
+          line("#{helper('egg_hash_start')}(&#{st}, #{seed});")
+          line("#{key_fn(:hash, k.ty)}(&#{st}, &#{v});")
+          hoist("(int64_t)egg_sip_finish(&#{st})", "i64")
         end
+      when "eql"
+        x = args[0]
+        y = args[1]
+        if text_type?(x.ty)
+          vx = hoist(expr(x), x.ty)
+          vy = hoist(expr(y), y.ty)
+          hoist("(#{vx}.len == #{vy}.len && (#{vx}.len == 0 || memcmp(#{vx}.ptr, #{vy}.ptr, (size_t)#{vx}.len) == 0))", "bool")
+        else
+          vx = hoist(expr(x), x.ty)
+          vy = hoist(expr(y), y.ty)
+          hoist("#{key_fn(:eq, x.ty)}(&#{vx}, &#{vy})", "bool")
+        end
+      when "keyBytes"
+        line("(void)#{expr(a)};")
+        k = args[1]
+        v = hoist(expr(k), k.ty)
+        out = tmp
+        line("#{c_type(e.ty)} #{out} = { .ptr = NULL, .len = 0, .cap = 0 };")
+        if text_type?(k.ty)
+          # A key that is text alone is its bytes.
+          line("#{key_put}(&#{out}, (const uint8_t *)#{v}.ptr, #{v}.len);")
+        else
+          line("#{key_fn(:bytes, k.ty)}(&#{out}, &#{v});")
+        end
+        out
+      when "checkKey" then "((void)0)"
+      when "floatBits"
+        x = hoist(expr(a), a.ty)
+        bits = tmp
+        ct = a.ty == "f32" ? "uint32_t" : "uint64_t"
+        line("#{ct} #{bits};")
+        line("memcpy(&#{bits}, &#{x}, sizeof #{bits});")
+        bits
       when "errorName"
         @need_str = true
         @need_error_names = true
