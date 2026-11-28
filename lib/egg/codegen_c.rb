@@ -147,7 +147,8 @@ module Egg
                       egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_try_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_atomic_base egg_atomic_fetch_add egg_atomic_load egg_atomic_swap egg_atomic_cas egg_ref_retain egg_ref_release egg_atomic_new egg_atomic_add egg_atomic_close egg_shared_new
-                      egg_cmap egg_cmap_hash egg_cmap_new egg_cmap_shard_of egg_cmap_find egg_cmap_insert egg_cmap_get egg_cmap_put egg_cmap_put_new egg_cmap_take egg_cmap_swap_if egg_cmap_add egg_cmap_count egg_cmap_each egg_cmap_close
+                      egg_sip egg_sip_write egg_hash_key egg_hash_start egg_hash_bytes egg_hash_int
+                      egg_cmap egg_cmap_hash egg_cmap_new egg_cmap_shard_of egg_cmap_find egg_cmap_insert egg_cmap_get egg_cmap_put egg_cmap_put_new egg_cmap_take egg_cmap_swap_if egg_cmap_add egg_cmap_count egg_cmap_each egg_cmap_order egg_cmap_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
                       egg_conn egg_conn_new egg_tcp_connect egg_net_bind egg_tcp_accept egg_tcp_read_line egg_tcp_read
@@ -1394,6 +1395,132 @@ module Egg
             return p;
         }
       C
+      # SipHash-1-3 (one compression round, three to finish), as Rust's
+      # HashMap uses, fed a piece at a time: hashing a key that comes in
+      # parts (a struct's fields) need not copy it into one buffer.
+      "egg_sip" => <<~C,
+        typedef struct { uint64_t v0, v1, v2, v3, tail; int64_t ntail, total; } egg_sip;
+        #define EGG_SIP_ROTL(x, b) (((x) << (b)) | ((x) >> (64 - (b))))
+        #define EGG_SIP_ROUND(s) do { \\
+            (s)->v0 += (s)->v1; (s)->v1 = EGG_SIP_ROTL((s)->v1, 13); (s)->v1 ^= (s)->v0; (s)->v0 = EGG_SIP_ROTL((s)->v0, 32); \\
+            (s)->v2 += (s)->v3; (s)->v3 = EGG_SIP_ROTL((s)->v3, 16); (s)->v3 ^= (s)->v2; \\
+            (s)->v0 += (s)->v3; (s)->v3 = EGG_SIP_ROTL((s)->v3, 21); (s)->v3 ^= (s)->v0; \\
+            (s)->v2 += (s)->v1; (s)->v1 = EGG_SIP_ROTL((s)->v1, 17); (s)->v1 ^= (s)->v2; (s)->v2 = EGG_SIP_ROTL((s)->v2, 32); \\
+        } while (0)
+        static void egg_sip_init(egg_sip *s, uint64_t k0, uint64_t k1) {
+            s->v0 = k0 ^ UINT64_C(0x736f6d6570736575);
+            s->v1 = k1 ^ UINT64_C(0x646f72616e646f6d);
+            s->v2 = k0 ^ UINT64_C(0x6c7967656e657261);
+            s->v3 = k1 ^ UINT64_C(0x7465646279746573);
+            s->tail = 0;
+            s->ntail = 0;
+            s->total = 0;
+        }
+        static void egg_sip_word(egg_sip *s, uint64_t m) {
+            s->v3 ^= m;
+            EGG_SIP_ROUND(s);
+            s->v0 ^= m;
+        }
+        static uint64_t egg_sip_finish(egg_sip *s) {
+            egg_sip_word(s, ((uint64_t)s->total << 56) | s->tail);
+            s->v2 ^= 0xff;
+            EGG_SIP_ROUND(s);
+            EGG_SIP_ROUND(s);
+            EGG_SIP_ROUND(s);
+            return s->v0 ^ s->v1 ^ s->v2 ^ s->v3;
+        }
+      C
+      # Bytes into a SipHash, any number at a time.
+      "egg_sip_write" => <<~C,
+        static void egg_sip_write(egg_sip *s, const uint8_t *p, int64_t n) {
+            s->total += n;
+            int64_t i = 0;
+            /* Whole words while nothing is left over (the usual case). */
+            if (s->ntail == 0) {
+                for (; i + 8 <= n; i += 8) {
+                    uint64_t m = (uint64_t)p[i] | (uint64_t)p[i + 1] << 8 | (uint64_t)p[i + 2] << 16 | (uint64_t)p[i + 3] << 24 |
+                                 (uint64_t)p[i + 4] << 32 | (uint64_t)p[i + 5] << 40 | (uint64_t)p[i + 6] << 48 | (uint64_t)p[i + 7] << 56;
+                    egg_sip_word(s, m);
+                }
+            }
+            for (; i < n; i++) {
+                s->tail |= (uint64_t)p[i] << (8 * s->ntail);
+                if (++s->ntail == 8) {
+                    egg_sip_word(s, s->tail);
+                    s->tail = 0;
+                    s->ntail = 0;
+                }
+            }
+        }
+      C
+      # The process's hash key, made on first use: from the system's
+      # random source, or from EGG_HASH_SEED (a number) to make runs
+      # repeat. Each map gets a seed of its own, a count, which with the
+      # key gives its SipHash key; no seed changes what a program prints.
+      "egg_hash_key" => <<~C,
+        static uint64_t egg_hash_k[2];
+        static int64_t egg_hash_state; /* 0: not made, 1: being made, 2: made */
+        static int64_t egg_hash_seeds;
+        static uint64_t egg_hash_mix(uint64_t x) {
+            x += UINT64_C(0x9e3779b97f4a7c15);
+            x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+            x = (x ^ (x >> 27)) * UINT64_C(0x94d049bb133111eb);
+            return x ^ (x >> 31);
+        }
+        static void egg_hash_key_make(void) {
+            if (egg_atomic_load(&egg_hash_state) == 2) return;
+            if (egg_atomic_cas(&egg_hash_state, 0, 1) == 0) {
+                const char *fixed = getenv("EGG_HASH_SEED");
+                if (fixed != NULL && fixed[0] != 0) {
+                    uint64_t seed = (uint64_t)strtoull(fixed, NULL, 0);
+                    egg_hash_k[0] = egg_hash_mix(seed);
+                    egg_hash_k[1] = egg_hash_mix(egg_hash_k[0]);
+                } else {
+                    egg_random_fill((uint8_t *)egg_hash_k, (int64_t)sizeof egg_hash_k);
+                }
+                (void)egg_atomic_swap(&egg_hash_state, 2);
+            } else {
+                while (egg_atomic_load(&egg_hash_state) != 2) {}
+            }
+        }
+        /* A new map's seed. */
+        static int64_t egg_hash_seed(void) {
+            egg_hash_key_make();
+            return egg_atomic_fetch_add(&egg_hash_seeds, 1) + 1;
+        }
+      C
+      # A SipHash keyed for a map's seed (apart from egg_hash_key: a map that
+      # is made but never hashes a key needs only the seed).
+      "egg_hash_start" => <<~C,
+        static void egg_hash_start(egg_sip *s, int64_t seed) {
+            egg_sip_init(s, egg_hash_k[0] ^ egg_hash_mix((uint64_t)seed), egg_hash_k[1] + (uint64_t)seed);
+        }
+      C
+      # The hash of n bytes under a map's seed.
+      "egg_hash_bytes" => <<~C,
+        static int64_t egg_hash_bytes(int64_t seed, const uint8_t *p, int64_t n) {
+            egg_sip s;
+            egg_hash_start(&s, seed);
+            egg_sip_write(&s, p, n);
+            return (int64_t)egg_sip_finish(&s);
+        }
+      C
+      # An integer's hash: its width's bytes, least significant first.
+      "egg_hash_int" => <<~C,
+        static int64_t egg_hash_int(int64_t seed, uint64_t v, int width) {
+            egg_sip s;
+            egg_hash_start(&s, seed);
+            /* The same as writing its width's bytes, least significant first. */
+            if (width == 8) {
+                egg_sip_word(&s, v);
+            } else {
+                s.tail = v & ((UINT64_C(1) << (8 * width)) - 1);
+                s.ntail = width;
+            }
+            s.total = width;
+            return (int64_t)egg_sip_finish(&s);
+        }
+      C
       # A ConcurrentMap: shards, each a hash table behind its own mutex,
       # 128 bytes apart so that no two share a cache line. A key's hash
       # picks the shard by its high bits and the bucket by its low ones.
@@ -1407,6 +1534,8 @@ module Egg
             struct egg_cmap_node *next;
             uint64_t hash;
             int64_t klen;
+            /* When it went in: entries come in this order. */
+            int64_t seq;
         } egg_cmap_node;
         typedef struct {
         #ifdef _WIN32
@@ -1429,9 +1558,13 @@ module Egg
             size_t vsize, vspace;
             /* Values are Shared handles: reading one holds it once more. */
             bool shared;
+            int64_t seed;
+            int64_t next_seq;
             void *raw;
             egg_cmap_shard *shards;
         } egg_cmap;
+        /* What entries collects into: the Buf, and when each pair went in. */
+        typedef struct { void *buf; int64_t *seqs; int64_t nseq, capseq; } egg_cmap_entries;
         #define EGG_CMAP_VAL(n) ((void *)((char *)(n) + sizeof(egg_cmap_node)))
         #define EGG_CMAP_KEY(m, n) ((const uint8_t *)EGG_CMAP_VAL(n) + (m)->vspace)
         #ifdef _WIN32
@@ -1442,21 +1575,12 @@ module Egg
         #define EGG_CMAP_UNLOCK(sh) pthread_mutex_unlock(&(sh)->s.lock)
         #endif
       C
-      # FNV-1a, then a finalizer that spreads every bit into the high ones,
-      # which pick the shard. Computed before any lock is taken.
+      # A key's hash under the map's seed (SipHash: its high bits, which
+      # pick the shard, are as good as its low ones). Computed before any
+      # lock is taken.
       "egg_cmap_hash" => <<~C,
-        static uint64_t egg_cmap_hash(const uint8_t *k, int64_t n) {
-            uint64_t h = UINT64_C(1469598103934665603);
-            for (int64_t i = 0; i < n; i++) {
-                h ^= k[i];
-                h *= UINT64_C(1099511628211);
-            }
-            h ^= h >> 33;
-            h *= UINT64_C(0xff51afd7ed558ccd);
-            h ^= h >> 33;
-            h *= UINT64_C(0xc4ceb9fe1a85ec53);
-            h ^= h >> 33;
-            return h;
+        static uint64_t egg_cmap_hash(egg_cmap *m, const uint8_t *k, int64_t n) {
+            return (uint64_t)egg_hash_bytes(m->seed, k, n);
         }
       C
       "egg_cmap_new" => <<~C,
@@ -1484,6 +1608,8 @@ module Egg
             m->vsize = vsize;
             m->vspace = (vsize + 7) / 8 * 8;
             m->shared = shared;
+            m->seed = egg_hash_seed();
+            m->next_seq = 0;
             m->raw = egg_buf_resize(NULL, n * (int64_t)sizeof(egg_cmap_shard) + 127, 1);
             m->shards = (egg_cmap_shard *)(((uintptr_t)m->raw + 127) & ~(uintptr_t)127);
             for (int64_t i = 0; i < n; i++) {
@@ -1544,6 +1670,7 @@ module Egg
             egg_cmap_node *x = (egg_cmap_node *)egg_buf_resize(NULL, (int64_t)(sizeof(egg_cmap_node) + m->vspace) + n, 1);
             x->hash = h;
             x->klen = n;
+            x->seq = egg_atomic_fetch_add(&m->next_seq, 1);
             memcpy(EGG_CMAP_VAL(x), v, m->vsize);
             if (n > 0) memcpy((uint8_t *)EGG_CMAP_VAL(x) + m->vspace, k, (size_t)n);
             egg_cmap_node **at = &sh->s.buckets[h & (uint64_t)(sh->s.nbuckets - 1)];
@@ -1557,7 +1684,7 @@ module Egg
       "egg_cmap_get" => <<~C,
         static bool egg_cmap_get(void *mp, const uint8_t *k, int64_t n, void *out) {
             egg_cmap *m = (egg_cmap *)mp;
-            uint64_t h = egg_cmap_hash(k, n);
+            uint64_t h = egg_cmap_hash(m, k, n);
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
@@ -1580,7 +1707,7 @@ module Egg
       "egg_cmap_put" => <<~C,
         static bool egg_cmap_put(void *mp, const uint8_t *k, int64_t n, const void *v, void *old) {
             egg_cmap *m = (egg_cmap *)mp;
-            uint64_t h = egg_cmap_hash(k, n);
+            uint64_t h = egg_cmap_hash(m, k, n);
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
@@ -1598,7 +1725,7 @@ module Egg
       "egg_cmap_put_new" => <<~C,
         static bool egg_cmap_put_new(void *mp, const uint8_t *k, int64_t n, const void *v) {
             egg_cmap *m = (egg_cmap *)mp;
-            uint64_t h = egg_cmap_hash(k, n);
+            uint64_t h = egg_cmap_hash(m, k, n);
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             bool fresh = *egg_cmap_find(m, sh, h, k, n) == NULL;
@@ -1611,7 +1738,7 @@ module Egg
       "egg_cmap_take" => <<~C,
         static bool egg_cmap_take(void *mp, const uint8_t *k, int64_t n, void *out) {
             egg_cmap *m = (egg_cmap *)mp;
-            uint64_t h = egg_cmap_hash(k, n);
+            uint64_t h = egg_cmap_hash(m, k, n);
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node **at = egg_cmap_find(m, sh, h, k, n);
@@ -1633,7 +1760,7 @@ module Egg
       "egg_cmap_swap_if" => <<~C,
         static bool egg_cmap_swap_if(void *mp, const uint8_t *k, int64_t n, const void *expected, const void *v, void *old, bool (*eq)(const void *, const void *)) {
             egg_cmap *m = (egg_cmap *)mp;
-            uint64_t h = egg_cmap_hash(k, n);
+            uint64_t h = egg_cmap_hash(m, k, n);
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node **at = egg_cmap_find(m, sh, h, k, n);
@@ -1660,7 +1787,7 @@ module Egg
       "egg_cmap_add" => <<~C,
         static int64_t egg_cmap_add(void *mp, const uint8_t *k, int64_t n, int64_t d) {
             egg_cmap *m = (egg_cmap *)mp;
-            uint64_t h = egg_cmap_hash(k, n);
+            uint64_t h = egg_cmap_hash(m, k, n);
             egg_cmap_shard *sh = egg_cmap_shard_of(m, h);
             EGG_CMAP_LOCK(sh);
             egg_cmap_node *x = *egg_cmap_find(m, sh, h, k, n);
@@ -1695,17 +1822,42 @@ module Egg
         }
       C
       # f on each pair, a shard at a time under its lock (each shard as it
-      # was at one moment; the map as a whole, as it was while it ran).
+      # was at one moment; the map as a whole, as it was while it ran),
+      # with when it went in.
       "egg_cmap_each" => <<~C,
-        static void egg_cmap_each(void *mp, void (*f)(void *, const uint8_t *, int64_t, const void *), void *ctx) {
+        static void egg_cmap_each(void *mp, void (*f)(void *, const uint8_t *, int64_t, const void *, int64_t), void *ctx) {
             egg_cmap *m = (egg_cmap *)mp;
             for (int64_t i = 0; i < m->nshards; i++) {
                 egg_cmap_shard *sh = &m->shards[i];
                 EGG_CMAP_LOCK(sh);
                 for (int64_t b = 0; b < sh->s.nbuckets; b++)
-                    for (egg_cmap_node *x = sh->s.buckets[b]; x != NULL; x = x->next) f(ctx, EGG_CMAP_KEY(m, x), x->klen, EGG_CMAP_VAL(x));
+                    for (egg_cmap_node *x = sh->s.buckets[b]; x != NULL; x = x->next) f(ctx, EGG_CMAP_KEY(m, x), x->klen, EGG_CMAP_VAL(x), x->seq);
                 EGG_CMAP_UNLOCK(sh);
             }
+        }
+      C
+      # The n items (size bytes each) of entries put in the order their
+      # pairs went in (seqs[i] is item i's): what the seed decides, the
+      # shards and buckets they were found in, never shows.
+      "egg_cmap_order" => <<~C,
+        typedef struct { int64_t seq, at; } egg_cmap_rank;
+        static int egg_cmap_rank_cmp(const void *x, const void *y) {
+            int64_t a = ((const egg_cmap_rank *)x)->seq, b = ((const egg_cmap_rank *)y)->seq;
+            return a < b ? -1 : a > b;
+        }
+        static void egg_cmap_order(void *items, size_t size, const int64_t *seqs, int64_t n) {
+            if (n < 2) return;
+            egg_cmap_rank *r = (egg_cmap_rank *)egg_buf_resize(NULL, n, sizeof(egg_cmap_rank));
+            for (int64_t i = 0; i < n; i++) {
+                r[i].seq = seqs[i];
+                r[i].at = i;
+            }
+            qsort(r, (size_t)n, sizeof(egg_cmap_rank), egg_cmap_rank_cmp);
+            uint8_t *sorted = (uint8_t *)egg_buf_resize(NULL, n, size);
+            for (int64_t i = 0; i < n; i++) memcpy(sorted + (size_t)i * size, (uint8_t *)items + (size_t)r[i].at * size, size);
+            memcpy(items, sorted, (size_t)n * size);
+            free(sorted);
+            free(r);
         }
       C
       # A holder fewer; the last frees every node, ending each value with
@@ -3534,9 +3686,13 @@ module Egg
                     "egg_ref_retain" => ["egg_atomic_fetch_add"], "egg_ref_release" => ["egg_atomic_fetch_add"],
                     "egg_atomic_new" => ["egg_buf_resize"], "egg_atomic_add" => ["egg_atomic_fetch_add"],
                     "egg_atomic_close" => ["egg_ref_release"], "egg_shared_new" => ["egg_buf_resize"],
-                    "egg_cmap" => ["egg_thread_base"], "egg_cmap_new" => %w[egg_cmap egg_buf_resize],
+                    "egg_hash_key" => %w[egg_random_fill egg_atomic_load egg_atomic_cas egg_atomic_swap egg_atomic_fetch_add],
+                    "egg_hash_start" => %w[egg_sip egg_hash_key],
+                    "egg_sip_write" => ["egg_sip"], "egg_hash_bytes" => %w[egg_hash_start egg_sip_write], "egg_hash_int" => ["egg_hash_start"],
+                    "egg_cmap" => ["egg_thread_base"], "egg_cmap_new" => %w[egg_cmap egg_buf_resize egg_hash_key],
+                    "egg_cmap_hash" => %w[egg_cmap egg_hash_bytes], "egg_cmap_order" => ["egg_buf_resize"],
                     "egg_cmap_shard_of" => ["egg_cmap"], "egg_cmap_find" => ["egg_cmap"],
-                    "egg_cmap_insert" => %w[egg_cmap egg_buf_resize],
+                    "egg_cmap_insert" => %w[egg_cmap egg_buf_resize egg_atomic_fetch_add],
                     "egg_cmap_get" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_atomic_fetch_add],
                     "egg_cmap_put" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_cmap_insert],
                     "egg_cmap_put_new" => %w[egg_cmap_hash egg_cmap_shard_of egg_cmap_find egg_cmap_insert],
@@ -5406,8 +5562,9 @@ module Egg
                 end
       hold = @checker.owned?(ve) ? "    #{helper('egg_atomic_fetch_add')}((int64_t *)e.f_val.c, 1);\n" : ""
       text = <<~C
-        static void #{name}(void *ctx, const uint8_t *k, int64_t n, const void *v) {
-            #{c_type(buf_t)} *b = (#{c_type(buf_t)} *)ctx;
+        static void #{name}(void *ctx, const uint8_t *k, int64_t n, const void *v, int64_t seq) {
+            egg_cmap_entries *out = (egg_cmap_entries *)ctx;
+            #{c_type(buf_t)} *b = (#{c_type(buf_t)} *)out->buf;
             #{c_type(entry)} e;
         #{keycode}    memcpy(&e.f_val, v, sizeof e.f_val);
         #{hold}    if (b->len == b->cap) {
@@ -5415,6 +5572,11 @@ module Egg
                 b->ptr = (#{c_type(entry)} *)egg_buf_resize(b->ptr, b->cap, sizeof(#{c_type(entry)}));
             }
             b->ptr[b->len++] = e;
+            if (out->nseq == out->capseq) {
+                out->capseq = out->capseq < 4 ? 4 : out->capseq * 2;
+                out->seqs = (int64_t *)egg_buf_resize(out->seqs, out->capseq, sizeof(int64_t));
+            }
+            out->seqs[out->nseq++] = seq;
         }
       C
       @cmap_fns[key] = [name, text.chomp]
@@ -5516,8 +5678,13 @@ module Egg
       when "ConcurrentMap.entries"
         line("(void)#{expr(args[0])};")
         r = tmp
+        o = tmp
         line("#{c_type(ret)} #{r} = { .ptr = NULL, .len = 0, .cap = 0 };")
-        line("#{helper('egg_cmap_each')}(#{c}, #{cmap_entry_fn(t, ret)}, &#{r});")
+        line("egg_cmap_entries #{o} = { &#{r}, NULL, 0, 0 };")
+        line("#{helper('egg_cmap_each')}(#{c}, #{cmap_entry_fn(t, ret)}, &#{o});")
+        # In the order the pairs went in, as HashMap's entries are.
+        line("#{helper('egg_cmap_order')}(#{r}.ptr, sizeof *#{r}.ptr, #{o}.seqs, #{r}.len);")
+        line("free(#{o}.seqs);")
         r
       when "ConcurrentMap.clone"
         hoist("(#{c_type(ret)}){ #{helper('egg_ref_retain')}(#{c}, (int64_t *)#{c}) }", ret)
@@ -6134,6 +6301,19 @@ module Egg
         @need_str = true
         "((egg_str){ #{c_string(name)}, #{name.bytesize} })"
       when "forget" then "((void)#{expr(a)})"
+      when "hashSeed"
+        helper("egg_hash_key")
+        hoist("egg_hash_seed()", "i64")
+      when "hash"
+        seed = hoist(expr(a), "i64")
+        k = args[1]
+        if INT_C.key?(k.ty)
+          width = { "i8" => 1, "u8" => 1, "i16" => 2, "u16" => 2, "i32" => 4, "u32" => 4 }.fetch(k.ty, 8)
+          hoist("#{helper('egg_hash_int')}(#{seed}, (uint64_t)(#{expr(k)}), #{width})", "i64")
+        else
+          v = hoist(expr(k), k.ty)
+          hoist("#{helper('egg_hash_bytes')}(#{seed}, (const uint8_t *)#{v}.ptr, #{v}.len)", "i64")
+        end
       when "errorName"
         @need_str = true
         @need_error_names = true

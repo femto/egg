@@ -176,10 +176,11 @@ module Egg
                       "replace" => 2, "take" => 1, "swap" => 3, "forget" => 1, "errorName" => 1, "compileError" => 1,
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
                       "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1,
-                      "mulWide" => 2 }.freeze
+                      "mulWide" => 2, "hashSeed" => 0, "hash" => 2 }.freeze
     # Builtins only the standard library may call: std/text's parse_float
-    # is @parseF64, which the C library's strtod rounds.
-    STD_BUILTINS = %w[parseF64].freeze
+    # is @parseF64, which the C library's strtod rounds; std/map hashes a
+    # key with @hash under a seed of its own from @hashSeed.
+    STD_BUILTINS = %w[parseF64 hashSeed hash].freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr bufPtr sliceFromPtr].freeze
     BUILTINS = BUILTIN_ARITY.keys.freeze
@@ -4800,6 +4801,21 @@ module Egg
         check_swap(name, args, line, col)
       when "secureZero"
         check_secure_zero(a)
+      when "hashSeed"
+        # @hashSeed(): a new map's seed; with the process's random key (or
+        # EGG_HASH_SEED's) it keys the map's SipHash.
+        "i64"
+      when "hash"
+        # @hash(seed, k): the SipHash-1-3 of the key k under seed: text by
+        # its bytes, an integer by its type's width of bytes.
+        expect_type("i64", check_expr(a, "i64"), a)
+        k = args[1]
+        t = slice_expr?(k) ? check_slice_arg(k, nil) : check_expr(k)
+        unless t == "error" || t == "str" || t == "[]u8" || t == "Buf(u8)" || INT_TYPES.include?(t)
+          err("E103", "@hash takes text or an integer, found #{t}", k.line, k.col)
+        end
+        check_borrowed(k, t) if t == "Buf(u8)"
+        "i64"
       when "swap"
         check_elem_swap(args, line, col)
       when "forget"

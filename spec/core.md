@@ -2445,7 +2445,7 @@ one reads it as it was, and keeps it alive until it closes it.
 | `m.add(a, k, d)` | for a `ConcurrentMap(K, i64)`: d added to k's value (0 if new) in place; the sum (an overflow panics) |
 | `m.put_if(a, k, expected, v)` | v in, if k's value is still expected; whether it went in (if not, v is freed: a retry builds a new one) |
 | `m.remove_if(k, expected)` | k's value taken out and ended, if it is still expected |
-| `m.entries(a)` | a `Buf(MapEntry(K, V))`: every pair, `e.key` (text as a `Buf(u8)` of the caller's) and `e.val` as `get` gives it |
+| `m.entries(a)` | a `Buf(MapEntry(K, V))`: every pair, in the order the keys went in (a key put again keeps its place; one taken out and put back goes last), `e.key` (text as a `Buf(u8)` of the caller's) and `e.val` as `get` gives it |
 | `m.clone()`, `m.close()` | another holder; one fewer, the last freeing every value |
 
 `expected` is what `get` gave, and is checked against the value k has
@@ -2460,6 +2460,17 @@ handle once more. The map is in shards, each a table behind its own lock
 (as many as four per CPU, rounded up to a power of two), so threads
 working on different keys seldom wait for each other; `count` and
 `entries` go shard by shard, each as it was at one moment.
+
+**Hashing.** A `ConcurrentMap` and a `std/map` `HashMap` hash their keys
+with SipHash-1-3 under a key of their own: the first map a program makes
+reads one from the system's random source, and each map derives its own
+from it, so no one can choose keys that all land in one bucket and slow
+the map down (HashDoS). Nothing a program can see depends on it: a
+`ConcurrentMap`'s `entries` are in the order the pairs went in, removals
+or not; a `HashMap`'s are too until its first `remove`, which moves the
+last pair into the gap. The environment
+variable `EGG_HASH_SEED` (a number) replaces the random key, to make a
+run's internal layout repeat while debugging.
 
 ```egg
 // expect: ann

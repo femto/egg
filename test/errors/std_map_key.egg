@@ -9,4 +9,4 @@ fn main(a: Allocator) void {
     const m = map.HashMap(Point, i64).init()
     a.free(m)
 }
-// error: E146 @std/map.egg:55
+// error: E146 @std/map.egg:60

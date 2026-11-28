@@ -293,7 +293,8 @@ v3 (memory without GC, and what realistic programs needed):
   not leave its module's root. A package is a module by name too:
   `bin/eggc run app.egg --pkg http=DIR` makes `@import("http")` `DIR/http.egg` and
   `@import("http/client")` `DIR/client.egg`. `std/map` has `HashMap(K, V)`, in
-  insertion order until the first remove: `init()` for str, `Buf(u8)` and
+  insertion order until the first remove, hashed with SipHash-1-3 under a
+  random key of its own (as `ConcurrentMap` is; `EGG_HASH_SEED` fixes it): `init()` for str, `Buf(u8)` and
   integer keys, `init_with(hash, eq)` for other keys (`hash: fn(K) i64`,
   `eq: fn(K, K) bool`); a map with `Buf(u8)` keys owns their text and is
   looked up by any text (`m.get_text("apple")`, `m.put_text(a, k, v)`);
