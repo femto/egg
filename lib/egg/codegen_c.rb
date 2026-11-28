@@ -5772,23 +5772,29 @@ module Egg
     # The bytes of a map's key: a text's own, or an integer's 8.
     # The bytes of a map's key: a text's own, or any other key's canonical
     # bytes, written to a buffer on the stack (on the heap only past 128
-    # bytes; freed in @cmap_after, once the map has the key).
+    # bytes; freed in @cmap_after, once the map has the key). The key is
+    # computed here, in its place among the arguments; its bytes are
+    # written by the returned proc, called in the map call's own line,
+    # after every other argument, so that no try among them returns while
+    # a buffer is on the heap.
     def cmap_key(t, arg)
       k = @types[t].inner
       if @checker.cmap_text_key?(k)
         v = hoist(coerce(expr(arg), arg.ty, "[]u8"), "[]u8")
-        return "(const uint8_t *)#{v}.ptr, #{v}.len"
+        return -> { "(const uint8_t *)#{v}.ptr, #{v}.len" }
       end
       v = hoist(expr(arg), k)
-      b = tmp
-      helper("egg_kbuf")
-      line("egg_kbuf #{b};")
-      line("#{b}.p = #{b}.small;")
-      line("#{b}.len = 0;")
-      line("#{b}.cap = (int64_t)sizeof #{b}.small;")
-      line("#{key_fn(:enc, k)}(&#{b}, &#{v});")
-      @cmap_after << "if (#{b}.p != #{b}.small) free(#{b}.p);"
-      "#{b}.p, #{b}.len"
+      lambda do
+        b = tmp
+        helper("egg_kbuf")
+        line("egg_kbuf #{b};")
+        line("#{b}.p = #{b}.small;")
+        line("#{b}.len = 0;")
+        line("#{b}.cap = (int64_t)sizeof #{b}.small;")
+        line("#{key_fn(:enc, k)}(&#{b}, &#{v});")
+        @cmap_after << "if (#{b}.p != #{b}.small) free(#{b}.p);"
+        "#{b}.p, #{b}.len"
+      end
     end
 
     # A V as the map keeps it: itself, or moved into a new Shared(V).
@@ -5802,11 +5808,16 @@ module Egg
       hoist("(#{c_type(cmap_ve(t))}){ #{p} }", cmap_ve(t))
     end
 
+    # Each map call frees its own key buffers (a map call inside another's
+    # arguments has a list of its own).
     def cmap_call(m, obj, recv, args, ret)
+      saved = @cmap_after
       @cmap_after = []
       r = cmap_call_inner(m, obj, recv, args, ret)
       @cmap_after.each { |l| line(l) }
       r
+    ensure
+      @cmap_after = saved
     end
 
     def cmap_call_inner(m, obj, recv, args, ret)
@@ -5824,16 +5835,16 @@ module Egg
         k = cmap_key(t, args[0])
         r = tmp
         line("#{c_type(ret)} #{r} = { .has = false };")
-        line("#{r}.has = #{helper(m.end_with?('get') ? 'egg_cmap_get' : 'egg_cmap_take')}(#{c}, #{k}, &#{r}.value);")
+        line("#{r}.has = #{helper(m.end_with?('get') ? 'egg_cmap_get' : 'egg_cmap_take')}(#{c}, #{k.()}, &#{r}.value);")
         r
       when "ConcurrentMap.contains"
         k = cmap_key(t, args[0])
-        hoist("#{helper('egg_cmap_get')}(#{c}, #{k}, NULL)", "bool")
+        hoist("#{helper('egg_cmap_get')}(#{c}, #{k.()}, NULL)", "bool")
       when "ConcurrentMap.remove"
         k = cmap_key(t, args[0])
         old = tmp
         line("#{c_type(ve)} #{old};")
-        had = hoist("#{helper('egg_cmap_take')}(#{c}, #{k}, &#{old})", "bool")
+        had = hoist("#{helper('egg_cmap_take')}(#{c}, #{k.()}, &#{old})", "bool")
         if owned
           line("if (#{had}) #{drop(ve)}(#{old});")
         else
@@ -5846,19 +5857,19 @@ module Egg
         v = cmap_put_value(t, args[2])
         r = tmp
         line("#{c_type(ret)} #{r} = { .has = false };")
-        line("#{r}.has = #{helper('egg_cmap_put')}(#{c}, #{k}, &#{v}, &#{r}.value);")
+        line("#{r}.has = #{helper('egg_cmap_put')}(#{c}, #{k.()}, &#{v}, &#{r}.value);")
         r
       when "ConcurrentMap.put_new"
         line("(void)#{expr(args[0])};")
         k = cmap_key(t, args[1])
         v = cmap_put_value(t, args[2])
-        fresh = hoist("#{helper('egg_cmap_put_new')}(#{c}, #{k}, &#{v})", "bool")
+        fresh = hoist("#{helper('egg_cmap_put_new')}(#{c}, #{k.()}, &#{v})", "bool")
         line("if (!#{fresh}) #{drop(ve)}(#{v});") if owned
         fresh
       when "ConcurrentMap.add"
         line("(void)#{expr(args[0])};")
         k = cmap_key(t, args[1])
-        hoist("#{helper('egg_cmap_add')}(#{c}, #{k}, #{expr(args[2])})", "i64")
+        hoist("#{helper('egg_cmap_add')}(#{c}, #{k.()}, #{expr(args[2])})", "i64")
       when "ConcurrentMap.put_if", "ConcurrentMap.remove_if"
         put = m.end_with?("put_if")
         line("(void)#{expr(args[0])};") if put
@@ -5868,7 +5879,7 @@ module Egg
         v = put ? cmap_put_value(t, rest[2]) : nil
         old = tmp
         line("#{c_type(ve)} #{old};")
-        ok = hoist("#{helper('egg_cmap_swap_if')}(#{c}, #{k}, &#{expected}, #{v.nil? ? 'NULL' : "&#{v}"}, &#{old}, #{cmap_eq(t)})", "bool")
+        ok = hoist("#{helper('egg_cmap_swap_if')}(#{c}, #{k.()}, &#{expected}, #{v.nil? ? 'NULL' : "&#{v}"}, &#{old}, #{cmap_eq(t)})", "bool")
         if owned
           line("if (#{ok}) #{drop(ve)}(#{old});")
           line("if (!#{ok}) #{drop(ve)}(#{v});") if put
