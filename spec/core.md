@@ -2465,8 +2465,10 @@ working on different keys seldom wait for each other; `count` and
 with SipHash-1-3 under a key of their own: the first map a program makes
 reads one from the system's random source, and each map derives its own
 from it, so no one can choose keys that all land in one bucket and slow
-the map down (HashDoS). Nothing a program can see depends on it: both
-maps give their pairs in the order they went in. The environment
+the map down (HashDoS). Nothing a program can see depends on it: a
+`ConcurrentMap`'s `entries` are in the order the pairs went in, removals
+or not; a `HashMap`'s are too until its first `remove`, which moves the
+last pair into the gap. The environment
 variable `EGG_HASH_SEED` (a number) replaces the random key, to make a
 run's internal layout repeat while debugging.
 

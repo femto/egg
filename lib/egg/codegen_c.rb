@@ -147,7 +147,7 @@ module Egg
                       egg_chan egg_chan_queue egg_chan_line egg_chan_get egg_chan_put egg_chan_line_close egg_chan_wait egg_chan_new egg_chan_free egg_chan_sender egg_chan_receiver egg_chan_send egg_chan_try_send egg_chan_recv egg_chan_recv_for
                       egg_chan_tx_close egg_chan_rx_close egg_select
                       egg_atomic_base egg_atomic_fetch_add egg_atomic_load egg_atomic_swap egg_atomic_cas egg_ref_retain egg_ref_release egg_atomic_new egg_atomic_add egg_atomic_close egg_shared_new
-                      egg_sip egg_sip_write egg_hash_key egg_hash_bytes egg_hash_int
+                      egg_sip egg_sip_write egg_hash_key egg_hash_start egg_hash_bytes egg_hash_int
                       egg_cmap egg_cmap_hash egg_cmap_new egg_cmap_shard_of egg_cmap_find egg_cmap_insert egg_cmap_get egg_cmap_put egg_cmap_put_new egg_cmap_take egg_cmap_swap_if egg_cmap_add egg_cmap_count egg_cmap_each egg_cmap_order egg_cmap_close
                       egg_net_last egg_net_close egg_net_prep egg_net_start egg_net_addrinfo egg_net_recv
                       egg_net_timeout egg_sockaddr_port egg_net_port egg_addr_port egg_print_addr egg_net_resolve
@@ -1488,6 +1488,10 @@ module Egg
             egg_hash_key_make();
             return egg_atomic_fetch_add(&egg_hash_seeds, 1) + 1;
         }
+      C
+      # A SipHash keyed for a map's seed (apart from egg_hash_key: a map that
+      # is made but never hashes a key needs only the seed).
+      "egg_hash_start" => <<~C,
         static void egg_hash_start(egg_sip *s, int64_t seed) {
             egg_sip_init(s, egg_hash_k[0] ^ egg_hash_mix((uint64_t)seed), egg_hash_k[1] + (uint64_t)seed);
         }
@@ -3682,8 +3686,9 @@ module Egg
                     "egg_ref_retain" => ["egg_atomic_fetch_add"], "egg_ref_release" => ["egg_atomic_fetch_add"],
                     "egg_atomic_new" => ["egg_buf_resize"], "egg_atomic_add" => ["egg_atomic_fetch_add"],
                     "egg_atomic_close" => ["egg_ref_release"], "egg_shared_new" => ["egg_buf_resize"],
-                    "egg_hash_key" => %w[egg_sip egg_random_fill egg_atomic_load egg_atomic_cas egg_atomic_swap egg_atomic_fetch_add],
-                    "egg_sip_write" => ["egg_sip"], "egg_hash_bytes" => %w[egg_sip egg_sip_write egg_hash_key], "egg_hash_int" => %w[egg_sip egg_hash_key],
+                    "egg_hash_key" => %w[egg_random_fill egg_atomic_load egg_atomic_cas egg_atomic_swap egg_atomic_fetch_add],
+                    "egg_hash_start" => %w[egg_sip egg_hash_key],
+                    "egg_sip_write" => ["egg_sip"], "egg_hash_bytes" => %w[egg_hash_start egg_sip_write], "egg_hash_int" => ["egg_hash_start"],
                     "egg_cmap" => ["egg_thread_base"], "egg_cmap_new" => %w[egg_cmap egg_buf_resize egg_hash_key],
                     "egg_cmap_hash" => %w[egg_cmap egg_hash_bytes], "egg_cmap_order" => ["egg_buf_resize"],
                     "egg_cmap_shard_of" => ["egg_cmap"], "egg_cmap_find" => ["egg_cmap"],
