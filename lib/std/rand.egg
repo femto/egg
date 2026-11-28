@@ -1,0 +1,11 @@
+// std/rand: bytes from the system's cryptographic random source
+// (getentropy, or BCryptGenRandom on Windows), for keys, nonces and seeds.
+// const rand = @import("std/rand")
+// rand.fill(&b[0..]) replaces every byte of the Buf(u8) b;
+// rand.fill(&key[0..]) fills an array, which then never passes through a Buf.
+
+// Every byte of b replaced with random bytes; failing to read them panics
+// "cannot read random bytes".
+fn fill(inout b: []u8) void {
+    @randomFill(&b[0..])
+}

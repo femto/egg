@@ -10,9 +10,9 @@
 # and imports may form cycles (names are resolved after everything is
 # loaded, as in Zig).
 #
-# A package is a module too: `eggc --pkg http=DIR` (passed by the package
-# manager, clutch) makes `@import("http")` DIR/http.egg and
-# `@import("http/client")` DIR/client.egg, with DIR as the package's root,
+# A package is a module too: `eggc --pkg json=DIR` (passed by the package
+# manager, clutch) makes `@import("json")` DIR/json.egg and
+# `@import("json/util")` DIR/util.egg, with DIR as the package's root,
 # the way std is lib/std. The names come from the command line only, so
 # eggc reads no manifest. The names hold for the whole program: a package
 # imports the packages it needs from the same list.

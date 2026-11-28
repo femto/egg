@@ -91,9 +91,9 @@ module Egg
     # literal rounds to zero), for checking literals.
     F32_MAX = 3.4028234663852886e38
     F32_TINY = 7.006492321624085e-46
-    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Poller Waker Addr Threads Thread Atomic Clock Random]).freeze
-    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args", "Clock" => "time", "Random" => "rand" }.freeze
-    CAPABILITIES = %w[alloc args fs io net rand thread time].freeze
+    PRIMS = (INT_TYPES + FLOAT_TYPES + %w[bool str void Io Allocator Fs Net Args Reader Writer DirReader TcpConn TcpListener UdpSocket Poller Waker Addr Threads Thread Atomic]).freeze
+    CAP_TYPES = { "Io" => "io", "Allocator" => "alloc", "Fs" => "fs", "Net" => "net", "Threads" => "thread", "Args" => "args" }.freeze
+    CAPABILITIES = %w[alloc args fs io net thread].freeze
     # Open files and sockets: owned values, made by an Fs or a Net and only
     # by one. They work like capability values, but main cannot receive them.
     FILE_TYPES = { "Reader" => "fs", "Writer" => "fs", "DirReader" => "fs", "TcpConn" => "net", "TcpListener" => "net", "UdpSocket" => "net", "Poller" => "net", "Waker" => "net", "Thread" => "thread", "Atomic" => "thread" }.freeze
@@ -139,8 +139,6 @@ module Egg
       # return the old one (compare_swap stored new if it was expected).
       "Atomic" => { "load" => [[], "i64"], "store" => [["i64"], "void"], "add" => [["i64"], "i64"], "swap" => [["i64"], "i64"],
                     "compare_swap" => [%w[i64 i64], "i64"], "clone" => [[], "Atomic"], "close" => [[], "void"] },
-"Clock" => { "now" => [[], "i64"], "monotonic" => [[], "i64"] },
-"Random" => { "fill" => [["inout_buffer"], "void"] },
       "Thread" => { "join" => [[], "void"], "detach" => [[], "void"] },
       "Reader" => { "read_line" => [%w[Allocator inout_buffer], "!bool"], "read_line_max" => [%w[Allocator inout_buffer i64], "!bool"],
                     "read_all" => [["Allocator"], "!Buf(u8)"],
@@ -177,13 +175,15 @@ module Egg
                       "ptrAdd" => 2, "ptrCast" => 2, "intFromPtr" => 1, "ptrFromInt" => 2, "strPtr" => 1,
                       "bufPtr" => 1, "sliceFromPtr" => 2, "parseF64" => 1, "secureZero" => 1,
                       "mulWide" => 2, "hashSeed" => 0, "hash" => 2, "eql" => 2, "keyBytes" => 2, "checkKey" => 1,
-                      "floatBits" => 1 }.freeze
+                      "floatBits" => 1, "clockNow" => 0, "clockMonotonic" => 0, "randomFill" => 1 }.freeze
     # Builtins only the standard library may call: std/text's parse_float
     # is @parseF64, which the C library's strtod rounds; std/map hashes a
-    # key with @hash under a seed of its own from @hashSeed.
-    # @eql compares two keys as @hash sees them; @keyBytes writes a key's
-    # canonical bytes, the definition both follow (for std's own tests).
-    STD_BUILTINS = %w[parseF64 hashSeed hash eql keyBytes checkKey].freeze
+    # key with @hash under a seed of its own from @hashSeed; std/time's now
+    # and monotonic are @clockNow and @clockMonotonic, and std/rand's fill
+    # is @randomFill. @eql compares two keys as @hash sees them; @keyBytes
+    # writes a key's canonical bytes, the definition both follow (for
+    # std's own tests).
+    STD_BUILTINS = %w[parseF64 hashSeed hash eql keyBytes checkKey clockNow clockMonotonic randomFill].freeze
     # Builtins that need `allow unsafe`.
     UNSAFE_BUILTINS = %w[ptrAdd ptrCast intFromPtr ptrFromInt strPtr bufPtr sliceFromPtr].freeze
     BUILTINS = BUILTIN_ARITY.keys.freeze
@@ -3623,15 +3623,6 @@ module Egg
             return "error"
           end
           a.info = {}
-          if t == "Random" && a.expr.is_a?(SliceExpr)
-            # rng.fill(&k[0..]): random bytes straight into an array (or a
-            # part of a buffer), so a key need not pass through a Buf.
-            a.ty = check_mut_slice(a.expr)
-            if a.ty != "error" && a.ty != "[]u8"
-              err("E103", "'fill' writes random bytes to a Buf(u8) or a []u8, found #{a.ty}", a.line, a.col)
-            end
-            next
-          end
           at = check_lvalue(a.expr, "resize")
           mark_root_used(a.expr)
           a.ty = at
@@ -4877,6 +4868,11 @@ module Egg
         # @hashSeed(): a new map's seed; with the process's random key (or
         # EGG_HASH_SEED's) it keys the map's SipHash.
         "i64"
+      when "clockNow", "clockMonotonic"
+        # Nanoseconds: since 1970-01-01 UTC, or since an unspecified start.
+        "i64"
+      when "randomFill"
+        check_random_fill(a)
       when "hash"
         # @hash(seed, k): the SipHash-1-3 of the key k's canonical bytes
         # (see key_error) under seed.
@@ -5022,6 +5018,21 @@ module Egg
       end
       if !held.nil? && owned?(held)
         err("E103", "'@secureZero' zeros values that own nothing; #{held} owns memory, so free it (zero its bytes first with @secureZero(&b[0..]))", a.line, a.col)
+      end
+      "void"
+    end
+
+    # @randomFill(&x[lo..hi]): random bytes into a writable []u8.
+    def check_random_fill(a)
+      unless a.is_a?(AddrOf) && a.expr.is_a?(SliceExpr)
+        err("E121", "'@randomFill' writes to a writable []u8: pass it as &x[lo..hi]", a.line, a.col)
+        check_expr(a)
+        return "void"
+      end
+      a.info = {}
+      a.ty = check_mut_slice(a.expr)
+      if a.ty != "error" && a.ty != "[]u8"
+        err("E103", "'@randomFill' writes random bytes to a []u8, found #{a.ty}", a.line, a.col)
       end
       "void"
     end

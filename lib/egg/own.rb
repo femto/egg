@@ -1021,7 +1021,7 @@ module Egg
       in Builtin[name: "forget", args:, line:, col:]
         path = path_of(args[0])
         path.nil? ? walk(args[0]) : forget(path, line, col)
-      in Builtin[name: "secureZero", args:, line:, col:]
+      in Builtin[name: "secureZero" | "randomFill", args:, line:, col:]
         # A write to the place (or the slice's variable): no slice of it
         # may be in use.
         target = args[0].expr

@@ -139,8 +139,8 @@ module Clutch
   # The package index: a git repository (or, for testing, a directory)
   # with packages/<name>.toml for each package:
   #
-  #   name = "http"
-  #   repo = "https://github.com/someone/egg-http"
+  #   name = "json"
+  #   repo = "https://github.com/femto/egg-json"
   #   [[release]]
   #   version = "0.1.0"
   #   ref = "<full commit SHA in repo>"

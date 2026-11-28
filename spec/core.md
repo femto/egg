@@ -2,7 +2,7 @@
 
 This is the complete definition of the v2 core: the v1 language plus
 integer types of every width (section 7), modules (section 16), the `io`,
-`args`, `fs`, `net`, `thread`, `time`, `rand` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
+`args`, `fs`, `net`, `thread` and `alloc` capabilities (section 17), raw pointers behind `allow unsafe`
 (section 18), function values (section 19), `extern fn` (section 20), and
 owned buffers with `defer` (section 21).
 It is written to be loaded into a model's context in one piece, together
@@ -151,8 +151,6 @@ fn main(io: Io) void {
 | `Net` | the net capability | received by `main`, passed down; section 17 |
 | `Threads` | the thread capability | received by `main`, passed down; section 17 |
 | `Args` | the args capability | received by `main`, passed down; section 17 |
-| `Clock` | the time capability | received by `main`, passed down; section 17 |
-| `Random` | the rand capability | received by `main`, passed down; section 17 |
 | `Buf(T)` | an owned heap buffer of T | moved, not copied; section 21 |
 | `MultiArrayList(T)` | an owned list of the struct T, one column per field | moved, not copied; section 21 |
 
@@ -1740,8 +1738,8 @@ library (`"std/a/b"` is `a/b.egg` in it, and `"std"` alone is `std.egg`),
 which ships with the compiler in `lib/std` (the `EGG_STD`
 environment variable points elsewhere). The other module names are
 **packages**, given to eggc as `--pkg NAME=DIR` (the package manager,
-`clutch`, passes one per dependency): `@import("http")` is `DIR/http.egg`
-and `@import("http/client")` is `DIR/client.egg`, as for `std`. The
+`clutch`, passes one per dependency): `@import("json")` is `DIR/json.egg`
+and `@import("json/util")` is `DIR/util.egg`, as for `std`. The
 packages given hold for the whole program: a package imports the
 packages it needs by name from the same list, so every package that any
 file imports must be given. Any other name is E129. A file import may
@@ -1798,8 +1796,8 @@ version of this section.
 ## 17. Capabilities
 
 A capability is something the core does not have: the standard streams,
-command-line arguments, files, the network, threads, the clock, random
-bytes and heap allocation so far. A file declares the capabilities it needs on a `uses` line:
+command-line arguments, files, the network, threads and heap allocation
+so far. A file declares the capabilities it needs on a `uses` line:
 
 ```
 uses alloc, io
@@ -1815,14 +1813,44 @@ with a value type that is the only way to use it:
 | `net` | `Net` | `net.tcp_connect(host, port) !TcpConn`, `net.tcp_listen(host, port) !TcpListener`, `net.udp_bind(host, port) !UdpSocket`, `net.resolve(host, port) !Addr`, `net.poller() !Poller`: see below |
 | `thread` | `Threads` | `threads.spawn(f, x, ...) Thread`: runs `f(x, ...)` on a new thread; `threads.channel(T, n) Receiver(T)`: a channel of T that holds up to n values (with 0, a sender waits for the receiver); see below |
 | `fs` | `Fs` | `fs.read(a, path) !Buf(u8)`: the whole file; `fs.write(path, data) !void`: the file holds exactly the text `data`, replacing what it held; `fs.open(path) !Reader`, `fs.create(path) !Writer` (a new or emptied file), `fs.append(path) !Writer`: open files; `fs.open_dir(path) !DirReader`, `fs.make_dir(path) !void`, `fs.remove_file(path) !void`, `fs.remove_dir(path) !void`, `fs.rename(from, to) !void`, `fs.stat(path) !Stat`, `fs.real_path(a, path) !Buf(u8)`: directories and names; see below |
-| `time` | `Clock` | `clock.now() i64`: the time in nanoseconds since 1970-01-01 UTC, from the system's clock, which may be set back; failing to read a clock panics `cannot read the clock`; `clock.monotonic() i64`: nanoseconds since an unspecified start, never decreasing, for measuring how long something took |
-| `rand` | `Random` | `rng.fill(&b)`: every byte of the `Buf(u8)` b replaced with bytes from the system's cryptographic random source (`getentropy`, or `BCryptGenRandom` on Windows); `rng.fill(&k[lo..hi])` the same for a writable `[]u8` (section 12), such as a key in an array, which then never passes through a `Buf`; a failure to read it panics `cannot read random bytes` |
 | `alloc` | `Allocator` | `a.concat(s, t, ...) Buf(u8)`: two or more texts, one after another (section 8); `a.leak(t) str`: a copy of the text t that is never freed; `a.append_str(&b, s)`, `a.append_int(&b, n)`, `a.append_float(&b, x)`: text at the end of a `Buf(u8)`, section 8; `a.int_str(n) Buf(u8)`: the integer n in decimal; `a.float_str(x) Buf(u8)`: the float x as `io.print` writes it; `a.cstr(s) *u8`, `a.str_from_c(p) Buf(u8)`: C strings, section 20; `a.create(v) *T`: a pointer to a copy of v; `a.alloc(n, v) Buf(T)`, `a.free(b)`, `a.resize(&b, n, v)`, `a.push(&b, v)`, `a.pop(&b) ?T`: buffers, section 21 |
 
 `fs` is separate from `io` so that a file's `uses` line says what it can
-reach: a program that only prints cannot touch a file. `time` and `rand` are
-separate too: the clock and random bytes are not among what can make a
-run of code that declares neither differ from another on the same input.
+reach: a program that only prints cannot touch a file.
+
+The clock and random bytes are not capabilities: reading them changes
+nothing outside the program and reaches nothing in it, so any code may.
+`std/time` has `time.now() i64`, the time in nanoseconds since 1970-01-01
+UTC, from the system's clock, which may be set back, and
+`time.monotonic() i64`, nanoseconds since an unspecified start, never
+decreasing, for measuring how long something took; failing to read a
+clock panics `cannot read the clock`. `std/rand` has `rand.fill(&b[lo..hi])`,
+which replaces every byte of a writable `[]u8` (section 12) with bytes from
+the system's cryptographic random source (`getentropy`, or
+`BCryptGenRandom` on Windows): `&b[0..]` for a whole `Buf(u8)`, or
+`&key[0..]` for an array, so a key never passes through a `Buf`; failing to
+read them panics `cannot read random bytes`. Code that declares no
+capability gives the same results on the same input only when it reads
+neither.
+
+```egg
+// expect: true true
+uses io
+
+const time = @import("std/time")
+const rand = @import("std/rand")
+
+fn main(io: Io) void {
+    const t0 = time.monotonic()
+    var key: [32]u8 = @splat(0)
+    rand.fill(&key[0..])
+    var any = false
+    for (key[0..]) |x| {
+        any = any or x != 0
+    }
+    io.print(any, " ", time.monotonic() >= t0)
+}
+```
 
 ```egg
 // expect: 5
@@ -1929,7 +1957,7 @@ so give a directory a name that is free.
 `Stat` is a plain value with three fields: `kind`, a `FileKind` (`.file`,
 `.dir` or `.other`, such as a device), `size`, the bytes of a file (0
 for anything else), and `modified`, when it was last written, in
-nanoseconds since 1970-01-01 UTC as `clock.now()` counts them (as finely as
+nanoseconds since 1970-01-01 UTC as `time.now()` counts them (as finely as
 the file system keeps it; a time before 1677-09-21T00:12:43.145224192Z or
 after 2262-04-11T23:47:16.854775807Z, which an `i64` of nanoseconds cannot
 hold, is the smallest or largest `i64`). `fs.real_path(a, path) !Buf(u8)` is the absolute path
@@ -3621,7 +3649,7 @@ pointers, reflection beyond
 `@sizeOf`/`@typeName`, private (non-`pub`) names, distinct types (a new type
 over an existing one; an `owned struct` covers those that hold a buffer, but
 not a plain `UserId`), and capabilities other
-than `io`, `args`, `fs`, `net`, `thread`, `time`, `rand` and `alloc`. See the design document's roadmap for when each
+than `io`, `args`, `fs`, `net`, `thread` and `alloc`. See the design document's roadmap for when each
 arrives.
 
 ## 23. A complete program

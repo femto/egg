@@ -127,8 +127,6 @@ module Egg
       "Waker" => "typedef struct { void *w; } egg_waker_v;\n",
       "Addr" => "typedef struct { uint8_t b[28]; int32_t len; } egg_addr;\n",
       "Threads" => "typedef struct { char unused; } egg_threads;\n",
-"Clock" => "typedef struct { char unused; } egg_clock;\n",
-"Random" => "typedef struct { char unused; } egg_random;\n",
       "Thread" => "typedef struct { void *h; } egg_thread;\n",
       "Atomic" => "typedef struct { void *c; } egg_atomic;\n"
     }.freeze
@@ -4320,7 +4318,7 @@ module Egg
       when "Args"
         @need_cap[t] = true
         "egg_args"
-      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread", "Clock", "Random", "Atomic"
+      when "Reader", "Writer", "DirReader", "Net", "Addr", "Threads", "Thread", "Atomic"
         @need_cap[t] = true
         "egg_#{t.downcase}"
       when "TcpConn", "TcpListener", "UdpSocket", "Poller", "Waker"
@@ -5897,20 +5895,6 @@ module Egg
                r
              when "Args.len"
                "#{helper('egg_args_len')}()"
-             when "Clock.now"
-               "#{helper('egg_clock_now')}()"
-             when "Clock.monotonic"
-               "#{helper('egg_clock_monotonic')}()"
-             when "Random.fill"
-               b = tmp
-               if args[0].expr.is_a?(SliceExpr)
-                 # A writable view: its pointer is const only in the type.
-                 line("#{c_type(args[0].ty)} #{b} = #{codes[0]};")
-                 "#{helper('egg_random_fill')}((uint8_t *)#{b}.ptr, #{b}.len)"
-               else
-                 line("#{c_type(args[0].ty)} *#{b} = #{codes[0]};")
-                 "#{helper('egg_random_fill')}(#{b}->ptr, #{b}->len)"
-               end
              when "Args.get"
                "#{helper('egg_args_get')}(#{codes[0]})"
              when "Args.env"
@@ -6461,6 +6445,12 @@ module Egg
         @need_str = true
         @need_error_names = true
         "egg_error_strs[#{expr(a)}]"
+      when "clockNow" then "#{helper('egg_clock_now')}()"
+      when "clockMonotonic" then "#{helper('egg_clock_monotonic')}()"
+      when "randomFill"
+        # A writable view: its pointer is const only in the type.
+        s = hoist(slice_expr(a.expr), a.ty)
+        "#{helper('egg_random_fill')}((uint8_t *)#{s}.ptr, #{s}.len)"
       when "secureZero"
         if a.expr.is_a?(SliceExpr)
           s = hoist(slice_expr(a.expr), a.ty)
