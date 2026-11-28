@@ -15,7 +15,8 @@
 #                      cannot drift from the compiler.
 # test/std/*.egg    -- run like examples/*.egg, but as part of a copy of
 #                      std (EGG_STD), so they may call std's own builtins
-#                      (@hash, @eql, @keyBytes: the map key properties).
+#                      (@hash, @eql, @keyBytes: the map key properties);
+#                      with "// error: CODE @LINE" lines, checked instead.
 # examples/complex/ -- larger programs (a parser, Dijkstra, a VM, ...),
 #                      run like examples/*.egg.
 # examples/ffi/*/   -- programs (files with "// expect:") calling C
@@ -2147,9 +2148,22 @@ Dir.mktmpdir do |dir|
       FileUtils.cp_r(File.join(ROOT, "lib", "std", "."), std)
       copy = File.join(std, File.basename(path))
       FileUtils.cp(path, copy)
-      out, err, st = Open3.capture3({ "EGG_STD" => std }, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), "run", copy)
-      want = comment_values(File.read(path), "expect")
-      report(st.success? && out.lines.map(&:chomp) == want, "std/#{File.basename(path)}", "#{out}#{err}")
+      src = File.read(path)
+      errors = comment_values(src, "error")
+      if errors.empty?
+        out, err, st = Open3.capture3({ "EGG_STD" => std }, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), "run", copy)
+        want = comment_values(src, "expect")
+        report(st.success? && out.lines.map(&:chomp) == want, "std/#{File.basename(path)}", "#{out}#{err}")
+      else
+        # "// error: CODE @LINE": eggc check must report each.
+        out, err, st = Open3.capture3({ "EGG_STD" => std }, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), "check", copy)
+        got = "#{out}#{err}"
+        missing = errors.reject do |e|
+          code, at = e.split(" @")
+          got.include?("#{File.basename(path)}:#{at}:") && got.include?("error[#{code}]")
+        end
+        report(!st.success? && missing.empty?, "std/#{File.basename(path)}", "missing #{missing.inspect} in:\n#{got}")
+      end
     end
   end
 

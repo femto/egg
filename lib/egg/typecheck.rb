@@ -4882,12 +4882,16 @@ module Egg
         # (see key_error) under seed.
         expect_type("i64", check_expr(a, "i64"), a)
         key_arg(args[1])
+        # Neither operand may change what the other reads.
+        check_nested_writes(args)
         "i64"
       when "eql"
         # @eql(x, y): are two keys the same, as their canonical bytes are?
         t = key_arg(a)
         u = key_arg(args[1])
         err("E103", "@eql compares two keys of one type, found #{t} and #{u}", line, col) unless t == "error" || u == "error" || t == u || (text_type?(t) && text_type?(u))
+        # As for ==: neither operand may change what the other reads.
+        check_nested_writes(args)
         "bool"
       when "keyBytes"
         # @keyBytes(a, k): the canonical bytes of the key k.

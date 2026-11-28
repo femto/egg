@@ -6,6 +6,7 @@
 // expect: general/ann 2, random/ann 1
 // expect: ab|c and a|bc are 2 keys
 // expect: 0.5 -> half, -0.0 apart from 0.0: true
+// expect: a key with no fields: 3
 uses alloc, io
 
 const map = @import("std/map")
@@ -17,6 +18,9 @@ const Where = struct {
     room: Buf(u8)
     user: Buf(u8)
 }
+
+// A key with nothing in it: every one is the same key.
+const Unit = struct {}
 
 const Pair = struct {
     a: Buf(u8)
@@ -56,4 +60,10 @@ fn main(io: Io, a: Allocator) void {
     names.put(a, @floatBits(0.5), "half")
     names.put(a, @floatBits(0.0), "zero")
     io.print("0.5 -> ", names.get(@floatBits(0.5)) orelse "?", ", -0.0 apart from 0.0: ", names.get(@floatBits(-0.0)) == null)
+
+    var units = map.HashMap(Unit, i64).init()
+    defer a.free(units)
+    units.put(a, Unit{}, 1)
+    units.put(a, Unit{}, 3)
+    io.print("a key with no fields: ", units.get(Unit{}) orelse 0)
 }

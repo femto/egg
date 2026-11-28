@@ -1,0 +1,12 @@
+// A program whose only composite-key operation is @eql builds (under
+// -Werror) without the hashing or buffer helpers it does not use.
+// expect: true false
+uses io
+
+const P = struct { x: i64, y: i64 }
+
+fn main(io: Io) void {
+    const p = P{ .x = 1, .y = 2 }
+    const q = P{ .x = 1, .y = 3 }
+    io.print(@eql(p, p), " ", @eql(p, q))
+}

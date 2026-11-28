@@ -5551,7 +5551,6 @@ module Egg
       @cmap_fns[key] = [name, ""] # a recursive field finds the name
       ct = c_type(t)
       sip = kind == :hash
-      helper(sip ? "egg_sip_write" : "egg_buf_resize")
       put = ->(ptr, n) { sip ? "egg_sip_write(s, #{ptr}, #{n})" : "#{key_put}(out, #{ptr}, #{n})" }
       int = lambda do |code, width|
         "    { uint64_t x = (uint64_t)(#{code}); uint8_t b[8]; for (int i = 0; i < #{width}; i++) b[i] = (uint8_t)(x >> (8 * i)); #{put.('b', width)}; }\n"
@@ -5592,7 +5591,8 @@ module Egg
                  "    if (x->tag != y->tag) return false;\n#{arms}    return true;\n"
                else "    return #{same.(t, '(*x)', '(*y)')};\n" # a bool, an enum, an integer
                end
-        @cmap_fns[key] = [name, "static bool #{name}(const #{ct} *x, const #{ct} *y) {\n#{body}}"]
+        # (void): a struct without fields reads neither.
+        @cmap_fns[key] = [name, "static bool #{name}(const #{ct} *x, const #{ct} *y) {\n    (void)x;\n    (void)y;\n#{body}}"]
       else
         body = case info&.kind
                when :struct then info.fields.map { |f, ft, _| part.(ft, "v->f_#{f}") }.join
@@ -5605,7 +5605,10 @@ module Egg
                else part.(t, "(*v)") # a bool, an enum, an integer
                end
         target = sip ? "egg_sip *s" : "#{c_type("Buf(u8)")} *out"
-        @cmap_fns[key] = [name, "static void #{name}(#{target}, const #{ct} *v) {\n#{body}}"]
+        # Only a body that writes needs it (a struct without fields does not;
+        # the bytes path gets egg_buf_resize through key_put).
+        helper("egg_sip_write") if sip && body.include?("egg_sip_write(")
+        @cmap_fns[key] = [name, "static void #{name}(#{target}, const #{ct} *v) {\n    (void)#{sip ? 's' : 'out'};\n    (void)v;\n#{body}}"]
       end
       name
     end
