@@ -2158,9 +2158,10 @@ Dir.mktmpdir do |dir|
         # "// error: CODE @LINE": eggc check must report each.
         out, err, st = Open3.capture3({ "EGG_STD" => std }, RbConfig.ruby, File.join(ROOT, "bin", "eggc"), "check", copy)
         got = "#{out}#{err}"
+        # The file, line and code of one diagnostic, together.
         missing = errors.reject do |e|
           code, at = e.split(" @")
-          got.include?("#{File.basename(path)}:#{at}:") && got.include?("error[#{code}]")
+          got.lines.any? { |l| l.include?("#{File.basename(path)}:#{at}:") && l.include?("error[#{code}]") }
         end
         report(!st.success? && missing.empty?, "std/#{File.basename(path)}", "missing #{missing.inspect} in:\n#{got}")
       end
