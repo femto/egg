@@ -318,7 +318,7 @@ v3 (memory without GC, and what realistic programs needed):
   earlier than `modified`, to the second; a null `modified` never makes
   a 304 by date; `fresh(req, tag, modified)` asks first, before the
   body is made), a Date header
-  (`append_date(a, &own, clock.now())`), byte ranges (`ranged`) and gzip
+  (`append_date(a, &own, time.now())`), byte ranges (`ranged`) and gzip
   (`compressed`, or `append_compressed` for a Poller: the body gzipped
   when the client takes gzip and it is 1 KiB or more, with Vary:
   Accept-Encoding either way); forms, cookies and multipart uploads are
@@ -334,7 +334,7 @@ v3 (memory without GC, and what realistic programs needed):
   `r.reason()`.
   `std/ws` is WebSocket (`ws://` only): a server answers with
   `is_handshake` and `handshake` (the 101 response) and keeps a
-  `ws.server(inbox)`; a client makes a `ws.client(rng, a)` and
+  `ws.server(inbox)`; a client makes a `ws.client(a)` and
   `connect(net, a, &conn, url, protocols, headers)`. Either end sends with
   `send` and `close`, or builds frames with `frame` and `close_frame`, and
   gets messages with `take` (from bytes given to `received`, as a Poller
@@ -342,7 +342,7 @@ v3 (memory without GC, and what realistic programs needed):
   handshake; text is checked to be UTF-8. `std/codec` has Base64, hex and form escaping;
   `std/sha1` SHA-1, in Egg, for the WebSocket handshake.
   `std/time` is the calendar in UTC: `time.utc(ns)` takes an instant
-  (nanoseconds since 1970, as `clock.now()` gives it) apart into a
+  (nanoseconds since 1970, as `time.now()` gives it) apart into a
   `DateTime` (`weekday()`, `yearday()`, `unix()`, `unix_ns()`), and RFC 3339
   and HTTP dates are written (`append_rfc3339`, `append_http_date`) and
   read (`parse_rfc3339`, `parse_http_date`, which takes all three forms
@@ -425,9 +425,9 @@ v3 (memory without GC, and what realistic programs needed):
   gives an `Args` value; `args.len()`, and `args.get(i)` returns a `str`,
   with the program's name at 0 and the first argument at 1;
   `args.env(name)` is an environment variable, a `?str`
-- Time and random bytes: `uses time` gives a `Clock` (`clock.now()` and
-  `clock.monotonic()`, in nanoseconds); `uses rand` gives a `Random`
-  (`rng.fill(&b)` fills a `Buf(u8)` from the system's random source)
+- Time and random bytes need no capability: `std/time` has `time.now()`
+  and `time.monotonic()`, in nanoseconds, and `std/rand` has
+  `rand.fill(&b[0..])`, which fills a `[]u8` from the system's random source
 - Threads: `uses thread` gives a `Threads` value; `threads.spawn(f, x, ...)`
   returns an owned `Thread` to `join` or `detach`. Owned arguments move to the
   thread and plain values are copied, so outside `allow unsafe` raw pointers

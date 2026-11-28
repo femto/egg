@@ -1,12 +1,9 @@
-// Clock and Random need `uses time` and `uses rand`.
-uses alloc, io
+// time and rand are no longer capabilities, and Clock and Random are gone;
+// the clock and random bytes come from std/time and std/rand.
+uses io, time
 
-fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
+fn main(io: Io, clock: Clock) void {
     io.print(clock.now())
-    var b: Buf(u8) = a.alloc(4, 0)
-    defer a.free(b)
-    rng.fill(&b)
 }
 
-// error: E130 @5
-// error: E130 @8
+// error: E128 @3

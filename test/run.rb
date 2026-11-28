@@ -548,12 +548,14 @@ def check_net(dir)
   # must agree (winsock2.h brings windows.h).
   check_program("net_and_clocks", <<~EGG, dir)
     // expect: ConnectionRefused true true
-    uses io, net, time
+    uses io, net
 
-    fn main(io: Io, net: Net, clock: Clock) void {
-        const t0 = clock.monotonic()
+    const time = @import("std/time")
+
+    fn main(io: Io, net: Net) void {
+        const t0 = time.monotonic()
         const c = net.tcp_connect("127.0.0.1", #{free_port}) catch |e| {
-            io.print(@errorName(e), " ", clock.now() > 1700000000000000000, " ", clock.monotonic() >= t0)
+            io.print(@errorName(e), " ", time.now() > 1700000000000000000, " ", time.monotonic() >= t0)
             return
         }
         c.close()

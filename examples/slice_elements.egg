@@ -1,12 +1,14 @@
 // A slice of an element of a buffer or slice, &b[i][lo..hi], views the
-// element where it is: written through (an inout []T, rng.fill,
+// element where it is: written through (an inout []T, rand.fill,
 // @secureZero), the element itself changes, not a copy of it.
 // expect: 9 9 1
 // expect: 0 0 7 7
 // expect: true
 // expect: 15
 // expect: 3
-uses io, alloc, rand
+uses io, alloc
+
+const rand = @import("std/rand")
 
 const Ring = struct {
     keys: Buf([4]u8)
@@ -28,7 +30,7 @@ fn sum_first(rows: [][4]u8) i64 {
     return s
 }
 
-fn main(io: Io, a: Allocator, rng: Random) void {
+fn main(io: Io, a: Allocator) void {
     var b = a.alloc(2, [4]u8{ 1, 1, 1, 1 })
     defer a.free(b)
     fill9(&b[1][0..2])
@@ -40,7 +42,7 @@ fn main(io: Io, a: Allocator, rng: Random) void {
     b[0] = [4]u8{ 0, 0, 0, 0 }
     var tries = 0
     while (b[0][0] == 0 and b[0][1] == 0 and tries < 8) {
-        rng.fill(&b[0][0..])
+        rand.fill(&b[0][0..])
         tries = tries + 1
     }
     io.print(b[0][0] != 0 or b[0][1] != 0)

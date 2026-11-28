@@ -1,0 +1,9 @@
+// @clockNow and @randomFill are the standard library's own: other code
+// calls time.now() and rand.fill.
+uses io
+
+fn main(io: Io) void {
+    io.print(@clockNow())
+}
+
+// error: E112 @6

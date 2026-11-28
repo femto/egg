@@ -1,20 +1,23 @@
-// The clock and the system's random bytes are capabilities of their own,
-// so code that reads neither stays deterministic.
+// The clock and the system's random bytes need no capability: std/time
+// reads the time, std/rand fills bytes.
 // expect: true true
 // expect: true
 // expect: 32 true
 // expect: true true
-uses alloc, io, rand, time
+uses alloc, io
 
-fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
-    const t = clock.now()
+const time = @import("std/time")
+const rand = @import("std/rand")
+
+fn main(io: Io, a: Allocator) void {
+    const t = time.now()
     io.print(t > 1700000000000000000, " ", t < 4000000000000000000)
-    const m1 = clock.monotonic()
-    const m2 = clock.monotonic()
+    const m1 = time.monotonic()
+    const m2 = time.monotonic()
     io.print(m2 >= m1)
     var b: Buf(u8) = a.alloc(32, 0)
     defer a.free(b)
-    rng.fill(&b)
+    rand.fill(&b[0..])
     // 32 zero bytes from the random source would be a 1 in 2^256 event.
     var any = false
     for (b) |x| {
@@ -23,13 +26,13 @@ fn main(io: Io, a: Allocator, clock: Clock, rng: Random) void {
     io.print(@len(b), " ", any)
     // Straight into an array, and into a part of a buffer.
     var key: [32]u8 = @splat(0)
-    rng.fill(&key[0..])
+    rand.fill(&key[0..])
     var some = false
     for (key[0..]) |x| {
         some = some or x != 0
     }
     var c: Buf(u8) = a.alloc(8, 0)
     defer a.free(c)
-    rng.fill(&c[2..6])
+    rand.fill(&c[2..6])
     io.print(some, " ", c[0] == 0 and c[1] == 0 and c[6] == 0 and c[7] == 0)
 }
